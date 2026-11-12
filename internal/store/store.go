@@ -50,6 +50,7 @@ const (
 	ActionHostAdd     = "host.add"
 	ActionTokenRotate = "host.token.rotate"
 	ActionTokenRevoke = "host.token.revoke"
+	ActionHostDelete  = "host.delete"
 )
 
 // Rule: host names are lowercase, 1-253 characters of [a-z0-9._-], starting
@@ -119,6 +120,12 @@ type HostSummary struct {
 	LastSeen     *time.Time `json:"last_seen"`
 	ReportedName string     `json:"reported_name"`
 	AgentVersion string     `json:"agent_version"`
+	// State is OK, WARN, CRIT or STALE; nil while the host is pending (never
+	// evaluated). StateReason is the JSON array of the current reasons (null
+	// while pending) and StateSince the time of the last transition.
+	State       *string         `json:"state"`
+	StateReason json.RawMessage `json:"state_reason"`
+	StateSince  *time.Time      `json:"state_since"`
 }
 
 // AuditEntry is a row of the audit log.
@@ -141,10 +148,76 @@ type HostDetail struct {
 	ReportCount int64           `json:"report_count"`
 	EventCount  int64           `json:"event_count"`
 	Audit       []AuditEntry    `json:"audit"` // newest first, at most 50
+	// StateChanges is the state history, newest first, at most 50.
+	StateChanges []StateChange `json:"state_changes"`
+}
+
+// StateChange is one transition of a host's state.
+type StateChange struct {
+	TS time.Time `json:"ts"`
+	// From is nil on the host's first evaluation.
+	From   *string         `json:"from_state"`
+	To     string          `json:"to_state"`
+	Reason json.RawMessage `json:"reason"` // the reasons at the time of the transition
+}
+
+// HealthInput is what the evaluator callback of EvaluateHosts gets for one
+// host. The store owns these types so it never imports internal/health.
+type HealthInput struct {
+	HostID    int64
+	Name      string
+	CreatedAt time.Time
+	// LastSeen is the server time of the last accepted report, nil if none.
+	LastSeen *time.Time
+	// Report is the newest stored report, nil before the first one.
+	Report *proto.Report
+	// ReportUnreadable is true when the host has a stored last_report that
+	// could not be decoded (corruption). Report is nil then, but the host did
+	// report: LastSeen is set.
+	ReportUnreadable bool
+	// FleetNewestDaily is the highest daily version among hosts with a token, 0 if none.
+	FleetNewestDaily int
+}
+
+// HealthOutcome is the callback's answer. State "" means pending: nothing is
+// written. Reasons is the JSON array stored in state_reason.
+type HealthOutcome struct {
+	State   string
+	Reasons json.RawMessage
+}
+
+// Transition describes one state change EvaluateHosts wrote.
+type Transition struct {
+	HostID  int64
+	Host    string
+	TS      time.Time
+	From    *string // nil on the first evaluation
+	To      string
+	Reasons json.RawMessage
+}
+
+// HealthStore persists host health (Milestone 3).
+type HealthStore interface {
+	// EvaluateHosts runs in ONE immediate write transaction: it reads the
+	// inputs of the given hosts (nil = every host with a token) and the fleet's
+	// newest daily version, calls eval for each, and writes the result.
+	//
+	// Reading and writing under one write lock is the point: an evaluation
+	// that read its inputs before a report arrived must not overwrite the
+	// state that report's own evaluation wrote (two spurious transitions,
+	// which become alert spam in M4).
+	//
+	// When the new state differs from the stored one (NULL counts as
+	// different) it writes state, state_reason, state_since and one
+	// state_changes row. A change of reasons alone updates state_reason and
+	// writes no row. A pending outcome writes nothing. Revoked or unknown hosts
+	// are skipped. eval must not call the store (it runs inside the transaction).
+	EvaluateHosts(ctx context.Context, now time.Time, ids []int64, eval func(HealthInput) HealthOutcome) ([]Transition, error)
 }
 
 // Store is the persistence interface. All methods are safe for concurrent use.
 type Store interface {
+	HealthStore
 	// CreateHost registers a host with its token hash and writes the audit
 	// row. ErrHostExists if the name is taken. The name is normalised.
 	CreateHost(ctx context.Context, name string, tokenHash []byte, now time.Time, a Audit) (Host, error)
@@ -155,6 +228,11 @@ type Store interface {
 	// when hash is nil. The old token stops working immediately. ErrNotFound
 	// for an unknown host.
 	SetToken(ctx context.Context, name string, hash []byte, now time.Time, a Audit) error
+	// DeleteHost removes the host and, by cascade, its reports, events, tags and
+	// state history (M2 decision 2), and writes the audit row in the same
+	// transaction. The audit row keeps the host name as text, so it outlives the
+	// host. ErrNotFound for an unknown host.
+	DeleteHost(ctx context.Context, name string, now time.Time, a Audit) error
 	// RecordReport stores a heartbeat idempotently and updates the host.
 	RecordReport(ctx context.Context, r ReportRecord) (ReportResult, error)
 	// RecordEvent stores a detection idempotently; stored is false for a duplicate.

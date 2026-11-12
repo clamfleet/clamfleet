@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/clamfleet/clamfleet/internal/config"
 )
@@ -24,7 +25,12 @@ func noEnv() config.Options {
 func TestEnvNamesMatchDocumentedTable(t *testing.T) {
 	c := DefaultConfig()
 	want := []string{
-		"CLAMFLEET_SERVER_DB_PATH", "CLAMFLEET_SERVER_LISTEN", "CLAMFLEET_SERVER_TLS_CERT",
+		"CLAMFLEET_SERVER_DB_PATH",
+		"CLAMFLEET_SERVER_HEALTH_BEHIND_WARN", "CLAMFLEET_SERVER_HEALTH_DAILY_CRIT_HOURS",
+		"CLAMFLEET_SERVER_HEALTH_DAILY_WARN_HOURS", "CLAMFLEET_SERVER_HEALTH_DEFAULT_INTERVAL",
+		"CLAMFLEET_SERVER_HEALTH_EVAL_INTERVAL", "CLAMFLEET_SERVER_HEALTH_SCAN_WARN_HOURS",
+		"CLAMFLEET_SERVER_HEALTH_STALE_FACTOR",
+		"CLAMFLEET_SERVER_LISTEN", "CLAMFLEET_SERVER_TLS_CERT",
 		"CLAMFLEET_SERVER_TLS_CLIENT_CA", "CLAMFLEET_SERVER_TLS_KEY", "CLAMFLEET_SERVER_TRUSTED_PROXIES",
 	}
 	if got := config.EnvNames(&c, EnvPrefix); !reflect.DeepEqual(got, want) {
@@ -85,6 +91,10 @@ func TestValidate(t *testing.T) {
 		{"relative client_ca", Config{Listen: ":8443", TLS: TLS{Cert: "/c", Key: "/k", ClientCA: "ca"}, DBPath: "/d"}, false},
 	}
 	for _, tc := range cases {
+		// A literal without a health block stands for a loaded config, which always has the defaults.
+		if tc.c.Health == (Health{}) {
+			tc.c.Health = DefaultConfig().Health
+		}
 		if err := tc.c.Validate(); (err == nil) != tc.ok {
 			t.Errorf("%s: err = %v, want ok=%v", tc.name, err, tc.ok)
 		}
@@ -160,5 +170,83 @@ func TestTrustedProxies(t *testing.T) {
 	c, _, err := LoadConfig("", false, o)
 	if err != nil || len(c.TrustedProxies) != 2 || c.Validate() != nil {
 		t.Fatalf("%+v %v", c.TrustedProxies, err)
+	}
+}
+
+// The spec 9 / plan 4.6 defaults, pinned: they are what an operator gets with no health: block.
+func TestHealthDefaults(t *testing.T) {
+	h := DefaultConfig().Health
+	want := Health{StaleFactor: 3, DefaultInterval: 5 * time.Minute, DailyWarnHours: 24, DailyCritHours: 72,
+		BehindWarn: 2, ScanWarnHours: 48, EvalInterval: 60 * time.Second}
+	if h != want {
+		t.Fatalf("%+v", h)
+	}
+	if th := h.Thresholds(); th.StaleFactor != 3 || th.DailyCritHours != 72 || th.DefaultInterval != 5*time.Minute || th.ScanWarnHours != 48 || th.BehindWarn != 2 {
+		t.Fatalf("%+v", th)
+	}
+	if err := DefaultConfig().Validate(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestHealthValidate(t *testing.T) {
+	cases := []struct {
+		name string
+		mut  func(h *Health)
+		bad  string // substring of the error, "" = valid
+	}{
+		{"stale_factor 2 is the floor", func(h *Health) { h.StaleFactor = 2 }, ""},
+		{"stale_factor 1", func(h *Health) { h.StaleFactor = 1 }, "stale_factor"},
+		{"default_interval 9s", func(h *Health) { h.DefaultInterval = 9 * time.Second }, "default_interval"},
+		{"default_interval 10s", func(h *Health) { h.DefaultInterval = 10 * time.Second }, ""},
+		{"default_interval 25h", func(h *Health) { h.DefaultInterval = 25 * time.Hour }, "default_interval"},
+		{"daily_warn_hours 0", func(h *Health) { h.DailyWarnHours = 0 }, "daily_warn_hours"},
+		{"crit equal to warn", func(h *Health) { h.DailyCritHours = h.DailyWarnHours }, "daily_crit_hours"},
+		{"crit below warn", func(h *Health) { h.DailyCritHours = 1 }, "daily_crit_hours"},
+		{"behind_warn 0 is valid", func(h *Health) { h.BehindWarn = 0 }, ""},
+		{"behind_warn negative", func(h *Health) { h.BehindWarn = -1 }, "behind_warn"},
+		{"scan_warn_hours 0 switches off", func(h *Health) { h.ScanWarnHours = 0 }, ""},
+		{"scan_warn_hours negative", func(h *Health) { h.ScanWarnHours = -1 }, "scan_warn_hours"},
+		{"eval_interval 999ms", func(h *Health) { h.EvalInterval = 999 * time.Millisecond }, "eval_interval"},
+		{"eval_interval 1s", func(h *Health) { h.EvalInterval = time.Second }, ""},
+		{"eval_interval 61s", func(h *Health) { h.EvalInterval = 61 * time.Second }, "eval_interval"},
+	}
+	for _, tc := range cases {
+		c := DefaultConfig()
+		tc.mut(&c.Health)
+		err := c.Validate()
+		switch {
+		case tc.bad == "" && err != nil:
+			t.Errorf("%s: unexpected error %v", tc.name, err)
+		case tc.bad != "" && (err == nil || !strings.Contains(err.Error(), tc.bad)):
+			t.Errorf("%s: err = %v, want it to mention %q", tc.name, err, tc.bad)
+		}
+	}
+}
+
+// File and environment both reach the health keys; a typo is an error.
+func TestHealthKeysFromFileAndEnvironment(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "server.yaml")
+	if err := os.WriteFile(p, []byte("listen: 127.0.0.1:9000\nhealth: {daily_warn_hours: 100000, daily_crit_hours: 200000, eval_interval: 2s}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	o := noEnv()
+	o.LookupEnv = func(k string) (string, bool) { return "7", k == "CLAMFLEET_SERVER_HEALTH_STALE_FACTOR" }
+	c, _, err := LoadConfig(p, true, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := c.Health
+	if h.DailyWarnHours != 100000 || h.EvalInterval != 2*time.Second || h.StaleFactor != 7 || h.BehindWarn != 2 {
+		t.Fatalf("%+v", h)
+	}
+	if err := c.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p, []byte("health: {stale_factr: 3}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := LoadConfig(p, true, noEnv()); err == nil || !strings.Contains(err.Error(), "stale_factr") {
+		t.Fatalf("err = %v", err)
 	}
 }

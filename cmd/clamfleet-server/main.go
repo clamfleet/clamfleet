@@ -35,6 +35,7 @@ import (
 
 	"github.com/clamfleet/clamfleet/internal/agentauth"
 	"github.com/clamfleet/clamfleet/internal/config"
+	"github.com/clamfleet/clamfleet/internal/health"
 	"github.com/clamfleet/clamfleet/internal/server"
 	"github.com/clamfleet/clamfleet/internal/store"
 	"github.com/clamfleet/clamfleet/internal/store/sqlite"
@@ -60,10 +61,11 @@ commands:
   serve [--config FILE] [--log-level LEVEL]   run the server (migrates the database first)
   migrate [--config FILE]                     create or upgrade the database schema
   host add NAME                               register a host; prints its token once
-  host list [--json]                          list hosts
-  host show NAME [--json]                     show one host with its newest report
+  host list [--json]                          list hosts with their state
+  host show NAME [--json]                     show one host: state, reasons, history, newest report
   host rotate-token NAME                      issue a new token; the old one stops working at once
   host revoke-token NAME                      disable the host's token (history is kept)
+  host delete NAME --yes                      delete the host and ALL its reports, events and history
   version                                     print the version
 
 Host commands and migrate take --config FILE too (default: $CLAMFLEET_SERVER_CONFIG or ` + server.DefaultConfigPath + `).
@@ -171,12 +173,29 @@ func (a *app) serve(ctx context.Context, args []string) int {
 		log.Error("database", "error", err.Error())
 		return exitError
 	}
-	h, err := server.NewHandlerFromConfig(cfg, server.Deps{Store: st, Now: a.now, Log: log})
+	// The evaluator is built before the handler so both share it: ingest calls
+	// Host after each report, the loop below notices hosts that went silent.
+	// Its start time is the restart-grace reference (see health.Evaluate).
+	ev := health.New(st, a.now, cfg.Health.Thresholds(), log)
+	h, err := server.NewHandlerFromConfig(cfg, server.Deps{Store: st, Now: a.now, Log: log, AfterReport: ev.Host})
 	if err != nil {
 		log.Error("invalid configuration", "error", err.Error())
 		return exitError
 	}
-	if err := server.Serve(ctx, cfg, h, log); err != nil {
+	loopCtx, stopLoop := context.WithCancel(ctx)
+	tick := time.NewTicker(cfg.Health.EvalInterval)
+	loopDone := make(chan struct{})
+	go func() {
+		defer close(loopDone)
+		ev.Run(loopCtx, tick.C)
+	}()
+	err = server.Serve(ctx, cfg, h, log)
+	// Wait for the loop before the deferred st.Close(): an evaluation cut off by
+	// a closing database would log a spurious error at every shutdown.
+	stopLoop()
+	tick.Stop()
+	<-loopDone
+	if err != nil {
 		log.Error("server stopped", "error", err.Error())
 		return exitError
 	}
@@ -279,6 +298,7 @@ func (a *app) host(ctx context.Context, args []string) int {
 	sub, rest := args[0], args[1:]
 	fs, cfgFlag := newFlags("host "+sub, a.stderr)
 	asJSON := fs.Bool("json", false, "machine-readable output (list, show)")
+	yes := fs.Bool("yes", false, "confirm a deletion (delete)")
 	// Go's flag package stops at the first non-flag: accept flags after NAME
 	// too ("host show web01 --json"), which is how people type it.
 	var pos []string
@@ -296,11 +316,16 @@ func (a *app) host(ctx context.Context, args []string) int {
 
 	needName := sub != "list"
 	switch {
-	case sub != "add" && sub != "list" && sub != "show" && sub != "rotate-token" && sub != "revoke-token":
+	case sub != "add" && sub != "list" && sub != "show" && sub != "rotate-token" && sub != "revoke-token" && sub != "delete":
 		fmt.Fprintf(a.stderr, "host: unknown subcommand %q\n\n%s", sub, usage)
 		return exitUsage
 	case needName && len(pos) != 1, !needName && len(pos) != 0:
 		fmt.Fprintf(a.stderr, "host %s: wrong number of arguments\n\n%s", sub, usage)
+		return exitUsage
+	case sub == "delete" && !*yes:
+		// Irreversible and cascading (reports, events, state history): never on a
+		// slip of the keyboard, and checked before the database is even opened.
+		fmt.Fprintf(a.stderr, "host delete: this removes %q and all of its reports, events and history for good; repeat with --yes to confirm\n", pos[0])
 		return exitUsage
 	}
 
@@ -324,6 +349,8 @@ func (a *app) host(ctx context.Context, args []string) int {
 		return a.setToken(ctx, log, st, pos[0], true, audit)
 	case "revoke-token":
 		return a.setToken(ctx, log, st, pos[0], false, audit)
+	case "delete":
+		return a.deleteHost(ctx, log, st, pos[0], audit)
 	case "list":
 		return a.list(ctx, log, st, *asJSON)
 	default:
@@ -375,6 +402,19 @@ func (a *app) setToken(ctx context.Context, log *slog.Logger, st store.Store, na
 	return exitOK
 }
 
+func (a *app) deleteHost(ctx context.Context, log *slog.Logger, st store.Store, name string, audit store.Audit) int {
+	if err := st.DeleteHost(ctx, name, a.now(), audit); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			log.Error("no such host", "host", name)
+		} else {
+			log.Error("cannot delete host", "host", name, "error", err.Error())
+		}
+		return exitError
+	}
+	log.Info("host deleted with all its data", "host", strings.ToLower(name), "actor", audit.Actor)
+	return exitOK
+}
+
 func fmtTime(t *time.Time) string {
 	if t == nil {
 		return "-"
@@ -392,16 +432,45 @@ func (a *app) list(ctx context.Context, log *slog.Logger, st store.Store, asJSON
 		return a.printJSON(log, hosts)
 	}
 	tw := tabwriter.NewWriter(a.stdout, 0, 4, 2, ' ', 0)
-	fmt.Fprintln(tw, "NAME\tTOKEN\tLAST SEEN\tAGENT\tTAGS")
+	fmt.Fprintln(tw, "NAME\tSTATE\tTOKEN\tLAST SEEN\tAGENT\tTAGS")
 	for _, h := range hosts {
 		tok := "active"
 		if !h.HasToken {
 			tok = "revoked"
 		}
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", h.Name, tok, fmtTime(h.LastSeen), orDash(h.AgentVersion), orDash(strings.Join(h.Tags, ",")))
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", h.Name, stateText(h.State), tok, fmtTime(h.LastSeen), orDash(h.AgentVersion), orDash(strings.Join(h.Tags, ",")))
 	}
 	tw.Flush()
 	return exitOK
+}
+
+// stateText: a host that was never evaluated is "pending". A revoked host's
+// state is frozen at what it was; the TOKEN column says it is revoked.
+func stateText(s *string) string {
+	if s == nil {
+		return "pending"
+	}
+	return *s
+}
+
+// reason is one entry of hosts.state_reason (internal/health.Reason). The
+// CLI reads the stored JSON instead of importing the evaluator.
+type reason struct {
+	Rule     string `json:"rule"`
+	Severity string `json:"severity"`
+	Msg      string `json:"msg"`
+}
+
+// printReasons writes the reasons, one per line. The message may hold agent
+// text; the evaluator already strips control characters from it.
+func (a *app) printReasons(raw []byte, indent string) {
+	var rs []reason
+	if json.Unmarshal(raw, &rs) != nil {
+		return
+	}
+	for _, r := range rs {
+		fmt.Fprintf(a.stdout, "%s%-5s %s: %s\n", indent, r.Severity, r.Rule, r.Msg)
+	}
 }
 
 func orDash(s string) string {
@@ -431,6 +500,22 @@ func (a *app) show(ctx context.Context, log *slog.Logger, st store.Store, name s
 	fmt.Fprintf(a.stdout, "name:           %s\ntoken:          %s (set %s)\ncreated:        %s\nfirst seen:     %s\nlast seen:      %s\nreported as:    %s\nagent version:  %s\ntags:           %s\nreports:        %d\nevents:         %d\n",
 		d.Name, tok, fmtTime(d.TokenCreatedAt), fmtTime(&d.CreatedAt), fmtTime(d.FirstSeen), fmtTime(d.LastSeen),
 		orDash(d.ReportedName), orDash(d.AgentVersion), orDash(strings.Join(d.Tags, ",")), d.ReportCount, d.EventCount)
+	since := ""
+	if d.StateSince != nil {
+		since = " (since " + fmtTime(d.StateSince) + ")"
+	}
+	fmt.Fprintf(a.stdout, "state:          %s%s\n", stateText(d.State), since)
+	a.printReasons(d.StateReason, "  reason:       ")
+	if len(d.StateChanges) > 0 {
+		fmt.Fprintln(a.stdout, "state history (newest first):")
+		for _, c := range d.StateChanges {
+			from := "none"
+			if c.From != nil {
+				from = *c.From
+			}
+			fmt.Fprintf(a.stdout, "  %s  %s -> %s\n", c.TS.Format(time.RFC3339), from, c.To)
+		}
+	}
 	if d.LastReport != nil {
 		fmt.Fprintf(a.stdout, "last report:    %s\n", d.LastReport)
 	}

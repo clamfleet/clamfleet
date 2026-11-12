@@ -63,6 +63,9 @@ type Deps struct {
 	// TrustedProxies are the reverse proxies whose X-Forwarded-For is believed
 	// for the logged client IP (see api.ClientIP); parse with ParseTrustedProxies.
 	TrustedProxies []netip.Prefix
+	// AfterReport is called after each accepted report (see api.Deps); the
+	// binary passes health.Evaluator.Host. Nil disables it.
+	AfterReport func(ctx context.Context, hostID int64) error
 }
 
 // NewHandlerFromConfig is NewHandler with the config-derived settings
@@ -83,7 +86,7 @@ func NewHandler(d Deps) http.Handler {
 	if auth == nil {
 		auth = agentauth.Bearer{Lookup: storeLookup(d.Store)}
 	}
-	h := api.New(api.Deps{Store: d.Store, Now: d.Now, Log: d.Log})
+	h := api.New(api.Deps{Store: d.Store, Now: d.Now, Log: d.Log, AfterReport: d.AfterReport})
 	agent := agentauth.Middleware(auth, d.Log)
 
 	handlers := map[string]http.HandlerFunc{

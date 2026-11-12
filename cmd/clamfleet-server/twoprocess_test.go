@@ -169,6 +169,7 @@ type shown struct {
 	FirstSeen    *string         `json:"first_seen"`
 	LastReport   json.RawMessage `json:"last_report"`
 	Tags         []string        `json:"tags"`
+	State        *string         `json:"state"`
 }
 
 func hostShow(t *testing.T, env []string, name string) shown {
@@ -209,6 +210,11 @@ func TestAgentRunOnceStoresReportThroughServer(t *testing.T) {
 	}
 	if s.ReportedName == "" || len(s.Tags) != 2 {
 		t.Fatalf("%+v", s)
+	}
+	// Ingest in the real binary triggered the evaluation (the evaluator is wired
+	// in `serve`, not in the handler): a host that reported has a state.
+	if s.State == nil || (*s.State != "OK" && *s.State != "WARN" && *s.State != "CRIT") {
+		t.Fatalf("after a report the host has no state: %v", s.State)
 	}
 
 	// A wrong token: exit 1, "unauthorized" on stderr, no new report.

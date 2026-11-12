@@ -43,6 +43,12 @@ type Host struct {
 	AgentVersion    sql.NullString
 	LastReportOrder sql.NullInt64
 	LastReport      sql.NullString
+	State           sql.NullString
+	StateReason     sql.NullString
+	StateSince      sql.NullInt64
+	DailyVersion    sql.NullInt64
+	DailyBuilt      sql.NullInt64
+	ClamdVersion    sql.NullString
 }
 
 type HostTag struct {
@@ -56,4 +62,39 @@ type Report struct {
 	Ts         int64
 	ReceivedAt int64
 	Payload    string
+}
+
+type StateChange struct {
+	ID        int64
+	HostID    int64
+	Ts        int64
+	FromState sql.NullString
+	ToState   string
+	Reason    string
+}
+
+type User struct {
+	ID                 int64
+	Email              sql.NullString
+	DisplayName        sql.NullString
+	Role               string
+	AuthSource         string
+	ExternalID         sql.NullString
+	PasswordHash       sql.NullString
+	PasswordMustChange int64
+	PasswordChangedAt  sql.NullInt64
+	DisabledAt         sql.NullInt64
+	CreatedAt          int64
+	UpdatedAt          int64
+	LastLoginAt        sql.NullInt64
+}
+
+type UserSession struct {
+	ID         int64
+	TokenHash  []byte
+	UserID     int64
+	CsrfToken  []byte
+	CreatedAt  int64
+	LastSeenAt int64
+	ExpiresAt  int64
 }

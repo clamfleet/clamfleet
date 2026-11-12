@@ -10,6 +10,12 @@ All notable changes are listed here. The format follows Keep a Changelog; versio
 ## Unreleased
 
 ### Added
+- Milestone 3, health: the server decides every host's state (OK, WARN, CRIT, STALE) from the newest
+  report (spec 9) after each accepted report and every `health.eval_interval`, keeps the reasons
+  and one `state_changes` row per transition, and tunes the rules with a `health:` block (see the README).
+  A host is pending until its first report, STALE after 3 x its own report interval, and the clock
+  counts from the server start (restart grace). Database migration `00002` (stop and copy the
+  database first; downgrades are refused) also creates the users and sessions tables for the web console.
 - Milestone 2: the server. `clamfleet-server serve` runs the ingest API (`POST /v1/report`,
   `POST /v1/event`, `GET /healthz`; see `docs/api.md`) on SQLite with goose migrations and
   sqlc-generated queries; `migrate` and `host add|list|show|rotate-token|revoke-token` are the admin
@@ -22,6 +28,7 @@ All notable changes are listed here. The format follows Keep a Changelog; versio
   only; the agent does not link them). sqlc v1.31.1 is a build-time tool.
 - Milestone 1: shared payload structs (`internal/proto`), agent collectors (clamd socket, CVD/CLD
   headers, freshclam, systemd units, host, last scan) and `clamfleet-agent collect --dry-run`.
+- `interval_seconds` in the report: the agent's configured interval, so the server can judge STALE per agent (3 x interval). Additive, schema stays 1.
 - `freshclam.source` in the report (`journal`, `log`, `journal+log`, `mtime`, or null). Additive, schema stays 1.
 
 ### Changed

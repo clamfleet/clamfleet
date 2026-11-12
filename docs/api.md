@@ -59,6 +59,10 @@ Body: a `proto.Report` (spec 7.3), at most 1 MiB. Unknown JSON keys are accepted
 Notes:
 - Authentication is checked before the body is read, so an unauthenticated request is a 401 even
   when its body is too large.
+- `interval_seconds` (integer or null) is the agent's configured report interval. The server uses it
+  for the STALE rule (no report for 3 times the interval), clamped to 10 seconds to 24 hours, and
+  falls back to its own `health.default_interval` when it is null or missing (older agents). It was
+  added after the spec example, compatibly: the schema stays 1.
 - `ts` has one-second resolution; the server stores at most one report per host and `ts`.
 - The server never rejects a report for clock skew. A `ts` more than five minutes ahead of the
   server clock is logged.

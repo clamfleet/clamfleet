@@ -6,6 +6,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"os"
@@ -14,7 +15,9 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/clamfleet/clamfleet/internal/store"
 	"github.com/clamfleet/clamfleet/internal/store/sqlite"
 )
 
@@ -305,5 +308,147 @@ func TestOwnerMismatch(t *testing.T) {
 	_, env := newDB(t)
 	if r := runServer(t, env, "host", "list"); strings.Contains(r.stderr, "owned by another user") {
 		t.Fatalf("spurious warning: %s", r.stderr)
+	}
+}
+
+// seedState writes a state for a host through the store, as the evaluator in
+// `serve` would (the CLI only reads it).
+func seedState(t *testing.T, db string, state string, reasons string, at time.Time) {
+	t.Helper()
+	ctx := context.Background()
+	st, err := sqlite.Open(ctx, db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	_, err = st.EvaluateHosts(ctx, at, nil, func(in store.HealthInput) store.HealthOutcome {
+		if in.Name != "web01" {
+			return store.HealthOutcome{} // db01 stays pending
+		}
+		return store.HealthOutcome{State: state, Reasons: json.RawMessage(reasons)}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestHostListAndShowPrintState(t *testing.T) {
+	db, env := newDB(t)
+	runServer(t, env, "host", "add", "web01")
+	runServer(t, env, "host", "add", "db01")
+	at := time.Date(2031, 3, 4, 12, 0, 0, 0, time.UTC)
+	seedState(t, db, "OK", `[]`, at)
+	seedState(t, db, "CRIT", `[{"rule":"clamd_down","severity":"CRIT","msg":"clamd is not answering: ping: timeout"}]`, at.Add(time.Hour))
+
+	list := runServer(t, env, "host", "list")
+	if list.code != 0 || !strings.Contains(list.stdout, "STATE") {
+		t.Fatalf("list: %+v", list)
+	}
+	for _, line := range strings.Split(list.stdout, "\n") {
+		switch {
+		case strings.HasPrefix(line, "web01"):
+			if !strings.Contains(line, "CRIT") {
+				t.Errorf("web01 line: %q", line)
+			}
+		case strings.HasPrefix(line, "db01"):
+			if !strings.Contains(line, "pending") {
+				t.Errorf("a never-evaluated host must read pending: %q", line)
+			}
+		}
+	}
+
+	show := runServer(t, env, "host", "show", "web01")
+	for _, want := range []string{
+		"state:          CRIT (since 2031-03-04T13:00:00Z)",
+		"CRIT  clamd_down: clamd is not answering: ping: timeout",
+		"2031-03-04T13:00:00Z  OK -> CRIT",
+		"2031-03-04T12:00:00Z  none -> OK",
+	} {
+		if !strings.Contains(show.stdout, want) {
+			t.Errorf("show lacks %q:\n%s", want, show.stdout)
+		}
+	}
+	if !strings.Contains(runServer(t, env, "host", "show", "db01").stdout, "state:          pending") {
+		t.Error("pending host: show must say pending")
+	}
+
+	js := runServer(t, env, "host", "show", "web01", "--json")
+	var d struct {
+		State        *string `json:"state"`
+		StateReason  []struct{ Rule string }
+		StateChanges []struct {
+			From *string `json:"from_state"`
+			To   string  `json:"to_state"`
+		} `json:"state_changes"`
+	}
+	if err := json.Unmarshal([]byte(js.stdout), &d); err != nil {
+		t.Fatal(err)
+	}
+	if d.State == nil || *d.State != "CRIT" || len(d.StateChanges) != 2 || d.StateChanges[1].From != nil {
+		t.Fatalf("%s", js.stdout)
+	}
+	if !strings.Contains(js.stdout, `"state_reason": [`) || !strings.Contains(js.stdout, `"clamd_down"`) {
+		t.Fatalf("state_reason must be a JSON array in --json output:\n%s", js.stdout)
+	}
+	var pending struct {
+		State *string `json:"state"`
+	}
+	json.Unmarshal([]byte(runServer(t, env, "host", "show", "db01", "--json").stdout), &pending)
+	if pending.State != nil {
+		t.Fatalf("a pending host has state null in JSON, got %v", *pending.State)
+	}
+}
+
+func TestHostDelete(t *testing.T) {
+	db, env := newDB(t)
+	sudo := append(append([]string{}, env...), "SUDO_USER=alice")
+	runServer(t, env, "host", "add", "web01")
+	runServer(t, env, "host", "add", "keep01")
+	seedState(t, db, "OK", `[]`, time.Date(2031, 3, 4, 12, 0, 0, 0, time.UTC))
+
+	// Without --yes: usage error, nothing deleted, and the database is not even opened.
+	if r := runServer(t, env, "host", "delete", "web01"); r.code != 2 || !strings.Contains(r.stderr, "--yes") {
+		t.Fatalf("delete without --yes: %+v", r)
+	}
+	if r := runServer(t, cliEnv("/nonexistent/x.db"), "host", "delete", "web01"); r.code != 2 {
+		t.Fatalf("delete without --yes must be a usage error before touching the database: %+v", r)
+	}
+	if r := runServer(t, env, "host", "show", "web01"); r.code != 0 {
+		t.Fatalf("host vanished without --yes: %+v", r)
+	}
+	if r := runServer(t, env, "host", "delete", "--yes"); r.code != 2 {
+		t.Fatalf("delete without a name: %+v", r)
+	}
+
+	if r := runServer(t, sudo, "host", "delete", "WEB01", "--yes"); r.code != 0 || r.stdout != "" {
+		t.Fatalf("delete: %+v", r)
+	}
+	if r := runServer(t, env, "host", "show", "web01"); r.code != 1 || !strings.Contains(r.stderr, "no such host") {
+		t.Fatalf("host still there: %+v", r)
+	}
+	if r := runServer(t, env, "host", "show", "keep01"); r.code != 0 {
+		t.Fatalf("another host was deleted: %+v", r)
+	}
+	if r := runServer(t, env, "host", "delete", "web01", "--yes"); r.code != 1 || !strings.Contains(r.stderr, "no such host") {
+		t.Fatalf("second delete: %+v", r)
+	}
+
+	// The audit row names the operator and the host, and outlives the host.
+	raw, err := sql.Open("sqlite", db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer raw.Close()
+	var actor, kind, target string
+	if err := raw.QueryRow(`SELECT actor, target_kind, target FROM audit_log WHERE action='host.delete'`).Scan(&actor, &kind, &target); err != nil {
+		t.Fatal(err)
+	}
+	if actor != "alice" || kind != "host" || target != "web01" {
+		t.Fatalf("audit: %q %q %q", actor, kind, target)
+	}
+	var n int
+	raw.QueryRow(`SELECT count(*) FROM state_changes`).Scan(&n)
+	if n != 0 {
+		t.Fatalf("%d state_changes rows survived the delete", n)
 	}
 }

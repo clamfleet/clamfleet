@@ -28,13 +28,20 @@ type Report struct {
 	Host         string `json:"host"`
 	AgentVersion string `json:"agent_version"`
 	// Tags is never nil: an empty list encodes as [] (assumption A3).
-	Tags      []string  `json:"tags"`
-	TS        time.Time `json:"ts"`
-	OS        OS        `json:"os"`
-	Clamd     Clamd     `json:"clamd"`
-	Sigs      Sigs      `json:"sigs"`
-	Freshclam Freshclam `json:"freshclam"`
-	Services  Services  `json:"services"`
+	Tags []string `json:"tags"`
+	// IntervalSeconds is how often this agent reports, from its configuration,
+	// so the server can judge "no report for 3 x the agent interval" (spec 9)
+	// per agent. null when unknown (an agent older than this field). It was
+	// added after the spec example of section 7.3; the addition is compatible,
+	// so Schema stays 1 (servers ignore unknown fields, spec 7.2). The server
+	// clamps it (10 s to 24 h) because it is agent-supplied data.
+	IntervalSeconds *int      `json:"interval_seconds"`
+	TS              time.Time `json:"ts"`
+	OS              OS        `json:"os"`
+	Clamd           Clamd     `json:"clamd"`
+	Sigs            Sigs      `json:"sigs"`
+	Freshclam       Freshclam `json:"freshclam"`
+	Services        Services  `json:"services"`
 	// LastScan is null when no scan summary file exists (no scan configured).
 	LastScan *LastScan `json:"last_scan"`
 }
