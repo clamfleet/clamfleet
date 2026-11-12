@@ -1,0 +1,4 @@
+# HAND-WRITTEN: Debian testing/sid has no VERSION_ID.
+PRETTY_NAME="Debian GNU/Linux forky/sid"
+NAME="Debian GNU/Linux"
+ID=debian

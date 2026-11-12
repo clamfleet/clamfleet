@@ -1,0 +1,14 @@
+POOLS: 2
+
+STATE: VALID PRIMARY
+THREADS: live 1  idle 0 max 12 idle-timeout 30
+QUEUE: 3 items
+	STATS 0.000041 
+
+STATE: VALID
+THREADS: live 1  idle 0 max 12 idle-timeout 30
+QUEUE: 4 items
+	STATS 0.000041 
+
+MEMSTATS: heap N/A mmap N/A used N/A free N/A releasable N/A pools 2 pools_used 968.181M pools_total 968.218M
+END

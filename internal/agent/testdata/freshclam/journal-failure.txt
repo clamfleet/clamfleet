@@ -1,0 +1,17 @@
+Started clamav-freshclam.service - ClamAV virus database updater.
+Thu Nov 12 10:21:19 2026 -> ClamAV update process started at Thu Nov 12 10:21:19 2026
+WARNING: Thu Nov 12 10:21:19 2026 -> DNS Update Info disabled. Falling back to HTTP mode.
+Thu Nov 12 10:21:19 2026 -> Trying to retrieve CVD header from http://127.0.0.1:9/daily.cld
+ERROR: Thu Nov 12 10:21:19 2026 -> remote_cvdhead: Download failed (7) ERROR: Thu Nov 12 10:21:19 2026 ->  Message: Could not connect to server
+Thu Nov 12 10:21:19 2026 -> Trying to retrieve CVD header from http://127.0.0.1:9/daily.cvd
+ERROR: Thu Nov 12 10:21:19 2026 -> remote_cvdhead: Download failed (7) ERROR: Thu Nov 12 10:21:19 2026 ->  Message: Could not connect to server
+WARNING: Thu Nov 12 10:21:19 2026 -> Failed to get daily database version information from server: http://127.0.0.1:9
+ERROR: Thu Nov 12 10:21:19 2026 -> check_for_new_database_version: Failed to find daily database using server http://127.0.0.1:9.
+Thu Nov 12 10:21:19 2026 -> Giving up on http://127.0.0.1:9...
+ERROR: Thu Nov 12 10:21:19 2026 -> Update failed for database: daily
+ERROR: Thu Nov 12 10:21:19 2026 -> Database update process failed: HTTP GET failed
+ERROR: Thu Nov 12 10:21:19 2026 -> Update failed.
+Thu Nov 12 10:21:21 2026 -> Update process terminated
+Stopping clamav-freshclam.service - ClamAV virus database updater...
+clamav-freshclam.service: Deactivated successfully.
+Stopped clamav-freshclam.service - ClamAV virus database updater.
