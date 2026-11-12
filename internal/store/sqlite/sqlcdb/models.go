@@ -87,14 +87,39 @@ type User struct {
 	CreatedAt          int64
 	UpdatedAt          int64
 	LastLoginAt        sql.NullInt64
+	AuthVersion        int64
+	TotpSecret         []byte
+	TotpEnabledAt      sql.NullInt64
+	TotpLastStep       sql.NullInt64
+	TotpFailures       int64
+}
+
+type UserLoginChallenge struct {
+	ID          int64
+	TokenHash   []byte
+	UserID      int64
+	AuthVersion int64
+	Next        string
+	CreatedAt   int64
+	ExpiresAt   int64
+}
+
+type UserRecoveryCode struct {
+	ID        int64
+	UserID    int64
+	CodeHash  []byte
+	CreatedAt int64
+	UsedAt    sql.NullInt64
 }
 
 type UserSession struct {
-	ID         int64
-	TokenHash  []byte
-	UserID     int64
-	CsrfToken  []byte
-	CreatedAt  int64
-	LastSeenAt int64
-	ExpiresAt  int64
+	ID            int64
+	TokenHash     []byte
+	UserID        int64
+	CsrfToken     []byte
+	CreatedAt     int64
+	LastSeenAt    int64
+	ExpiresAt     int64
+	TotpPending   []byte
+	TotpPendingAt sql.NullInt64
 }
