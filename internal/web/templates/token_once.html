@@ -1,0 +1,22 @@
+{{/* SPDX-License-Identifier: AGPL-3.0-only */}}
+{{/* SPDX-FileCopyrightText: The ClamFleet Authors */}}
+{{/*
+  token_once.html: shows a new agent token exactly once. Body: web.tokenBody.
+  The response is never cached (Cache-Control: no-store) and the token is
+  stored nowhere in clear: closing this page loses it, and the remedy is to
+  rotate the token.
+*/}}
+{{define "content"}}
+<h1>Token for {{.Body.Host}}</h1>
+<div class="card" data-testid="token-page">
+  <p class="notice" data-testid="token-notice"><strong>Shown once.</strong> Copy it now: it is not stored anywhere and cannot be shown again. If you lose it, rotate the token.</p>
+  <pre class="token" data-testid="token-value">{{.Body.Token}}</pre>
+  <h2>Install it on the host</h2>
+  <p>Write the token to the agent's token file (default <code>/etc/clamfleet/token</code>, readable by the agent user, for example mode 0640 owner root group clamfleet), then restart the agent. The token appears on this page once only; the commands below do not repeat it.</p>
+  <pre>sudoedit /etc/clamfleet/token          # paste the token above, one line
+sudo chown root:clamfleet /etc/clamfleet/token
+sudo chmod 0640 /etc/clamfleet/token
+sudo systemctl restart clamfleet-agent</pre>
+  <p><a href="/admin/hosts" data-testid="token-done">Done, back to the hosts</a></p>
+</div>
+{{end}}

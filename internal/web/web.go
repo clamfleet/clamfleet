@@ -84,12 +84,19 @@ type Web struct {
 // middleware looks like the rest of the console.
 func New(d Deps) *Web {
 	w := &Web{Deps: d, pages: map[string]*template.Template{}}
-	funcs := template.FuncMap{"lower": strings.ToLower}
-	for _, p := range []string{"login", "fleet", "host", "account", "error"} {
+	funcs := template.FuncMap{
+		"lower": strings.ToLower,
+		// actions builds the data of the shared host_actions template.
+		"actions": func(name string, hasToken bool, csrf string) hostAction { return hostAction{name, hasToken, csrf} },
+	}
+	for _, p := range []string{"login", "fleet", "host", "admin_hosts", "token_once", "account", "error"} {
 		t := template.New(p).Funcs(funcs)
 		files := []string{"templates/layout.html", "templates/" + p + ".html"}
 		if p == "fleet" {
 			files = append(files, "templates/fleet_rows.html")
+		}
+		if p == "host" || p == "admin_hosts" {
+			files = append(files, "templates/host_actions.html")
 		}
 		w.pages[p] = template.Must(t.ParseFS(templateFS, files...))
 	}
@@ -102,15 +109,20 @@ func New(d Deps) *Web {
 // Handlers returns the handlers by "METHOD /path" key, as server.Routes() names them.
 func (w *Web) Handlers() map[string]http.HandlerFunc {
 	return map[string]http.HandlerFunc{
-		"GET /static/{file}":     w.static,
-		"GET /login":             w.loginPage,
-		"POST /login":            w.loginSubmit,
-		"POST /logout":           w.logout,
-		"GET /{$}":               w.fleet,
-		"GET /fleet/rows":        w.fleetRows,
-		"GET /hosts/{name}":      w.host,
-		"GET /account":           w.accountPage,
-		"POST /account/password": w.accountPassword,
+		"GET /static/{file}":                    w.static,
+		"GET /login":                            w.loginPage,
+		"POST /login":                           w.loginSubmit,
+		"POST /logout":                          w.logout,
+		"GET /{$}":                              w.fleet,
+		"GET /fleet/rows":                       w.fleetRows,
+		"GET /hosts/{name}":                     w.host,
+		"GET /admin/hosts":                      w.adminHosts,
+		"POST /admin/hosts":                     w.adminRegister,
+		"POST /admin/hosts/{name}/rotate-token": w.adminRotate,
+		"POST /admin/hosts/{name}/revoke-token": w.adminRevoke,
+		"POST /admin/hosts/{name}/delete":       w.adminDelete,
+		"GET /account":                          w.accountPage,
+		"POST /account/password":                w.accountPassword,
 	}
 }
 

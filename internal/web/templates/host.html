@@ -65,6 +65,7 @@
 <div class="card" data-testid="host-admin">
   <h2>Administration</h2>
   <p>Token set {{if .TokenCreated}}{{.TokenCreated}}{{else}}-{{end}}.</p>
+  {{template "host_actions" (actions .Name .HasToken $.CSRF)}}
   <h2>Audit</h2>
   {{if .Audit}}
   <table data-testid="host-audit">

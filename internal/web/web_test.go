@@ -823,6 +823,13 @@ func TestUIRouteTable(t *testing.T) {
 		classes[rt.Auth] = true
 		path := concrete.Replace(rt.Path)
 		name := rt.Method + " " + rt.Path
+		// Rule: everything under /admin/ is admin-only. Checked here by path, not
+		// by the declared class alone, so a route mis-classed as user is caught by
+		// behaviour (the viewer probe below), independent of the table.
+		if strings.HasPrefix(rt.Path, "/admin/") && rt.Auth != server.AuthAdmin {
+			t.Errorf("%s is under /admin/ but has class %q", name, rt.Auth)
+			rt.Auth = server.AuthAdmin // keep probing it as an admin route: the viewer probe must see a 403
+		}
 		switch rt.Auth {
 		case server.AuthAgent, server.AuthNone:
 			continue // covered by internal/api TestRouteTable

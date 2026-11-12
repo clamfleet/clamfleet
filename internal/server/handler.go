@@ -69,6 +69,11 @@ func Routes() []Route {
 		{"GET", "/{$}", AuthUser},
 		{"GET", "/fleet/rows", AuthUser},
 		{"GET", "/hosts/{name}", AuthUser},
+		{"GET", "/admin/hosts", AuthAdmin},
+		{"POST", "/admin/hosts", AuthAdmin},
+		{"POST", "/admin/hosts/{name}/rotate-token", AuthAdmin},
+		{"POST", "/admin/hosts/{name}/revoke-token", AuthAdmin},
+		{"POST", "/admin/hosts/{name}/delete", AuthAdmin},
 		{"GET", "/account", AuthUser},
 		{"POST", "/account/password", AuthUser},
 	}

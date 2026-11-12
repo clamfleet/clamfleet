@@ -535,6 +535,11 @@ func TestRouteTable(t *testing.T) {
 		{Method: "GET", Path: "/{$}", Auth: server.AuthUser},
 		{Method: "GET", Path: "/fleet/rows", Auth: server.AuthUser},
 		{Method: "GET", Path: "/hosts/{name}", Auth: server.AuthUser},
+		{Method: "GET", Path: "/admin/hosts", Auth: server.AuthAdmin},
+		{Method: "POST", Path: "/admin/hosts", Auth: server.AuthAdmin},
+		{Method: "POST", Path: "/admin/hosts/{name}/rotate-token", Auth: server.AuthAdmin},
+		{Method: "POST", Path: "/admin/hosts/{name}/revoke-token", Auth: server.AuthAdmin},
+		{Method: "POST", Path: "/admin/hosts/{name}/delete", Auth: server.AuthAdmin},
 		{Method: "GET", Path: "/account", Auth: server.AuthUser},
 		{Method: "POST", Path: "/account/password", Auth: server.AuthUser},
 	}
