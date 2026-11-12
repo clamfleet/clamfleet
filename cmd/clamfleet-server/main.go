@@ -202,12 +202,21 @@ func (a *app) migrate(ctx context.Context, args []string) int {
 // openExisting opens the database for an admin command. It refuses to create
 // one (a typo in db_path must not leave a stray empty database behind) and to
 // work on an out-of-date schema (only serve and migrate migrate).
-func (a *app) openExisting(ctx context.Context, cfg server.Config) (*sqlite.Store, error) {
-	if _, err := os.Stat(cfg.DBPath); err != nil {
+func (a *app) openExisting(ctx context.Context, log *slog.Logger, cfg server.Config) (*sqlite.Store, error) {
+	fi, err := os.Stat(cfg.DBPath)
+	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, fmt.Errorf("database %s does not exist: run `clamfleet-server migrate` (or start the server) first", cfg.DBPath)
 		}
 		return nil, err
+	}
+	if owner, bad := ownerMismatch(fi, os.Geteuid()); bad {
+		// Typical mistake: `sudo clamfleet-server host add ...` against a database
+		// owned by the server user. SQLite then creates its -wal/-shm files
+		// owned by root with mode 0600, and the running server can no longer
+		// open them. Warn loudly; do not refuse (root may know what it does).
+		log.Warn("database is owned by another user: run admin commands as the server user (sudo -u clamfleet-server clamfleet-server ...), or SQLite may create root-owned files the server cannot open",
+			"owner_uid", owner, "running_as_uid", os.Geteuid())
 	}
 	st, err := sqlite.Open(ctx, cfg.DBPath)
 	if err != nil {
@@ -218,6 +227,15 @@ func (a *app) openExisting(ctx context.Context, cfg server.Config) (*sqlite.Stor
 		return nil, err
 	}
 	return st, nil
+}
+
+// ownerMismatch reports whether the file's owner differs from euid, and the owner.
+func ownerMismatch(fi os.FileInfo, euid int) (owner uint32, mismatch bool) {
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	if !ok {
+		return 0, false
+	}
+	return st.Uid, int(st.Uid) != euid
 }
 
 func (a *app) host(ctx context.Context, args []string) int {
@@ -258,7 +276,7 @@ func (a *app) host(ctx context.Context, args []string) int {
 		log.Error("invalid configuration", "error", err.Error())
 		return exitError
 	}
-	st, err := a.openExisting(ctx, cfg)
+	st, err := a.openExisting(ctx, log, cfg)
 	if err != nil {
 		log.Error("database", "error", err.Error())
 		return exitError

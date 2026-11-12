@@ -266,3 +266,22 @@ func TestInvalidConfigIsRefused(t *testing.T) {
 		t.Fatalf("%+v", r)
 	}
 }
+
+func TestOwnerMismatch(t *testing.T) {
+	f := filepath.Join(t.TempDir(), "x")
+	if err := os.WriteFile(f, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fi, _ := os.Stat(f)
+	if _, bad := ownerMismatch(fi, os.Geteuid()); bad {
+		t.Fatal("own file reported as owned by someone else")
+	}
+	if owner, bad := ownerMismatch(fi, os.Geteuid()+1); !bad || int(owner) != os.Geteuid() {
+		t.Fatalf("a different euid must be a mismatch, got owner %d bad=%v", owner, bad)
+	}
+	// And the normal path stays quiet.
+	_, env := newDB(t)
+	if r := runServer(t, env, "host", "list"); strings.Contains(r.stderr, "owned by another user") {
+		t.Fatalf("spurious warning: %s", r.stderr)
+	}
+}
