@@ -5,7 +5,11 @@
 # environment variable CLAMFLEET_AGENT_<KEY> (nested keys joined by _, e.g.
 # CLAMFLEET_AGENT_SPOOL_MAX_MB); the environment wins over this file.
 server: https://clamfleet.example:8443
-token_file: /etc/clamfleet/token
+token_file: /etc/clamfleet/token   # read on every send: a rotated token needs no restart; keep it 0640 root:clamfleet
+# Only if the server requires client certificates (its tls.client_ca mTLS). Both or neither.
+# The bearer token is sent in any case.
+# tls: {client_cert: /etc/clamfleet/agent.crt, client_key: /etc/clamfleet/agent.key}
+# A private CA for the server certificate: set SSL_CERT_FILE=/etc/clamfleet/ca.pem in the unit's Environment=.
 interval: 5m
 tags: [prod]
 clamd_conf: /etc/clamav/clamd.conf

@@ -20,7 +20,8 @@ func TestEnvNamesMatchDocumentedTable(t *testing.T) {
 	want := []string{
 		"CLAMFLEET_AGENT_CLAMD_CONF", "CLAMFLEET_AGENT_DB_DIR", "CLAMFLEET_AGENT_FRESHCLAM_LOG", "CLAMFLEET_AGENT_INTERVAL",
 		"CLAMFLEET_AGENT_SCAN_PATHS", "CLAMFLEET_AGENT_SCAN_SUMMARY", "CLAMFLEET_AGENT_SERVER",
-		"CLAMFLEET_AGENT_SPOOL_DIR", "CLAMFLEET_AGENT_SPOOL_MAX_MB", "CLAMFLEET_AGENT_TAGS", "CLAMFLEET_AGENT_TOKEN_FILE",
+		"CLAMFLEET_AGENT_SPOOL_DIR", "CLAMFLEET_AGENT_SPOOL_MAX_MB", "CLAMFLEET_AGENT_TAGS", "CLAMFLEET_AGENT_TLS_CLIENT_CERT",
+		"CLAMFLEET_AGENT_TLS_CLIENT_KEY", "CLAMFLEET_AGENT_TOKEN_FILE",
 		"CLAMFLEET_AGENT_UNITS_CLAMD", "CLAMFLEET_AGENT_UNITS_CLAMONACC", "CLAMFLEET_AGENT_UNITS_FRESHCLAM",
 	}
 	if got := config.EnvNames(&c, EnvPrefix); !reflect.DeepEqual(got, want) {
@@ -84,5 +85,43 @@ func TestExampleConfigsLoad(t *testing.T) {
 	}
 	if _, _, err := LoadConfig("/nonexistent/x.yaml", true, config.Options{}); err == nil || !strings.Contains(err.Error(), "x.yaml") {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestValidateRun(t *testing.T) {
+	cases := []struct {
+		name string
+		mut  func(*Config)
+		ok   bool
+	}{
+		{"https", func(c *Config) { c.Server = "https://clamfleet.example:8443" }, true},
+		{"https with proxy prefix", func(c *Config) { c.Server = "https://clamfleet.example/api/cf" }, true},
+		{"http to 127.0.0.1", func(c *Config) { c.Server = "http://127.0.0.1:8443" }, true},
+		{"http to ::1", func(c *Config) { c.Server = "http://[::1]:8443" }, true},
+		{"http to localhost", func(c *Config) { c.Server = "http://localhost:8443" }, true},
+		{"http to a LAN host", func(c *Config) { c.Server = "http://10.0.0.5:8443" }, false},
+		{"http to a name", func(c *Config) { c.Server = "http://clamfleet.example" }, false},
+		{"http to a lookalike", func(c *Config) { c.Server = "http://localhost.example.com" }, false},
+		{"empty server", func(c *Config) { c.Server = "" }, false},
+		{"no scheme", func(c *Config) { c.Server = "clamfleet.example:8443" }, false},
+		{"ftp", func(c *Config) { c.Server = "ftp://clamfleet.example" }, false},
+		{"credentials in the URL", func(c *Config) { c.Server = "https://u:p@clamfleet.example" }, false},
+		{"query", func(c *Config) { c.Server = "https://clamfleet.example/?x=1" }, false},
+		{"relative token_file", func(c *Config) { c.Server = "https://x.example"; c.TokenFile = "token" }, false},
+		{"client cert without key", func(c *Config) { c.Server = "https://x.example"; c.TLS.ClientCert = "/c" }, false},
+		{"client key without cert", func(c *Config) { c.Server = "https://x.example"; c.TLS.ClientKey = "/k" }, false},
+		{"client pair", func(c *Config) { c.Server = "https://x.example"; c.TLS = TLS{ClientCert: "/c", ClientKey: "/k"} }, true},
+		{"relative client pair", func(c *Config) { c.Server = "https://x.example"; c.TLS = TLS{ClientCert: "c", ClientKey: "k"} }, false},
+	}
+	for _, tc := range cases {
+		c := DefaultConfig()
+		tc.mut(&c)
+		if err := c.ValidateRun(); (err == nil) != tc.ok {
+			t.Errorf("%s: err = %v, want ok=%v", tc.name, err, tc.ok)
+		}
+	}
+	// collect needs none of it: the plain Validate still accepts no server.
+	if err := DefaultConfig().Validate(); err != nil {
+		t.Fatal(err)
 	}
 }

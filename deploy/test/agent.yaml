@@ -2,5 +2,7 @@
 # SPDX-FileCopyrightText: The ClamFleet Authors
 # Agent config for the clamfleet-test container (Debian 13). Installed to
 # /etc/clamfleet/agent.yaml by prepare-agent.sh.
+# The e2e suite starts the server on loopback inside the container (see e2e/server_e2e_test.go).
+server: https://127.0.0.1:8443
 interval: 5m
 tags: [e2e]
