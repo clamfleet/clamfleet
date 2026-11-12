@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# SPDX-FileCopyrightText: The ClamFleet Authors
+# ClamFleet agent configuration for the RHEL 9 family (RHEL, Alma, Rocky) with
+# the EPEL clamd@scan package layout.
+# UNTESTED: only Debian 13 is tested live. These names come from the packages'
+# documentation. Corrections and test reports are welcome.
+server: https://clamfleet.example:8443
+token_file: /etc/clamfleet/token
+interval: 5m
+tags: [prod]
+clamd_conf: /etc/clamd.d/scan.conf
+db_dir: /var/lib/clamav
+freshclam_log: /var/log/freshclam.log
+# units.clamd: an unknown unit name is reported as an error and the clamd socket is
+# NOT probed (probing could start a socket-activated clamd). Set it to "" ONLY if
+# clamd is not managed by systemd (started by hand or another supervisor).
+units: {clamd: clamd@scan, freshclam: clamav-freshclam, clamonacc: clamav-clamonacc}
+spool: {dir: /var/lib/clamfleet/spool, max_mb: 50}
+scan: {paths: [/srv, /home], summary: /var/lib/clamfleet/last_scan.json}
