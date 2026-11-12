@@ -10,10 +10,11 @@ Central management for ClamAV on Linux fleets. Spec: `docs/HANDOVER.md`. Current
 
 ## Commands
 
-- `make check`: `go vet`, `staticcheck`, `go test ./...` and `scripts-test` (the shell tests of `deploy/test`, fake ssh; no container needed).
+- `make check`: `go vet`, `staticcheck`, `sqlc diff`, `go test ./...` and `scripts-test` (the shell tests of `deploy/test`, fake ssh; no container needed).
 - `make e2e`: runs the agent inside the `clamfleet-test` Incus container. Read `docs/testing.md` first.
 - `make fixtures`: re-records `internal/agent/testdata` from the container. Never hand-edit recorded files.
-- Tools: Go 1.27.4 (`go 1.26.0` in go.mod), staticcheck 2026.2.2 (v0.8.2).
+- `make generate` runs sqlc over `migrations/sqlite` and `internal/store/sqlite/queries`; `make check` runs `sqlc diff`. Never hand-edit `internal/store/sqlite/sqlcdb`.
+- Tools: Go 1.27.4 (`go 1.26.0` in go.mod), staticcheck 2026.2.2 (v0.8.2), sqlc v1.31.1 (`CGO_ENABLED=0 go install github.com/sqlc-dev/sqlc/cmd/sqlc@v1.31.1`, build-time only).
 
 ## Rules
 

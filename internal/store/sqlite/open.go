@@ -48,6 +48,11 @@ type Store struct {
 	w    *sql.DB // single write connection
 	r    *sql.DB // read pool, query_only
 	prov *goose.Provider
+
+	// afterTokenUpdate is a test hook: SetToken calls it between the token
+	// update and the audit insert, so a test can prove that a failure there
+	// rolls both back. Always nil in production.
+	afterTokenUpdate func() error
 }
 
 // dsn builds the modernc DSN. Pragmas go in the DSN (not in an Exec after

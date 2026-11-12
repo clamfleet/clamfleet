@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# SPDX-FileCopyrightText: The ClamFleet Authors
+#
+# sqlc generates plain database/sql code at build time; nothing of sqlc ends up
+# in the binary. Pinned version: see CLAUDE.md. Run `make generate` after
+# changing a migration or a query; `make sqlc-check` (part of `make check`)
+# fails when the committed output is stale.
+#
+# The schema is the goose migrations themselves: sqlc reads the "+goose Up"
+# sections and ignores the Down ones.
+version: "2"
+sql:
+  - engine: sqlite
+    schema: migrations/sqlite/
+    queries: internal/store/sqlite/queries/
+    gen:
+      go:
+        package: sqlcdb
+        out: internal/store/sqlite/sqlcdb
