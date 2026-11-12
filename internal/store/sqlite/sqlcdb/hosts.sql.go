@@ -80,7 +80,7 @@ func (q *Queries) DeleteHostTags(ctx context.Context, hostID int64) error {
 
 const hostByName = `-- name: HostByName :one
 SELECT id, name, token_hash IS NOT NULL AS has_token, token_created_at, created_at, first_seen,
-       last_seen, reported_name, agent_version, last_report
+       last_seen, reported_name, agent_version, last_report, state, state_reason, state_since
 FROM hosts WHERE name = ?1
 `
 
@@ -95,6 +95,9 @@ type HostByNameRow struct {
 	ReportedName   sql.NullString
 	AgentVersion   sql.NullString
 	LastReport     sql.NullString
+	State          sql.NullString
+	StateReason    sql.NullString
+	StateSince     sql.NullInt64
 }
 
 func (q *Queries) HostByName(ctx context.Context, name string) (HostByNameRow, error) {
@@ -111,6 +114,9 @@ func (q *Queries) HostByName(ctx context.Context, name string) (HostByNameRow, e
 		&i.ReportedName,
 		&i.AgentVersion,
 		&i.LastReport,
+		&i.State,
+		&i.StateReason,
+		&i.StateSince,
 	)
 	return i, err
 }
@@ -224,7 +230,7 @@ func (q *Queries) ListHostTags(ctx context.Context, hostID int64) ([]string, err
 
 const listHosts = `-- name: ListHosts :many
 SELECT id, name, token_hash IS NOT NULL AS has_token, created_at, first_seen, last_seen,
-       reported_name, agent_version
+       reported_name, agent_version, state, state_reason, state_since
 FROM hosts ORDER BY name
 `
 
@@ -237,6 +243,9 @@ type ListHostsRow struct {
 	LastSeen     sql.NullInt64
 	ReportedName sql.NullString
 	AgentVersion sql.NullString
+	State        sql.NullString
+	StateReason  sql.NullString
+	StateSince   sql.NullInt64
 }
 
 func (q *Queries) ListHosts(ctx context.Context) ([]ListHostsRow, error) {
@@ -257,6 +266,9 @@ func (q *Queries) ListHosts(ctx context.Context) ([]ListHostsRow, error) {
 			&i.LastSeen,
 			&i.ReportedName,
 			&i.AgentVersion,
+			&i.State,
+			&i.StateReason,
+			&i.StateSince,
 		); err != nil {
 			return nil, err
 		}
@@ -293,8 +305,10 @@ func (q *Queries) RevokeHostToken(ctx context.Context, arg RevokeHostTokenParams
 const setHostLastReport = `-- name: SetHostLastReport :execrows
 UPDATE hosts
 SET last_report = ?1, last_report_order = ?2,
-    reported_name = ?3, agent_version = ?4
-WHERE id = ?5 AND (last_report_order IS NULL OR last_report_order <= ?2)
+    reported_name = ?3, agent_version = ?4,
+    daily_version = ?5, daily_built = ?6,
+    clamd_version = ?7
+WHERE id = ?8 AND (last_report_order IS NULL OR last_report_order <= ?2)
 `
 
 type SetHostLastReportParams struct {
@@ -302,6 +316,9 @@ type SetHostLastReportParams struct {
 	Ord          sql.NullInt64
 	ReportedName sql.NullString
 	AgentVersion sql.NullString
+	DailyVersion sql.NullInt64
+	DailyBuilt   sql.NullInt64
+	ClamdVersion sql.NullString
 	ID           int64
 }
 
@@ -311,6 +328,9 @@ func (q *Queries) SetHostLastReport(ctx context.Context, arg SetHostLastReportPa
 		arg.Ord,
 		arg.ReportedName,
 		arg.AgentVersion,
+		arg.DailyVersion,
+		arg.DailyBuilt,
+		arg.ClamdVersion,
 		arg.ID,
 	)
 	if err != nil {

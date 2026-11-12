@@ -37,6 +37,22 @@ func nullTime(n sql.NullInt64) *time.Time {
 	return &t
 }
 
+func nullString(n sql.NullString) *string {
+	if !n.Valid {
+		return nil
+	}
+	return &n.String
+}
+
+// rawJSON passes stored JSON text through; NULL becomes a nil RawMessage,
+// which encodes as null.
+func rawJSON(n sql.NullString) json.RawMessage {
+	if !n.Valid {
+		return nil
+	}
+	return json.RawMessage(n.String)
+}
+
 func lower(s string) string { return strings.ToLower(s) }
 
 func nullStr(s string) sql.NullString { return sql.NullString{String: s, Valid: true} }
@@ -159,6 +175,18 @@ func (s *Store) RecordReport(ctx context.Context, r store.ReportRecord) (store.R
 	recv := unix(r.ReceivedAt)
 	ord := min(ts, recv)
 
+	// Fleet columns copied from the report (plain columns keep the fleet-wide
+	// "newest daily" query portable, no JSON functions).
+	var dailyVersion, dailyBuilt sql.NullInt64
+	if d := r.Report.Sigs.Daily; d != nil {
+		dailyVersion = sql.NullInt64{Int64: int64(d.Version), Valid: true}
+		dailyBuilt = nullInt(d.Built)
+	}
+	var clamdVersion sql.NullString
+	if v := r.Report.Clamd.Version; v != nil {
+		clamdVersion = nullStr(*v)
+	}
+
 	var res store.ReportResult
 	err = s.inTx(ctx, func(q *sqlcdb.Queries) error {
 		prev, err := q.HostForReport(ctx, r.HostID)
@@ -186,6 +214,7 @@ func (s *Store) RecordReport(ctx context.Context, r store.ReportRecord) (store.R
 		n, err = q.SetHostLastReport(ctx, sqlcdb.SetHostLastReportParams{
 			Payload: nullStr(string(payload)), Ord: sql.NullInt64{Int64: ord, Valid: true},
 			ReportedName: nullStr(r.Report.Host), AgentVersion: nullStr(r.Report.AgentVersion), ID: r.HostID,
+			DailyVersion: dailyVersion, DailyBuilt: dailyBuilt, ClamdVersion: clamdVersion,
 		})
 		if err != nil {
 			return err
@@ -246,6 +275,7 @@ func (s *Store) ListHosts(ctx context.Context) ([]store.HostSummary, error) {
 			ID: r.ID, Name: r.Name, Tags: tags[r.ID], HasToken: r.HasToken,
 			CreatedAt: time.Unix(r.CreatedAt, 0).UTC(), FirstSeen: nullTime(r.FirstSeen), LastSeen: nullTime(r.LastSeen),
 			ReportedName: r.ReportedName.String, AgentVersion: r.AgentVersion.String,
+			State: nullString(r.State), StateReason: rawJSON(r.StateReason), StateSince: nullTime(r.StateSince),
 		}
 		if hs.Tags == nil {
 			hs.Tags = []string{}
@@ -282,11 +312,16 @@ func (s *Store) HostByName(ctx context.Context, name string) (store.HostDetail, 
 	if err != nil {
 		return store.HostDetail{}, err
 	}
+	changes, err := q.ListStateChanges(ctx, sqlcdb.ListStateChangesParams{HostID: h.ID, MaxRows: 50})
+	if err != nil {
+		return store.HostDetail{}, err
+	}
 	d := store.HostDetail{
 		HostSummary: store.HostSummary{
 			ID: h.ID, Name: h.Name, Tags: append([]string{}, tags...), HasToken: h.HasToken,
 			CreatedAt: time.Unix(h.CreatedAt, 0).UTC(), FirstSeen: nullTime(h.FirstSeen), LastSeen: nullTime(h.LastSeen),
 			ReportedName: h.ReportedName.String, AgentVersion: h.AgentVersion.String,
+			State: nullString(h.State), StateReason: rawJSON(h.StateReason), StateSince: nullTime(h.StateSince),
 		},
 		TokenCreatedAt: nullTime(h.TokenCreatedAt),
 		ReportCount:    reports, EventCount: events,
@@ -298,6 +333,11 @@ func (s *Store) HostByName(ctx context.Context, name string) (store.HostDetail, 
 		d.Audit = append(d.Audit, store.AuditEntry{
 			TS: time.Unix(a.Ts, 0).UTC(), ActorKind: a.ActorKind, Actor: a.Actor, Action: a.Action,
 			TargetKind: a.TargetKind, Target: a.Target, Detail: a.Detail.String,
+		})
+	}
+	for _, c := range changes {
+		d.StateChanges = append(d.StateChanges, store.StateChange{
+			TS: time.Unix(c.Ts, 0).UTC(), From: nullString(c.FromState), To: c.ToState, Reason: json.RawMessage(c.Reason),
 		})
 	}
 	return d, nil

@@ -30,7 +30,9 @@ WHERE id = sqlc.arg(id);
 -- name: SetHostLastReport :execrows
 UPDATE hosts
 SET last_report = sqlc.arg(payload), last_report_order = sqlc.arg(ord),
-    reported_name = sqlc.arg(reported_name), agent_version = sqlc.arg(agent_version)
+    reported_name = sqlc.arg(reported_name), agent_version = sqlc.arg(agent_version),
+    daily_version = sqlc.arg(daily_version), daily_built = sqlc.arg(daily_built),
+    clamd_version = sqlc.arg(clamd_version)
 WHERE id = sqlc.arg(id) AND (last_report_order IS NULL OR last_report_order <= sqlc.arg(ord));
 
 -- name: DeleteHostTags :exec
@@ -42,7 +44,7 @@ ON CONFLICT (host_id, tag) DO NOTHING;
 
 -- name: ListHosts :many
 SELECT id, name, token_hash IS NOT NULL AS has_token, created_at, first_seen, last_seen,
-       reported_name, agent_version
+       reported_name, agent_version, state, state_reason, state_since
 FROM hosts ORDER BY name;
 
 -- name: ListAllHostTags :many
@@ -50,7 +52,7 @@ SELECT host_id, tag FROM host_tags ORDER BY host_id, tag;
 
 -- name: HostByName :one
 SELECT id, name, token_hash IS NOT NULL AS has_token, token_created_at, created_at, first_seen,
-       last_seen, reported_name, agent_version, last_report
+       last_seen, reported_name, agent_version, last_report, state, state_reason, state_since
 FROM hosts WHERE name = sqlc.arg(name);
 
 -- name: ListHostTags :many
