@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# SPDX-FileCopyrightText: The ClamFleet Authors
+node_modules/
+test-results/
+playwright-report/

@@ -1,0 +1,14 @@
+{
+  "name": "clamfleet-e2e-web",
+  "private": true,
+  "description": "Browser E2E for the ClamFleet console (SPDX-License-Identifier: AGPL-3.0-only; SPDX-FileCopyrightText: The ClamFleet Authors)",
+  "license": "AGPL-3.0-only",
+  "scripts": {
+    "test": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.63.0",
+    "@types/node": "^24.0.0",
+    "typescript": "^5.0.0"
+  }
+}
