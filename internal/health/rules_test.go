@@ -268,6 +268,10 @@ func TestAgentTextHasNoControlCharacters(t *testing.T) {
 	if strings.ContainsAny(msg, "\x1b\n") {
 		t.Fatalf("control characters survived: %q", msg)
 	}
+	in.Report.Clamd.Error = ptr("harmless\u202etxt.exe \u200b\u2066x")
+	if msg := Evaluate(in, DefaultThresholds()).Reasons[0].Msg; strings.ContainsAny(msg, "\u202e\u200b\u2066") {
+		t.Fatalf("format/bidi characters survived: %q", msg)
+	}
 	in.Report.Clamd.Error = nil
 	in.Report.Clamd.Up = true
 	in.Report.Services.Freshclam = "evil\x07"

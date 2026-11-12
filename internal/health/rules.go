@@ -275,12 +275,14 @@ func latest(a, b time.Time) time.Time {
 }
 
 // truncate cleans agent-supplied text for a reason and shortens it to at most
-// n bytes on a rune boundary. Control characters (an ESC sequence in
-// clamd.error) become spaces: the CLI prints reasons to a terminal, and the
+// n bytes on a rune boundary. Control and Unicode format characters (an ESC
+// sequence in clamd.error, a right-to-left override) become spaces: the CLI prints reasons to a terminal, and the
 // agent is not a trusted author.
 func truncate(s string, n int) string {
 	s = strings.Map(func(r rune) rune {
-		if unicode.IsControl(r) {
+		// Cf (format) includes the bidi overrides (U+202E) that make text
+		// display in a different order than it is written.
+		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) {
 			return ' '
 		}
 		return r
