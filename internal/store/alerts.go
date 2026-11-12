@@ -14,6 +14,12 @@ import (
 	"time"
 )
 
+// MaxAlertAttempts is the number of attempts a delivery gets, crashes included
+// (an interrupted attempt counts). The store needs it for the crash path
+// (ExpireLeases ends a delivery on its last attempt) and internal/alert for
+// the backoff schedule; one constant so the two paths cannot disagree.
+const MaxAlertAttempts = 5
+
 // Types of an alert target. Validated in Go, not by a CHECK constraint.
 const (
 	TargetTypeEmail   = "email"
