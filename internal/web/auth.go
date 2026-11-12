@@ -18,6 +18,7 @@
 package web
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"strconv"
@@ -147,7 +148,8 @@ func (w *Web) loginSubmit(rw http.ResponseWriter, r *http.Request) {
 	audit := store.Audit{Kind: store.ActorUser, Actor: user.Email}
 	if err := w.Store.RecordLogin(r.Context(), user.ID, w.Now(), audit, map[string]string{"ip": ip}); err != nil {
 		w.Log.Error("login: cannot record", "error", err.Error())
-		if derr := w.Store.DeleteSession(r.Context(), webauth.HashToken(token)); derr != nil {
+		// WithoutCancel: a client that hung up must not leave the session behind.
+		if derr := w.Store.DeleteSession(context.WithoutCancel(r.Context()), webauth.HashToken(token)); derr != nil {
 			w.Log.Error("login: cannot remove the unrecorded session", "error", derr.Error())
 		}
 		w.errorPage(rw, r, http.StatusInternalServerError)

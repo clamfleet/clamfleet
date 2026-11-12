@@ -15,6 +15,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -662,7 +663,7 @@ func TestCSRFThroughRouter(t *testing.T) {
 		want int
 	}{
 		{"missing token", func(string) map[string]string { return same }, func(string) url.Values { return url.Values{} }, 403},
-		{"wrong token", func(string) map[string]string { return same }, func(t string) url.Values { return url.Values{"csrf_token": {t[:len(t)-2] + "AA"}} }, 403},
+		{"wrong token", func(string) map[string]string { return same }, func(t string) url.Values { return url.Values{"csrf_token": {flipFirst(t)}} }, 403},
 		{"cross-site with a valid token", func(string) map[string]string { return map[string]string{"Sec-Fetch-Site": "cross-site"} }, func(t string) url.Values { return url.Values{"csrf_token": {t}} }, 403},
 		{"foreign Origin with a valid token", func(string) map[string]string { return map[string]string{"Origin": "https://evil.example"} }, func(t string) url.Values { return url.Values{"csrf_token": {t}} }, 403},
 		{"valid token in the form", func(string) map[string]string { return same }, func(t string) url.Values { return url.Values{"csrf_token": {t}} }, 303},
@@ -960,8 +961,9 @@ func raceLogin(t *testing.T, e *env, email, password string, during func()) (*br
 	t.Cleanup(open)
 	b := e.browser()
 	res := make(chan page, 1)
+	before := e.hasher.verifies.Load()
 	go func() { res <- b.post("/login", url.Values{"email": {email}, "password": {password}}) }()
-	for e.hasher.verifies.Load() == 0 { // the login is now inside the hasher
+	for e.hasher.verifies.Load() == before { // the login is now inside the hasher
 		time.Sleep(5 * time.Millisecond)
 	}
 	during()
@@ -1046,4 +1048,121 @@ func TestSelfPasswordChangeRacingAResetDoesNotOverwriteIt(t *testing.T) {
 	if g := b.get("/"); g.status != 303 {
 		t.Fatalf("the stale session still works: %d", g.status)
 	}
+}
+
+// failingLogin makes RecordLogin fail, like a full disk would.
+type failingLogin struct{ store.Store }
+
+func (failingLogin) RecordLogin(context.Context, int64, time.Time, store.Audit, map[string]string) error {
+	return errors.New("disk full")
+}
+
+// If the login cannot be recorded, nobody is signed in: 500, no cookie, and the
+// session that was already created is removed again.
+func TestLoginThatCannotBeRecordedLeavesNoSession(t *testing.T) {
+	e := newEnv(t, func(d *server.Deps) { d.Store = failingLogin{d.Store} })
+	e.addUser("ann@example.com", "viewer", goodPW, false)
+	b := e.browser()
+	p := b.post("/login", url.Values{"email": {"ann@example.com"}, "password": {goodPW}})
+	if p.status != 500 || p.header.Get("Set-Cookie") != "" || e.cookieFor(b) != nil {
+		t.Fatalf("%d, Set-Cookie %q", p.status, p.header.Get("Set-Cookie"))
+	}
+	if n := e.count(`SELECT count(*) FROM user_sessions`); n != 0 {
+		t.Fatalf("%d session rows left behind by a login that could not be recorded", n)
+	}
+}
+
+// swapHash replaces the user's stored hash behind the handlers' back, without
+// touching sessions (a reset would delete them), through the real store.
+func swapHash(t *testing.T, e *env, u store.User, to string) {
+	t.Helper()
+	if ok, err := e.st.RehashPassword(context.Background(), u.ID, u.PasswordHash, to, e.clock()); err != nil || !ok {
+		t.Fatalf("swapHash: applied=%v err=%v", ok, err)
+	}
+}
+
+// failures drives n wrong-password logins for ann, each answered 200 (admitted).
+func failures(t *testing.T, e *env, n int) {
+	t.Helper()
+	for i := 0; i < n; i++ {
+		if p := e.browser().post("/login", url.Values{"email": {"ann@example.com"}, "password": {"wrong wrong wrong wrong"}}); p.status != 200 {
+			t.Fatalf("failure %d: %d", i+1, p.status)
+		}
+	}
+}
+
+// assertFourFailuresStand: the next wrong attempt is admitted (the 5th) and the one after is refused,
+// so exactly four failures were on record before. A raced attempt that counted
+// as a failure makes the first one 429; one that reset the count makes the second 200.
+func assertFourFailuresStand(t *testing.T, e *env) {
+	t.Helper()
+	wrong := url.Values{"email": {"ann@example.com"}, "password": {"wrong wrong wrong wrong"}}
+	if p := e.browser().post("/login", wrong); p.status != 200 {
+		t.Fatalf("the 5th wrong attempt was %d: the raced attempt counted as a failure", p.status)
+	}
+	if p := e.browser().post("/login", wrong); p.status != 429 {
+		t.Fatalf("the 6th wrong attempt was %d, want 429: the raced attempt reset the failures", p.status)
+	}
+}
+
+func TestRacedLoginDoesNotCountAsAFailureOrAReset(t *testing.T) {
+	e := newEnv(t)
+	u := e.addUser("ann@example.com", "viewer", goodPW, false)
+	failures(t, e, 4)
+	other, _ := webauth.NewHasher().Hash(context.Background(), "some other password entirely")
+	// The raced login is the 5th attempt, verified with the RIGHT password, then loses the race.
+	b, p := raceLogin(t, e, "ann@example.com", goodPW, func() { swapHash(t, e, u, other) })
+	if p.status != 200 || e.cookieFor(b) != nil {
+		t.Fatalf("raced login: %d", p.status)
+	}
+	assertFourFailuresStand(t, e)
+}
+
+func TestRacedPasswordChangeDoesNotCountAsAFailureOrAReset(t *testing.T) {
+	e := newEnv(t)
+	u := e.addUser("ann@example.com", "viewer", goodPW, false)
+	b := e.browser()
+	b.login("ann@example.com", goodPW) // success: no failures on record
+	tok := csrf(t, b.get("/account"))
+	change := func(cur string) page {
+		return b.post("/account/password", url.Values{"csrf_token": {tok}, "current_password": {cur}, "new_password": {"a-brand-new-password"}, "new_password2": {"a-brand-new-password"}})
+	}
+	for i := 0; i < 4; i++ {
+		if p := change("wrong wrong wrong wrong"); p.status != 200 {
+			t.Fatalf("failure %d: %d", i+1, p.status)
+		}
+	}
+	other, _ := webauth.NewHasher().Hash(context.Background(), "some other password entirely")
+	e.hasher.gate = make(chan struct{})
+	var release sync.Once
+	open := func() { release.Do(func() { close(e.hasher.gate) }) }
+	t.Cleanup(open)
+	before := e.hasher.verifies.Load()
+	res := make(chan page, 1)
+	go func() { res <- change(goodPW) }() // the 5th attempt, right password
+	for e.hasher.verifies.Load() == before {
+		time.Sleep(5 * time.Millisecond)
+	}
+	swapHash(t, e, u, other)
+	open()
+	if p := <-res; p.status != 409 {
+		t.Fatalf("raced change: %d", p.status)
+	}
+	// The stored hash is now `other`; a wrong current password is admitted once more (5th) and then refused.
+	if p := change("wrong wrong wrong wrong"); p.status != 200 {
+		t.Fatalf("5th wrong attempt: %d (the 409 counted as a failure)", p.status)
+	}
+	if p := change("wrong wrong wrong wrong"); p.status != 429 {
+		t.Fatalf("6th wrong attempt: %d (the 409 reset the failures)", p.status)
+	}
+}
+
+// flipFirst returns a token that certainly differs from t: the first character
+// is part of the random mask, so the unmasked secret changes.
+func flipFirst(t string) string {
+	c := "A"
+	if t[0] == 'A' {
+		c = "B"
+	}
+	return c + t[1:]
 }
