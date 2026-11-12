@@ -12,6 +12,9 @@
 // argument (it would show in `ps` and shell history): --password-stdin reads
 // one line instead. A password set this way is also a one-time password: the
 // user must change it at first login, because whoever typed or piped it knows it.
+//
+// `user reset-totp` is the admin reset of the second factor (there is no console
+// UI for resetting another user). Like reset-password it prints nothing on stdout.
 package main
 
 import (
@@ -54,7 +57,7 @@ func (a *app) user(ctx context.Context, args []string) int {
 		pos = append(pos, fs.Arg(0))
 		rest = fs.Args()[1:]
 	}
-	want := map[string]int{"add": 1, "list": 0, "set-role": 2, "disable": 1, "enable": 1, "reset-password": 1}
+	want := map[string]int{"add": 1, "list": 0, "set-role": 2, "disable": 1, "enable": 1, "reset-password": 1, "reset-totp": 1}
 	n, known := want[sub]
 	switch {
 	case !known:
@@ -129,6 +132,12 @@ func (a *app) user(ctx context.Context, args []string) int {
 		err = st.SetDisabled(ctx, u.ID, true, a.now(), audit)
 	case "enable":
 		err = st.SetDisabled(ctx, u.ID, false, a.now(), audit)
+	case "reset-totp":
+		// Removes the authenticator and the recovery codes, lifts the second-factor
+		// lock and ends every session and pending login of the user. It needs no key
+		// file, which is the way out of a lost key. With totp_required the user
+		// enrols again at their next sign-in.
+		err = st.DisableTOTP(ctx, u.ID, nil, store.ActionTOTPReset, a.now(), audit)
 	}
 	if err != nil {
 		log.Error("cannot change user", "user", u.Email, "error", err.Error())
@@ -213,14 +222,26 @@ func (a *app) userList(ctx context.Context, log *slog.Logger, st store.Store, as
 		return a.printJSON(log, users)
 	}
 	tw := newTab(a.stdout)
-	fmt.Fprintln(tw, "EMAIL\tROLE\tSTATUS\tLAST LOGIN\tMUST CHANGE PASSWORD")
+	fmt.Fprintln(tw, "EMAIL\tROLE\tSTATUS\tLAST LOGIN\tMUST CHANGE PASSWORD\tTOTP")
 	for _, u := range users {
 		status := "active"
 		if u.Disabled {
 			status = "disabled"
 		}
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%v\n", u.Email, u.Role, status, fmtTime(u.LastLoginAt), u.MustChange)
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%v\t%s\n", u.Email, u.Role, status, fmtTime(u.LastLoginAt), u.MustChange, totpText(u))
 	}
 	tw.Flush()
 	return exitOK
+}
+
+// totpText is the TOTP column of `user list`: off, on, or locked after too many
+// wrong second-factor attempts (reset-password or reset-totp lifts it).
+func totpText(u store.User) string {
+	switch {
+	case !u.TOTPEnabled:
+		return "off"
+	case u.TOTPFailures >= store.SecondFactorLockLimit:
+		return "locked"
+	}
+	return "on"
 }

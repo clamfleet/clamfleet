@@ -75,6 +75,8 @@ commands:
   user disable EMAIL | enable EMAIL           disable (ends sessions) or re-enable a login
   user reset-password EMAIL [--password-stdin]
                                               issue a new one-time password and end the user's sessions
+  user reset-totp EMAIL                       remove the user's authenticator and recovery codes, lift a second-factor
+                                              lock and end their sessions (needs no key file)
   key generate [--file PATH] [--add]          create the secret key file (as root; default: secret_key_file);
                                               --add puts a new key on top of an existing file (rotation)
   key reencrypt                               re-seal stored secrets with the active key (after key generate --add)
