@@ -113,8 +113,12 @@ hosts. `hack/webfixture` is that server; `make webfixture` builds `bin/webfixtur
 `make web-fixture` runs it in the foreground until Ctrl-C. A test runner should start the binary itself:
 
 ```
-bin/webfixture --server-bin bin/clamfleet-server [--port N] [--json-out PATH] [--keep]
+bin/webfixture --server-bin bin/clamfleet-server [--port N] [--json-out PATH] [--keep] [--totp-required]
 ```
+
+`--totp-required` starts the console with `auth.local.totp_required: true` and seeds the `forced` user.
+The fixture also writes a `secret_key_file` inside its temp directory (made with the real
+`clamfleet-server key generate`); the developer's own key file is never read.
 
 It creates a private temp directory with throwaway TLS files, migrates, seeds, starts the real server
 (`https://127.0.0.1:<port>`, 1 s health evaluation, production cookie settings), prints one line
@@ -130,12 +134,21 @@ host tokens. Passwords and tokens are random per run, so read them from the file
 | `admin` | `admin@fixture.example`, role admin |
 | `viewer` | `viewer@fixture.example`, role viewer |
 | `must_change` | `newbie@fixture.example`, viewer with a one-time password: signing in lands on `/account` |
+| `enrol` | `enrol@fixture.example`, viewer with a password and no authenticator: the enrolment flow signs in as it |
+| `totp` | `totp@fixture.example`, viewer with an authenticator. `fixture.json` holds `secret_base32` and the 10 `recovery_codes` (display form, each works once) |
+| `forced` | only with `--totp-required`: `forced@fixture.example`, no authenticator, in a console that requires one: signing in lands on `/account/totp` |
 | `ok01` | OK, tags `prod`, `web` |
 | `warn01` | WARN, freshclam unit inactive (tags `prod`, `db`) |
 | `crit01` | CRIT, clamd down with `ping: timeout` (tag `staging`) |
 | `stale01` | OK at start (report interval 10 s), STALE about 35 s later |
 | `pending01` | registered, never reported: state `pending` |
 | `xss01` | WARN, with HTML in a tag, the reported host name and the freshclam error: it must render inert |
+
+**Making a TOTP code.** The server under test runs on the real clock, so a code is made from `secret_base32`
+for the real time: RFC 6238 (HMAC-SHA1 over the 8-byte big-endian counter `floor(unix / 30)`, dynamic
+truncation, 6 digits). A code is accepted for the current 30 s step and one step either side, but **each step
+only once per user**: a spec that signs in twice as `totp` within 30 s must use the code of the next step
+(`floor(unix / 30) + 1`) the second time. A recovery code works once.
 
 A spec can change a state by posting its own report with the host's token to `POST /v1/report`
 (`Authorization: Bearer <token>`, schema 1, `ts` strictly newer than the previous one; see `docs/api.md`):
@@ -152,7 +165,15 @@ Stable selectors (`data-testid`): `login-form`, `login-email`, `login-password`,
 `rotate-submit-<host>`, `revoke-open-<host>`, `revoke-submit-<host>`, `delete-open-<host>`,
 `delete-confirm-<host>`, `delete-submit-<host>`; `token-page`, `token-value`, `token-done`;
 `account-page`, `account-form`, `account-current`, `account-new`, `account-new2`, `account-submit`,
-`must-change`; `error-page` (with `data-status`). The CSRF token is in `<meta name="csrf-token">`.
+`must-change`; `error-page` (with `data-status`). Two-factor pages: `totp-login-page`, `totp-login-form`,
+`totp-code`, `totp-submit`, `totp-restart` (`/login/totp`); `account-totp-card`, `account-totp-status`,
+`account-totp-link` (on `/account`); `totp-page`, `totp-status`, `totp-codes-left`, `totp-required-notice`,
+`totp-unavailable`, `totp-external`, `totp-setup-form`, `totp-setup-password`, `totp-setup-submit`,
+`totp-recovery-form`, `totp-recovery-password`, `totp-recovery-submit`, `totp-disable-form`,
+`totp-disable-password`, `totp-disable-submit`, `totp-back` (`/account/totp`); `totp-setup-page`,
+`totp-secret` (the key in groups of four), `totp-uri` (read-only input), `totp-confirm-form`,
+`totp-confirm-code`, `totp-confirm-submit`; `recovery-codes-page`, `recovery-codes` (a `<pre>`, one code
+per line), `recovery-continue`. The CSRF token is in `<meta name="csrf-token">`.
 Rotate, revoke and delete forms are inside `<details>` elements: click the `*-open-*` summary first.
 `make check` starts the fixture once and signs in with it (`hack/webfixture`'s own test).
 
