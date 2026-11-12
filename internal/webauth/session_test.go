@@ -171,3 +171,65 @@ func TestThrottleMemoryIsBounded(t *testing.T) {
 		t.Fatalf("%d entries, cap %d", len(th.m), throttleMaxEntries)
 	}
 }
+
+func TestThrottleBeginCountsBeforeTheVerdict(t *testing.T) {
+	now := time.Date(2031, 1, 1, 12, 0, 0, 0, time.UTC)
+	th := NewThrottle(func() time.Time { return now })
+	var dones []func(Outcome)
+	for i := 0; i < throttleFreeFailures; i++ {
+		w, done := th.Begin("a@example.com")
+		if w != 0 || done == nil {
+			t.Fatalf("attempt %d refused (%v) although fewer than %d are in flight", i+1, w, throttleFreeFailures)
+		}
+		dones = append(dones, done)
+	}
+	// Nothing has finished yet, and the next one is already refused.
+	if w, done := th.Begin("a@example.com"); w != 30*time.Second || done != nil {
+		t.Fatalf("6th concurrent attempt: wait %v, done set: %v", w, done != nil)
+	}
+	// A success of one of them forgets everything.
+	dones[0](Succeeded)
+	if w, done := th.Begin("a@example.com"); w != 0 || done == nil {
+		t.Fatalf("after a success: %v", w)
+	}
+	dones[1](Failed) // ignored: the entry was reset, and each done is a once-only call
+}
+
+func TestThrottleAbortTakesTheProvisionalFailureBack(t *testing.T) {
+	now := time.Date(2031, 1, 1, 12, 0, 0, 0, time.UTC)
+	th := NewThrottle(func() time.Time { return now })
+	for i := 0; i < 20; i++ { // server faults, never a verdict: must not lock the account
+		w, done := th.Begin("a@example.com")
+		if w != 0 {
+			t.Fatalf("attempt %d refused after only aborted attempts", i+1)
+		}
+		done(Aborted)
+		done(Aborted) // once only: the second call must not subtract again
+	}
+	if th.m["a@example.com"].fails != 0 {
+		t.Fatalf("fails = %d", th.m["a@example.com"].fails)
+	}
+}
+
+// A spray of distinct emails must not flush the backoff of the account it targets.
+func TestThrottleSprayCannotFlushATargetsBackoff(t *testing.T) {
+	now := time.Date(2031, 1, 1, 12, 0, 0, 0, time.UTC)
+	th := NewThrottle(func() time.Time { return now })
+	for i := 0; i < throttleFreeFailures; i++ {
+		th.Fail("target@example.com")
+	}
+	if th.Wait("target@example.com") == 0 {
+		t.Fatal("setup: target not throttled")
+	}
+	for i := 0; i < throttleMaxEntries*2; i++ {
+		now = now.Add(time.Millisecond)
+		_, done := th.Begin(strings.Repeat("s", 5) + time.Duration(i).String() + "@spray.example")
+		done(Failed)
+	}
+	if len(th.m) > throttleMaxEntries {
+		t.Fatalf("%d entries, cap %d", len(th.m), throttleMaxEntries)
+	}
+	if w := th.Wait("target@example.com"); w == 0 {
+		t.Fatal("a spray of other emails flushed the target's backoff")
+	}
+}

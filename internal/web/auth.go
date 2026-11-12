@@ -82,13 +82,18 @@ func (w *Web) loginSubmit(rw http.ResponseWriter, r *http.Request) {
 	password := r.PostForm.Get("password")
 	ip := w.ClientIP(r)
 
-	if wait := w.Throttle.Wait(email); wait > 0 {
+	// Begin counts this attempt as a failure BEFORE any hashing, so a burst of
+	// parallel requests for one email cannot all get past the check (see Throttle.Begin).
+	wait, done := w.Throttle.Begin(email)
+	if done == nil {
 		w.Log.Warn("login refused: too many failures", "client_ip", ip, "retry_after", wait.Round(time.Second).String())
 		rw.Header().Set("Retry-After", strconv.Itoa(int(wait.Seconds())+1))
 		w.render(rw, http.StatusTooManyRequests, "login", w.loginView(r, next,
 			"Too many failed attempts. Wait "+waitText(wait)+" and try again."))
 		return
 	}
+	outcome := webauth.Aborted // until there is a verdict: a server fault is nobody's failed guess
+	defer func() { done(outcome) }()
 
 	user, reason, err := w.checkPassword(r, email, password)
 	if err != nil {
@@ -97,7 +102,7 @@ func (w *Web) loginSubmit(rw http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if reason != "" {
-		w.Throttle.Fail(email)
+		outcome = webauth.Failed
 		w.Log.Warn("login failed", "client_ip", ip, "reason", reason)
 		// The audit row carries the typed email and the real reason; a failure to
 		// write it is logged but never turns a failure into a success.
@@ -109,7 +114,7 @@ func (w *Web) loginSubmit(rw http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.Throttle.Success(email)
+	outcome = webauth.Succeeded
 	// Drop whatever session the browser came with, then issue a new one. The
 	// presented token is never reused (see Manager.Create).
 	if err := w.Auth.Destroy(r.Context(), r); err != nil {
@@ -228,11 +233,14 @@ func (w *Web) accountPassword(rw http.ResponseWriter, r *http.Request) {
 		v.Error = msg
 		w.render(rw, status, "account", v)
 	}
-	if wait := w.Throttle.Wait(p.Email); wait > 0 {
+	wait, done := w.Throttle.Begin(p.Email)
+	if done == nil {
 		rw.Header().Set("Retry-After", strconv.Itoa(int(wait.Seconds())+1))
 		fail(http.StatusTooManyRequests, "Too many failed attempts. Wait "+waitText(wait)+" and try again.")
 		return
 	}
+	outcome := webauth.Aborted
+	defer func() { done(outcome) }()
 	current, next, again := r.PostForm.Get("current_password"), r.PostForm.Get("new_password"), r.PostForm.Get("new_password2")
 	u, err := w.Store.UserByEmail(r.Context(), p.Email)
 	if err != nil {
@@ -242,7 +250,7 @@ func (w *Web) accountPassword(rw http.ResponseWriter, r *http.Request) {
 	}
 	if u.PasswordHash == "" || len(current) > maxLoginPassword {
 		_ = w.Hasher.VerifyDummy(r.Context(), "")
-		w.Throttle.Fail(p.Email)
+		outcome = webauth.Failed
 		fail(http.StatusOK, "The current password is not correct.")
 		return
 	}
@@ -253,12 +261,12 @@ func (w *Web) accountPassword(rw http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !ok {
-		w.Throttle.Fail(p.Email)
+		outcome = webauth.Failed
 		w.Log.Warn("password change refused: wrong current password", "client_ip", w.ClientIP(r))
 		fail(http.StatusOK, "The current password is not correct.")
 		return
 	}
-	w.Throttle.Success(p.Email)
+	outcome = webauth.Succeeded
 	switch {
 	case next != again:
 		fail(http.StatusOK, "The two new passwords do not match.")

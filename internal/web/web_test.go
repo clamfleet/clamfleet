@@ -53,15 +53,23 @@ func (s *syncBuf) String() string              { s.mu.Lock(); defer s.mu.Unlock(
 type countingHasher struct {
 	*webauth.Hasher
 	verifies, dummies, hashes atomic.Int32
+	// gate, when set, makes Verify and VerifyDummy block until it is closed.
+	gate chan struct{}
 }
 
 func (c *countingHasher) Verify(ctx context.Context, pw, phc string) (bool, bool, error) {
 	c.verifies.Add(1)
+	if c.gate != nil {
+		<-c.gate
+	}
 	return c.Hasher.Verify(ctx, pw, phc)
 }
 
 func (c *countingHasher) VerifyDummy(ctx context.Context, pw string) error {
 	c.dummies.Add(1)
+	if c.gate != nil {
+		<-c.gate
+	}
 	return c.Hasher.VerifyDummy(ctx, pw)
 }
 
@@ -891,5 +899,50 @@ func TestUIRouteTable(t *testing.T) {
 		if !classes[c] {
 			t.Errorf("no route of class %s: the table test would pass vacuously", c)
 		}
+	}
+}
+
+// A burst of parallel logins for one email must not all reach the hasher: the
+// attempt is counted before it is verified, so at most the free failures get in.
+func TestParallelLoginsCannotBypassTheThrottle(t *testing.T) {
+	for _, email := range []string{"ann@example.com", "ghost@example.com"} { // a real and an unknown account
+		t.Run(email, func(t *testing.T) {
+			e := newEnv(t)
+			e.addUser("ann@example.com", "viewer", goodPW, false)
+			e.hasher.gate = make(chan struct{}) // verifications stay in flight until released
+			var release sync.Once
+			open := func() { release.Do(func() { close(e.hasher.gate) }) }
+			t.Cleanup(open) // a failing run must not leave blocked requests that stall the server's shutdown
+			const n = 20
+			results := make(chan int, n)
+			for i := 0; i < n; i++ {
+				go func() {
+					p := e.browser().post("/login", url.Values{"email": {email}, "password": {"wrong wrong wrong wrong"}})
+					results <- p.status
+				}()
+			}
+			// The refused ones answer at once; the admitted ones are blocked in the hasher.
+			refused := 0
+			for refused < n-5 {
+				select {
+				case st := <-results:
+					if st != 429 {
+						t.Fatalf("an early answer was %d, want 429", st)
+					}
+					refused++
+				case <-time.After(20 * time.Second):
+					t.Fatalf("only %d of %d requests were refused while %d reached the hasher", refused, n-5, e.hasher.verifies.Load()+e.hasher.dummies.Load())
+				}
+			}
+			if got := e.hasher.verifies.Load() + e.hasher.dummies.Load(); got > 5 {
+				t.Fatalf("%d parallel attempts reached the hasher, want at most 5 (the free failures)", got)
+			}
+			open()
+			for i := 0; i < 5; i++ {
+				if st := <-results; st != 200 {
+					t.Errorf("an admitted attempt answered %d", st)
+				}
+			}
+		})
 	}
 }
