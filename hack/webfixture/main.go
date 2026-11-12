@@ -8,11 +8,15 @@
 // What it does, in order:
 //  1. makes a private temp directory and throwaway TLS files (internal/testtls),
 //     so the browser sees the production cookie settings (Secure, __Host-);
-//  2. writes a server.yaml (loopback, direct TLS, 1 s health evaluation) and
-//     runs `clamfleet-server migrate`;
+//  2. writes a server.yaml (loopback, direct TLS, 1 s health evaluation, a
+//     secret_key_file in the temp directory), runs `clamfleet-server migrate` and
+//     creates the key file with the real `clamfleet-server key generate`;
 //  3. creates an admin, a viewer and a user with a one-time password straight in
 //     the store (the CLI always forces a password change; the fixture wants
-//     ready-to-use logins), and registers hosts with `clamfleet-server host add`;
+//     ready-to-use logins), and registers hosts with `clamfleet-server host add`.
+//     It also seeds the two-factor users: `enrol` (no TOTP yet), `totp` (TOTP
+//     enabled, with its base32 secret and recovery codes written to fixture.json)
+//     and, with --totp-required, `forced` (no TOTP, in a console that requires it);
 //  4. starts `clamfleet-server serve` as a child process;
 //  5. posts one report per host through the real HTTP API, so every host is in a
 //     known state;
@@ -48,6 +52,7 @@ import (
 	"time"
 
 	"github.com/clamfleet/clamfleet/internal/proto"
+	"github.com/clamfleet/clamfleet/internal/secrets"
 	"github.com/clamfleet/clamfleet/internal/store"
 	"github.com/clamfleet/clamfleet/internal/store/sqlite"
 	"github.com/clamfleet/clamfleet/internal/testtls"
@@ -70,17 +75,36 @@ type Host struct {
 	Note string `json:"note"`
 }
 
+// TOTPLogin is a seeded account with an authenticator. The secret is random per
+// run and only in fixture.json (mode 0600): a browser test makes its codes from
+// it (RFC 6238: HMAC-SHA1, 6 digits, 30 s, against the real clock, because the
+// server under test runs on the real clock too).
+type TOTPLogin struct {
+	Email         string   `json:"email"`
+	Password      string   `json:"password"`
+	SecretBase32  string   `json:"secret_base32"`
+	RecoveryCodes []string `json:"recovery_codes"` // 10, display form (abcd-efgh-ijkl-mnop)
+}
+
 // Fixture is the content of fixture.json.
 type Fixture struct {
-	URL        string          `json:"url"`
-	CACert     string          `json:"ca_cert"`
-	TmpDir     string          `json:"tmp_dir"`
-	DB         string          `json:"db_path"`
-	ServerLog  string          `json:"server_log"`
-	Admin      Login           `json:"admin"`
-	Viewer     Login           `json:"viewer"`
-	MustChange Login           `json:"must_change"`
-	Hosts      map[string]Host `json:"hosts"`
+	URL        string `json:"url"`
+	CACert     string `json:"ca_cert"`
+	TmpDir     string `json:"tmp_dir"`
+	DB         string `json:"db_path"`
+	ServerLog  string `json:"server_log"`
+	Admin      Login  `json:"admin"`
+	Viewer     Login  `json:"viewer"`
+	MustChange Login  `json:"must_change"`
+	// Enrol has a password and no authenticator yet: the enrolment flow signs in as it.
+	Enrol Login `json:"enrol"`
+	// TOTP has an authenticator and recovery codes.
+	TOTP TOTPLogin `json:"totp"`
+	// TOTPRequired is true when started with --totp-required; Forced (then set) has no
+	// authenticator, so signing in lands on the enrolment page.
+	TOTPRequired bool            `json:"totp_required"`
+	Forced       *Login          `json:"forced,omitempty"`
+	Hosts        map[string]Host `json:"hosts"`
 }
 
 func main() {
@@ -102,6 +126,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	jsonOut := fs.String("json-out", "", "also copy fixture.json to this path (default: only <tmp>/fixture.json)")
 	keep := fs.Bool("keep", false, "keep the temp directory on exit")
 	evalEvery := fs.Duration("eval-interval", time.Second, "health.eval_interval of the server")
+	totpRequired := fs.Bool("totp-required", false, "set auth.local.totp_required and seed the 'forced' user")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -138,8 +163,12 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	}
 	cfg := filepath.Join(tmp, "server.yaml")
 	db := filepath.Join(tmp, "clamfleet.db")
-	yaml := fmt.Sprintf("listen: 127.0.0.1:%d\ntls:\n  cert: %s\n  key: %s\ndb_path: %s\nhealth:\n  eval_interval: %s\n",
-		*port, tlsb.Cert, tlsb.Key, db, *evalEvery)
+	keyFile := filepath.Join(tmp, "secret.key") // inside the private temp dir, never the developer's /etc key
+	yaml := fmt.Sprintf("listen: 127.0.0.1:%d\ntls:\n  cert: %s\n  key: %s\ndb_path: %s\nsecret_key_file: %s\nhealth:\n  eval_interval: %s\n",
+		*port, tlsb.Cert, tlsb.Key, db, keyFile, *evalEvery)
+	if *totpRequired {
+		yaml += "auth:\n  local:\n    totp_required: true\n"
+	}
 	if err := os.WriteFile(cfg, []byte(yaml), 0o600); err != nil {
 		return err
 	}
@@ -158,12 +187,17 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	if _, err := cli("migrate"); err != nil {
 		return err
 	}
+	// The real command creates the key file, so the fixture exercises the install path too.
+	if _, err := cli("key", "generate"); err != nil {
+		return err
+	}
 
 	fx := &Fixture{
 		URL: fmt.Sprintf("https://127.0.0.1:%d", *port), CACert: tlsb.CA, TmpDir: tmp, DB: db,
 		ServerLog: filepath.Join(tmp, "server.log"), Hosts: map[string]Host{},
 	}
-	if err := seedUsers(ctx, db, fx); err != nil {
+	fx.TOTPRequired = *totpRequired
+	if err := seedUsers(ctx, db, keyFile, fx); err != nil {
 		return err
 	}
 	seeds := hostSeeds()
@@ -238,24 +272,32 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 // seedUsers creates the logins directly in the store: the CLI forces a
 // password change at first login, which is right for operators and wrong for a
 // browser test that wants to sign in and look at the fleet.
-func seedUsers(ctx context.Context, db string, fx *Fixture) error {
+func seedUsers(ctx context.Context, db, keyFile string, fx *Fixture) error {
 	st, err := sqlite.Open(ctx, db)
 	if err != nil {
 		return err
 	}
 	defer st.Close()
+	ring, err := secrets.LoadFile(keyFile)
+	if err != nil {
+		return err
+	}
 	h := webauth.NewHasher()
-	mk := func(email, role string, mustChange bool) (Login, error) {
+	audit := store.Audit{Kind: store.ActorCLI, Actor: "webfixture"}
+	mkUser := func(email, role string, mustChange bool) (store.User, string, error) {
 		pw, err := webauth.GeneratePassword()
 		if err != nil {
-			return Login{}, err
+			return store.User{}, "", err
 		}
 		hash, err := h.Hash(ctx, pw)
 		if err != nil {
-			return Login{}, err
+			return store.User{}, "", err
 		}
-		_, err = st.CreateUser(ctx, store.NewUser{Email: email, Role: role, PasswordHash: hash, MustChange: mustChange},
-			time.Now(), store.Audit{Kind: store.ActorCLI, Actor: "webfixture"})
+		u, err := st.CreateUser(ctx, store.NewUser{Email: email, Role: role, PasswordHash: hash, MustChange: mustChange}, time.Now(), audit)
+		return u, pw, err
+	}
+	mk := func(email, role string, mustChange bool) (Login, error) {
+		_, pw, err := mkUser(email, role, mustChange)
 		return Login{email, pw}, err
 	}
 	if fx.Admin, err = mk("admin@fixture.example", store.RoleAdmin, false); err != nil {
@@ -264,8 +306,54 @@ func seedUsers(ctx context.Context, db string, fx *Fixture) error {
 	if fx.Viewer, err = mk("viewer@fixture.example", store.RoleViewer, false); err != nil {
 		return err
 	}
-	fx.MustChange, err = mk("newbie@fixture.example", store.RoleViewer, true)
-	return err
+	if fx.MustChange, err = mk("newbie@fixture.example", store.RoleViewer, true); err != nil {
+		return err
+	}
+	if fx.Enrol, err = mk("enrol@fixture.example", store.RoleViewer, false); err != nil {
+		return err
+	}
+	if fx.TOTPRequired {
+		forced, err := mk("forced@fixture.example", store.RoleViewer, false)
+		if err != nil {
+			return err
+		}
+		fx.Forced = &forced
+	}
+
+	// The user with an authenticator: the same calls the console's enrolment makes,
+	// so what the fixture seeds is what a real enrolment leaves behind.
+	u, pw, err := mkUser("totp@fixture.example", store.RoleViewer, false)
+	if err != nil {
+		return err
+	}
+	secret, err := webauth.GenerateTOTPSecret()
+	if err != nil {
+		return err
+	}
+	sealed, err := ring.Seal(secrets.PurposeTOTP, secret, uint64(u.ID))
+	if err != nil {
+		return err
+	}
+	codes, err := webauth.GenerateRecoveryCodes(webauth.RecoveryCodeCount)
+	if err != nil {
+		return err
+	}
+	var hashes [][]byte
+	for _, c := range codes {
+		n, _ := webauth.NormalizeRecoveryCode(c)
+		hashes = append(hashes, webauth.HashRecoveryCode(n))
+	}
+	now := time.Now()
+	// The last accepted step is 10 steps back, so the code of the current step is
+	// still fresh for the first sign-in of a test.
+	err = st.EnableTOTP(ctx, store.EnableTOTP{
+		UserID: u.ID, ExpectedVersion: u.AuthVersion, Sealed: sealed, Step: webauth.TOTPStep(now) - 10, RecoveryHashes: hashes,
+	}, now, audit)
+	if err != nil {
+		return err
+	}
+	fx.TOTP = TOTPLogin{Email: u.Email, Password: pw, SecretBase32: webauth.EncodeTOTPSecret(secret), RecoveryCodes: codes}
+	return nil
 }
 
 type hostSeed struct {
