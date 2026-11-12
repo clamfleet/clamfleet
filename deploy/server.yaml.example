@@ -19,3 +19,15 @@ tls:
 # Empty: the logged address is the TCP peer. Logging only, never authentication.
 trusted_proxies: []
 db_path: /var/lib/clamfleet-server/clamfleet.db   # local disk only: SQLite WAL does not work on network filesystems
+
+# Health rules (spec 9) and how often they are re-evaluated. The values shown are the defaults.
+# A host is STALE after stale_factor x its own report interval (the agent sends it; hosts whose agent
+# does not use default_interval). Environment: CLAMFLEET_SERVER_HEALTH_<KEY>, e.g. CLAMFLEET_SERVER_HEALTH_STALE_FACTOR.
+health:
+  stale_factor: 3          # at least 2
+  default_interval: 5m     # 10s to 24h; for agents that do not report their interval
+  daily_warn_hours: 24     # WARN when the daily signature database is older than this
+  daily_crit_hours: 72     # CRIT; must be greater than daily_warn_hours
+  behind_warn: 2           # WARN when the daily version trails the fleet's newest by more than this
+  scan_warn_hours: 48      # WARN when the last scan finished longer ago; 0 switches the rule off
+  eval_interval: 60s       # 1s to 60s: how often silent (STALE) hosts are noticed

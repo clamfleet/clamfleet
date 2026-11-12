@@ -15,8 +15,10 @@ import (
 	"net/netip"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/clamfleet/clamfleet/internal/config"
+	"github.com/clamfleet/clamfleet/internal/health"
 )
 
 // DefaultConfigPath is used when neither --config nor CLAMFLEET_SERVER_CONFIG is set.
@@ -38,6 +40,53 @@ type Config struct {
 	// peer is one of them is X-Forwarded-For used for the logged client IP.
 	// Empty by default: the header is then ignored.
 	TrustedProxies []string `yaml:"trusted_proxies"`
+	Health         Health   `yaml:"health"`
+}
+
+// Health holds the thresholds of the health rules (spec 9) and how often the
+// evaluator runs. The key names follow spec 12; default_interval and
+// eval_interval are additions (docs/plans/milestone-3.md 4.6): the first is
+// the fallback for agents that do not report their interval, the second lets
+// the e2e test see STALE in seconds.
+type Health struct {
+	StaleFactor     int           `yaml:"stale_factor"`
+	DefaultInterval time.Duration `yaml:"default_interval"`
+	DailyWarnHours  int           `yaml:"daily_warn_hours"`
+	DailyCritHours  int           `yaml:"daily_crit_hours"`
+	BehindWarn      int           `yaml:"behind_warn"`
+	ScanWarnHours   int           `yaml:"scan_warn_hours"` // 0 switches the scan_missed rule off
+	EvalInterval    time.Duration `yaml:"eval_interval"`
+}
+
+// Thresholds converts the configuration for the rules.
+func (h Health) Thresholds() health.Thresholds {
+	return health.Thresholds{
+		StaleFactor: h.StaleFactor, DefaultInterval: h.DefaultInterval,
+		DailyWarnHours: h.DailyWarnHours, DailyCritHours: h.DailyCritHours,
+		BehindWarn: h.BehindWarn, ScanWarnHours: h.ScanWarnHours,
+	}
+}
+
+// Validate checks the health keys. The floors keep a typo from producing a
+// fleet that is permanently STALE or never STALE.
+func (h Health) Validate() error {
+	switch {
+	case h.StaleFactor < 2:
+		return fmt.Errorf("health.stale_factor must be at least 2 (one late report must not make a host STALE), got %d", h.StaleFactor)
+	case h.DefaultInterval < 10*time.Second || h.DefaultInterval > 24*time.Hour:
+		return fmt.Errorf("health.default_interval must be between 10s and 24h, got %s", h.DefaultInterval)
+	case h.DailyWarnHours < 1:
+		return fmt.Errorf("health.daily_warn_hours must be at least 1, got %d", h.DailyWarnHours)
+	case h.DailyCritHours <= h.DailyWarnHours:
+		return fmt.Errorf("health.daily_crit_hours (%d) must be greater than health.daily_warn_hours (%d)", h.DailyCritHours, h.DailyWarnHours)
+	case h.BehindWarn < 0:
+		return fmt.Errorf("health.behind_warn must not be negative, got %d", h.BehindWarn)
+	case h.ScanWarnHours < 0:
+		return fmt.Errorf("health.scan_warn_hours must not be negative (0 switches the rule off), got %d", h.ScanWarnHours)
+	case h.EvalInterval < time.Second || h.EvalInterval > time.Minute:
+		return fmt.Errorf("health.eval_interval must be between 1s and 60s, got %s", h.EvalInterval)
+	}
+	return nil
 }
 
 // TLS configures direct TLS. The intended deployment is plaintext on loopback
@@ -61,6 +110,11 @@ func DefaultConfig() Config {
 		Listen:         "127.0.0.1:8443",
 		DBPath:         "/var/lib/clamfleet-server/clamfleet.db",
 		TrustedProxies: []string{},
+		Health: Health{
+			StaleFactor: 3, DefaultInterval: 5 * time.Minute,
+			DailyWarnHours: 24, DailyCritHours: 72, BehindWarn: 2, ScanWarnHours: 48,
+			EvalInterval: 60 * time.Second,
+		},
 	}
 }
 
@@ -93,6 +147,9 @@ func (c Config) Validate() error {
 		return fmt.Errorf("listen %q is not a loopback address and tls is off: plaintext is only allowed on loopback behind a reverse proxy; set tls.cert and tls.key, or listen on 127.0.0.1", c.Listen)
 	}
 	if _, err := ParseTrustedProxies(c.TrustedProxies); err != nil {
+		return err
+	}
+	if err := c.Health.Validate(); err != nil {
 		return err
 	}
 	if c.Listen == "" {

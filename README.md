@@ -119,6 +119,12 @@ install -m 644 deploy/server.yaml.example /etc/clamfleet/server.yaml
 | `tls.client_ca` | `CLAMFLEET_SERVER_TLS_CLIENT_CA` | empty (mTLS off) |
 | `db_path` | `CLAMFLEET_SERVER_DB_PATH` | `/var/lib/clamfleet-server/clamfleet.db` |
 | `trusted_proxies` | `CLAMFLEET_SERVER_TRUSTED_PROXIES` | empty |
+| `health.stale_factor` | `CLAMFLEET_SERVER_HEALTH_STALE_FACTOR` | `3` (at least 2) |
+| `health.default_interval` | `CLAMFLEET_SERVER_HEALTH_DEFAULT_INTERVAL` | `5m` (10s to 24h; for agents that do not report their interval) |
+| `health.daily_warn_hours` / `health.daily_crit_hours` | `CLAMFLEET_SERVER_HEALTH_DAILY_WARN_HOURS` / `..._DAILY_CRIT_HOURS` | `24` / `72` |
+| `health.behind_warn` | `CLAMFLEET_SERVER_HEALTH_BEHIND_WARN` | `2` |
+| `health.scan_warn_hours` | `CLAMFLEET_SERVER_HEALTH_SCAN_WARN_HOURS` | `48` (0 = off) |
+| `health.eval_interval` | `CLAMFLEET_SERVER_HEALTH_EVAL_INTERVAL` | `60s` (1s to 60s) |
 
 The config file path is `--config`, else `CLAMFLEET_SERVER_CONFIG`, else `/etc/clamfleet/server.yaml`.
 The file is read strictly: an unknown key is an error, so a copy of the spec's example with keys of

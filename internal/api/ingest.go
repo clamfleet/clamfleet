@@ -60,7 +60,15 @@ type Deps struct {
 	// Now is the injected clock for every server-side timestamp.
 	Now func() time.Time
 	Log *slog.Logger
+	// AfterReport, when set, is called after a report was accepted and stored
+	// (a duplicate too: it still proves the agent is alive), so the host's
+	// health state follows the report at once. Its error is logged and never
+	// changes the 202: the report is safe, and the evaluation loop catches up.
+	AfterReport func(ctx context.Context, hostID int64) error
 }
+
+// afterReportTimeout bounds the evaluation that follows a report.
+const afterReportTimeout = 5 * time.Second
 
 // Handlers holds the ingest handlers.
 type Handlers struct {
@@ -225,6 +233,15 @@ func (h *Handlers) Report(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		h.storeFailed(w, r.Context(), "record report", err)
 		return
+	}
+	if h.d.AfterReport != nil {
+		// Detached from the request context: the report is already stored, and an
+		// agent that hangs up must not leave its host's state one loop behind.
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), afterReportTimeout)
+		if err := h.d.AfterReport(ctx, id.HostID); err != nil {
+			h.d.Log.Error("health evaluation after a report failed", "host", id.HostName, "error", err.Error())
+		}
+		cancel()
 	}
 	h.warnOnMismatch(id, rep.Host, res.PreviousReportedName)
 	h.warnOnSkew(id, rep.TS, now)

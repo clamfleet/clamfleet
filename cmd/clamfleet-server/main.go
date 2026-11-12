@@ -35,6 +35,7 @@ import (
 
 	"github.com/clamfleet/clamfleet/internal/agentauth"
 	"github.com/clamfleet/clamfleet/internal/config"
+	"github.com/clamfleet/clamfleet/internal/health"
 	"github.com/clamfleet/clamfleet/internal/server"
 	"github.com/clamfleet/clamfleet/internal/store"
 	"github.com/clamfleet/clamfleet/internal/store/sqlite"
@@ -171,12 +172,29 @@ func (a *app) serve(ctx context.Context, args []string) int {
 		log.Error("database", "error", err.Error())
 		return exitError
 	}
-	h, err := server.NewHandlerFromConfig(cfg, server.Deps{Store: st, Now: a.now, Log: log})
+	// The evaluator is built before the handler so both share it: ingest calls
+	// Host after each report, the loop below notices hosts that went silent.
+	// Its start time is the restart-grace reference (see health.Evaluate).
+	ev := health.New(st, a.now, cfg.Health.Thresholds(), log)
+	h, err := server.NewHandlerFromConfig(cfg, server.Deps{Store: st, Now: a.now, Log: log, AfterReport: ev.Host})
 	if err != nil {
 		log.Error("invalid configuration", "error", err.Error())
 		return exitError
 	}
-	if err := server.Serve(ctx, cfg, h, log); err != nil {
+	loopCtx, stopLoop := context.WithCancel(ctx)
+	tick := time.NewTicker(cfg.Health.EvalInterval)
+	loopDone := make(chan struct{})
+	go func() {
+		defer close(loopDone)
+		ev.Run(loopCtx, tick.C)
+	}()
+	err = server.Serve(ctx, cfg, h, log)
+	// Wait for the loop before the deferred st.Close(): an evaluation cut off by
+	// a closing database would log a spurious error at every shutdown.
+	stopLoop()
+	tick.Stop()
+	<-loopDone
+	if err != nil {
 		log.Error("server stopped", "error", err.Error())
 		return exitError
 	}
