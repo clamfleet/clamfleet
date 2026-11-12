@@ -205,7 +205,7 @@ func (a *app) serve(ctx context.Context, args []string) int {
 	// Host after each report, the loop below notices hosts that went silent.
 	// Its start time is the restart-grace reference (see health.Evaluate).
 	ev := health.New(st, a.now, cfg.Health.Thresholds(), log)
-	h, err := server.NewHandlerFromConfig(cfg, server.Deps{Store: st, Now: a.now, Log: log, AfterReport: ev.Host})
+	h, err := server.NewHandlerFromConfig(cfg, server.Deps{Store: st, Now: a.now, Log: log, AfterReport: ev.Host, Keys: keys})
 	if err != nil {
 		log.Error("invalid configuration", "error", err.Error())
 		return exitError

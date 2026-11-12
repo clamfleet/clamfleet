@@ -33,6 +33,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/clamfleet/clamfleet/internal/secrets"
 	"github.com/clamfleet/clamfleet/internal/store"
 	"github.com/clamfleet/clamfleet/internal/webauth"
 )
@@ -61,8 +62,15 @@ type Deps struct {
 	Auth     *webauth.Manager
 	Hasher   PasswordHasher
 	Throttle *webauth.Throttle
-	Now      func() time.Time // injected clock: every time on a page comes from here
-	Log      *slog.Logger
+	// TOTPThrottle is a second instance of the same backoff, keyed by user id, for
+	// second-factor attempts. Its key is the user, not the challenge: each new
+	// challenge costs a correct password and must not reset the count.
+	TOTPThrottle *webauth.Throttle
+	// Keys opens and seals TOTP secrets; nil when the server has no key file. TOTP
+	// is then unavailable (recovery codes still work), and never skipped.
+	Keys *secrets.Keyring
+	Now  func() time.Time // injected clock: every time on a page comes from here
+	Log  *slog.Logger
 	// ClientIP returns the address to LOG for a request (api.ClientIP with the
 	// configured trusted proxies). Logging and audit detail only, never a decision.
 	ClientIP func(r *http.Request) string
@@ -89,7 +97,7 @@ func New(d Deps) *Web {
 		// actions builds the data of the shared host_actions template.
 		"actions": func(name string, hasToken bool, csrf string) hostAction { return hostAction{name, hasToken, csrf} },
 	}
-	for _, p := range []string{"login", "fleet", "host", "admin_hosts", "token_once", "account", "error"} {
+	for _, p := range []string{"login", "login_totp", "fleet", "host", "admin_hosts", "token_once", "account", "error"} {
 		t := template.New(p).Funcs(funcs)
 		files := []string{"templates/layout.html", "templates/" + p + ".html"}
 		if p == "fleet" {
@@ -112,6 +120,8 @@ func (w *Web) Handlers() map[string]http.HandlerFunc {
 		"GET /static/{file}":                    w.static,
 		"GET /login":                            w.loginPage,
 		"POST /login":                           w.loginSubmit,
+		"GET /login/totp":                       w.loginTOTPPage,
+		"POST /login/totp":                      w.loginTOTPSubmit,
 		"POST /logout":                          w.logout,
 		"GET /{$}":                              w.fleet,
 		"GET /fleet/rows":                       w.fleetRows,
@@ -152,6 +162,7 @@ func (w *Web) newView(r *http.Request, title, nav string, body any) *view {
 	v := &view{base: base{Title: title, Nav: nav, Version: w.Version, SourceURL: SourceURL}, Body: body}
 	if p, ok := webauth.FromContext(r.Context()); ok {
 		v.Principal, v.CSRF = &p, p.CSRFToken()
+		v.Notice = recoveryNotice(r)
 	}
 	return v
 }

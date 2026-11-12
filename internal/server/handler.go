@@ -24,6 +24,7 @@ import (
 
 	"github.com/clamfleet/clamfleet/internal/agentauth"
 	"github.com/clamfleet/clamfleet/internal/api"
+	"github.com/clamfleet/clamfleet/internal/secrets"
 	"github.com/clamfleet/clamfleet/internal/store"
 	"github.com/clamfleet/clamfleet/internal/version"
 	"github.com/clamfleet/clamfleet/internal/web"
@@ -63,6 +64,10 @@ func Routes() []Route {
 		{"GET", "/static/{file}", AuthPublic},
 		{"GET", "/login", AuthPublic},
 		{"POST", "/login", AuthPublic},
+		// The second sign-in step. Public class: the caller has no session yet; the
+		// handlers require a valid login challenge (cookie) and answer 303 to /login without one.
+		{"GET", "/login/totp", AuthPublic},
+		{"POST", "/login/totp", AuthPublic},
 		{"POST", "/logout", AuthUser},
 		// {$}, not "/": in Go's mux "GET /" matches EVERY GET path, so an unknown
 		// URL would render the fleet instead of a 404.
@@ -99,6 +104,9 @@ type Deps struct {
 	Hasher web.PasswordHasher
 	// Version is shown in the page footer; "" means version.Version.
 	Version string
+	// Keys protects TOTP secrets at rest (internal/secrets); nil when the server
+	// has no key file, which makes TOTP unavailable.
+	Keys *secrets.Keyring
 }
 
 // NewHandlerFromConfig is NewHandler with the config-derived settings
@@ -137,7 +145,7 @@ func NewHandler(d Deps) http.Handler {
 		Secure: d.Console.CookieSecure, Log: d.Log,
 	}
 	console := web.New(web.Deps{
-		Store: d.Store, Auth: sessions, Hasher: d.Hasher, Throttle: webauth.NewThrottle(d.Now), Now: d.Now, Log: d.Log,
+		Store: d.Store, Auth: sessions, Hasher: d.Hasher, Throttle: webauth.NewThrottle(d.Now), TOTPThrottle: webauth.NewThrottle(d.Now), Keys: d.Keys, Now: d.Now, Log: d.Log,
 		ClientIP:     func(r *http.Request) string { return api.ClientIP(r, d.TrustedProxies) },
 		LocalEnabled: d.Console.Local.Enabled, Version: d.Version,
 	})

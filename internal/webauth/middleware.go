@@ -89,22 +89,33 @@ const TouchEvery = time.Minute
 // authVersion is the user's auth_version as read with the user, before hashing.
 // It also catches a disable followed by an enable, which leaves the hash as it was.
 func (m *Manager) Create(ctx context.Context, userID int64, passwordHash string, authVersion int64) (token string, err error) {
-	token, hash, err := NewToken()
+	token, s, err := m.PrepareSession()
 	if err != nil {
 		return "", err
 	}
-	csrf := make([]byte, secretBytes)
-	if _, err := rand.Read(csrf); err != nil {
-		return "", fmt.Errorf("generate csrf token: %w", err)
-	}
-	now := m.Now()
-	err = m.Store.CreateSession(ctx, store.Session{
-		TokenHash: hash, UserID: userID, CSRF: csrf, CreatedAt: now, ExpiresAt: now.Add(m.MaxAge), PasswordHash: passwordHash, AuthVersion: authVersion,
-	})
-	if err != nil {
+	s.UserID, s.PasswordHash, s.AuthVersion = userID, passwordHash, authVersion
+	if err := m.Store.CreateSession(ctx, s); err != nil {
 		return "", err
 	}
 	return token, nil
+}
+
+// PrepareSession returns a fresh cookie token and the session record for it
+// (token hash, CSRF secret, created and expiry times), with no user yet. The
+// second-factor login stores it itself, inside the transaction that consumes the
+// login challenge (store.CompleteLogin), and takes the user from the challenge.
+// The token is generated here and never taken from a request.
+func (m *Manager) PrepareSession() (token string, s store.Session, err error) {
+	token, hash, err := NewToken()
+	if err != nil {
+		return "", store.Session{}, err
+	}
+	csrf := make([]byte, secretBytes)
+	if _, err := rand.Read(csrf); err != nil {
+		return "", store.Session{}, fmt.Errorf("generate csrf token: %w", err)
+	}
+	now := m.Now()
+	return token, store.Session{TokenHash: hash, CSRF: csrf, CreatedAt: now, ExpiresAt: now.Add(m.MaxAge)}, nil
 }
 
 // Destroy deletes the session behind the request's cookie, if any.

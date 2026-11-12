@@ -86,12 +86,21 @@ type env struct {
 	dbPath string
 	logs   *syncBuf
 	hasher *countingHasher
+	log    *slog.Logger
+	parent *env // set on a second server over the same store (env.another): the clock is the parent's
 
 	mu  sync.Mutex
 	now time.Time
 }
 
-func (e *env) clock() time.Time { e.mu.Lock(); defer e.mu.Unlock(); return e.now }
+func (e *env) clock() time.Time {
+	if e.parent != nil {
+		return e.parent.clock()
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.now
+}
 func (e *env) advance(d time.Duration) {
 	e.mu.Lock()
 	e.now = e.now.Add(d)
@@ -118,6 +127,7 @@ func newEnvAt(t *testing.T, at time.Time, opts ...opt) *env {
 	}
 	e := &env{t: t, st: st, dbPath: path, logs: &syncBuf{}, now: at, hasher: &countingHasher{Hasher: webauth.NewHasher()}}
 	log := slog.New(slog.NewJSONHandler(e.logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	e.log = log
 	d := server.Deps{Store: st, Now: e.clock, Log: log, Hasher: e.hasher, Version: "9.9.9-test"}
 	// The evaluator runs after every accepted report, as in the real binary.
 	ev := health.New(st, e.clock, server.DefaultConfig().Health.Thresholds(), log)
@@ -847,7 +857,9 @@ func TestUIRouteTable(t *testing.T) {
 		case server.AuthAgent, server.AuthNone:
 			continue // covered by internal/api TestRouteTable
 		case server.AuthPublic:
-			if p := unauth.do(rt.Method, path, map[string]string{"Sec-Fetch-Site": "same-origin"}, url.Values{}); p.status == 401 || p.status == 303 && rt.Path != "/login" {
+			// /login/totp is the one public route that redirects: without a login
+			// challenge it sends the browser to /login (TestLoginTOTPRoutesNeedAChallenge pins that).
+			if p := unauth.do(rt.Method, path, map[string]string{"Sec-Fetch-Site": "same-origin"}, url.Values{}); p.status == 401 || p.status == 303 && rt.Path != "/login" && rt.Path != "/login/totp" {
 				t.Errorf("%s (public): %d without a session", name, p.status)
 			}
 		case server.AuthUser, server.AuthAdmin:

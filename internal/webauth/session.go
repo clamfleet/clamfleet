@@ -184,7 +184,7 @@ func SanitizeNext(next string) string {
 		return "/"
 	}
 	// Never bounce back to the login page itself (a loop) or to an action URL.
-	if u.Path == "/login" || u.Path == "/logout" {
+	if u.Path == "/login" || u.Path == "/login/totp" || u.Path == "/logout" {
 		return "/"
 	}
 	return next

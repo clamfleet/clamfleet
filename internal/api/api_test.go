@@ -531,6 +531,8 @@ func TestRouteTable(t *testing.T) {
 		{Method: "GET", Path: "/static/{file}", Auth: server.AuthPublic},
 		{Method: "GET", Path: "/login", Auth: server.AuthPublic},
 		{Method: "POST", Path: "/login", Auth: server.AuthPublic},
+		{Method: "GET", Path: "/login/totp", Auth: server.AuthPublic},
+		{Method: "POST", Path: "/login/totp", Auth: server.AuthPublic},
 		{Method: "POST", Path: "/logout", Auth: server.AuthUser},
 		{Method: "GET", Path: "/{$}", Auth: server.AuthUser},
 		{Method: "GET", Path: "/fleet/rows", Auth: server.AuthUser},
@@ -576,8 +578,12 @@ func TestRouteTable(t *testing.T) {
 				t.Errorf("%s %s: status %d with a valid token, want 202", rt.Method, rt.Path, r.status)
 			}
 		case server.AuthNone, server.AuthPublic:
-			if r = e.do(rt.Method, path, "", nil); r.status != 200 {
-				t.Errorf("%s %s: status %d, want 200", rt.Method, rt.Path, r.status)
+			want := 200
+			if rt.Path == "/login/totp" {
+				want = 303 // public, but needs a login challenge: without one it redirects to /login
+			}
+			if r = e.do(rt.Method, path, "", nil); r.status != want {
+				t.Errorf("%s %s: status %d, want %d", rt.Method, rt.Path, r.status, want)
 			}
 		case server.AuthUser, server.AuthAdmin:
 			want := 401
