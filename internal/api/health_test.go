@@ -28,6 +28,13 @@ var goldenNow = time.Date(2026, 11, 12, 11, 30, 45, 0, time.UTC)
 // newHealthEnv is newEnv with the health evaluator wired the way the binary
 // wires it: the evaluator's Host is the AfterReport hook.
 func newHealthEnv(t *testing.T, after func(ev *health.Evaluator) func(context.Context, int64) error) *env {
+	e, _, _ := newHealthEnvClock(t, after)
+	return e
+}
+
+// newHealthEnvClock also returns the evaluator and a handle to move the
+// injected clock (unix seconds, atomic: the handler runs on the server goroutine).
+func newHealthEnvClock(t *testing.T, after func(ev *health.Evaluator) func(context.Context, int64) error) (*env, *health.Evaluator, *atomic.Int64) {
 	t.Helper()
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "api.db")
@@ -40,12 +47,14 @@ func newHealthEnv(t *testing.T, after func(ev *health.Evaluator) func(context.Co
 	}
 	logs := &syncBuf{}
 	log := slog.New(slog.NewJSONHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	clock := func() time.Time { return goldenNow }
+	var secs atomic.Int64
+	secs.Store(goldenNow.Unix())
+	clock := func() time.Time { return time.Unix(secs.Load(), 0).UTC() }
 	ev := health.New(st, clock, health.DefaultThresholds(), log)
 	h := server.NewHandler(server.Deps{Store: st, Now: clock, Log: log, AfterReport: after(ev)})
 	e := &env{t: t, srv: httptest.NewServer(h), st: st, dbPath: path, logs: logs}
 	t.Cleanup(func() { e.srv.Close(); st.Close() })
-	return e
+	return e, ev, &secs
 }
 
 func hostHost(ev *health.Evaluator) func(context.Context, int64) error { return ev.Host }
@@ -128,5 +137,41 @@ func TestAfterReportFailureDoesNotChangeTheResponse(t *testing.T) {
 	}
 	if strings.Contains(e.logs.String(), tok) {
 		t.Fatal("token in log")
+	}
+}
+
+// An agent older than interval_seconds sends no such key: the report is still
+// accepted and the host is judged with health.default_interval (5 m, so STALE
+// after 15 m), not with 0 (instantly STALE) or with some other value.
+func TestReportWithoutIntervalUsesDefaultInterval(t *testing.T) {
+	e, ev, clock := newHealthEnvClock(t, hostHost)
+	tok := e.host("old01")
+	body := report(t, func(m map[string]any) { delete(m, "interval_seconds") })
+	if strings.Contains(string(body), "interval_seconds") {
+		t.Fatal("test setup: the key must be absent")
+	}
+	if r := e.do("POST", "/v1/report", tok, body); r.status != 202 {
+		t.Fatalf("%d %s", r.status, r.body)
+	}
+	if d := e.detail("old01"); d.State == nil || *d.State != "WARN" {
+		t.Fatalf("not evaluated right after the report: %v", d.State)
+	}
+	// 3 minutes of silence would be STALE for a 60 s agent; the default is 5 m.
+	clock.Store(goldenNow.Add(3*time.Minute + time.Second).Unix())
+	if err := ev.All(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if d := e.detail("old01"); *d.State == "STALE" {
+		t.Fatalf("judged with a shorter interval than the default: %s", d.StateReason)
+	}
+	clock.Store(goldenNow.Add(15 * time.Minute).Unix()) // exactly 3 x 5 m: not yet
+	ev.All(context.Background())
+	if d := e.detail("old01"); *d.State == "STALE" {
+		t.Fatalf("STALE at exactly the window: %s", d.StateReason)
+	}
+	clock.Store(goldenNow.Add(15*time.Minute + time.Second).Unix())
+	ev.All(context.Background())
+	if d := e.detail("old01"); *d.State != "STALE" {
+		t.Fatalf("not STALE after the default window: %s", *d.State)
 	}
 }
