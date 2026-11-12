@@ -3,14 +3,14 @@
 
 // Command clamfleet-agent reports ClamAV health to a ClamFleet server.
 //
-// Milestone 1 registers only "collect --dry-run" and "version". The other
-// subcommands of the spec (run, event, scan) are added by the milestones that
+// Registered commands: "collect --dry-run", "run [--once]" and "version". The
+// other subcommands of the spec (event, scan) are added by the milestones that
 // implement them, so the usage text never advertises something that does not
 // exist.
 //
 // Output contract: the report JSON goes to stdout and nothing else does, so
 // "clamfleet-agent collect --dry-run | jq" works. Logs and collection
-// problems go to stderr as slog JSON lines.
+// problems go to stderr as slog JSON lines; the token is never logged.
 package main
 
 import (
@@ -49,6 +49,8 @@ const usage = `usage: clamfleet-agent <command>
 
 commands:
   collect --dry-run [--config FILE]   print the report JSON, send nothing
+  run [--once] [--config FILE]        send a report now and then every interval
+                                      (--once: send one report, exit 0 on success, 1 otherwise)
   version                             print the agent version
 `
 
@@ -64,6 +66,8 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return exitOK
 	case "collect":
 		return runCollect(ctx, args[1:], stdout, stderr)
+	case "run":
+		return runRun(ctx, args[1:], stderr)
 	case "-h", "--help", "help":
 		fmt.Fprint(stdout, usage)
 		return exitOK
@@ -86,35 +90,17 @@ func runCollect(ctx context.Context, args []string, stdout, stderr io.Writer) in
 		return exitUsage
 	}
 	if !*dry {
-		// Sending arrives with Milestone 2; refusing is safer than silently doing nothing.
-		fmt.Fprintln(stderr, "collect: only --dry-run is available in this version")
+		// collect only prints; sending is `run --once`. Refusing is safer than silently doing nothing.
+		fmt.Fprintln(stderr, "collect: only --dry-run is available; use `run --once` to send a report")
 		return exitUsage
 	}
 
 	log := slog.New(slog.NewJSONHandler(stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
-
-	path, explicit := config.ResolvePath(agent.EnvPrefix, *cfgFlag, agent.DefaultConfigPath, nil)
-	cfg, warnings, err := agent.LoadConfig(path, explicit, config.Options{})
-	for _, w := range warnings {
-		log.Warn(w)
-	}
-	if err == nil {
-		err = cfg.Validate()
-	}
-	if err != nil {
-		log.Error("invalid configuration", "error", err.Error())
+	cfg, ok := loadConfig(log, *cfgFlag, false)
+	if !ok {
 		return exitError
 	}
-
-	c := &agent.Collector{
-		Cfg:            cfg,
-		Version:        version.Version,
-		Now:            time.Now,
-		Loc:            time.Local,
-		Exec:           agent.RealExec,
-		Hostname:       os.Hostname,
-		OSReleasePaths: agent.DefaultOSReleasePaths,
-	}
+	c := newCollector(cfg)
 	report, problems, err := c.Collect(ctx)
 	if err != nil {
 		log.Error("collect failed", "error", err.Error())
@@ -127,6 +113,84 @@ func runCollect(ctx context.Context, args []string, stdout, stderr io.Writer) in
 	enc.SetIndent("", "  ")
 	if err := enc.Encode(report); err != nil {
 		log.Error("cannot write report", "error", err.Error())
+		return exitError
+	}
+	return exitOK
+}
+
+// loadConfig resolves, loads and validates the configuration, logging warnings
+// and the reason for a failure. forRun adds the checks only `run` needs.
+func loadConfig(log *slog.Logger, flagValue string, forRun bool) (agent.Config, bool) {
+	path, explicit := config.ResolvePath(agent.EnvPrefix, flagValue, agent.DefaultConfigPath, nil)
+	cfg, warnings, err := agent.LoadConfig(path, explicit, config.Options{})
+	for _, w := range warnings {
+		log.Warn(w)
+	}
+	if err == nil {
+		if forRun {
+			err = cfg.ValidateRun()
+		} else {
+			err = cfg.Validate()
+		}
+	}
+	if err != nil {
+		log.Error("invalid configuration", "error", err.Error())
+		return cfg, false
+	}
+	return cfg, true
+}
+
+func newCollector(cfg agent.Config) *agent.Collector {
+	return &agent.Collector{
+		Cfg:            cfg,
+		Version:        version.Version,
+		Now:            time.Now,
+		Loc:            time.Local,
+		Exec:           agent.RealExec,
+		Hostname:       os.Hostname,
+		OSReleasePaths: agent.DefaultOSReleasePaths,
+	}
+}
+
+func runRun(ctx context.Context, args []string, stderr io.Writer) int {
+	fs := flag.NewFlagSet("run", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	once := fs.Bool("once", false, "send one report and exit (0 on success, 1 otherwise)")
+	cfgFlag := fs.String("config", "", "config file (default: $CLAMFLEET_AGENT_CONFIG or "+agent.DefaultConfigPath+")")
+	if err := fs.Parse(args); err != nil {
+		return exitUsage
+	}
+	if fs.NArg() > 0 {
+		fmt.Fprintf(stderr, "run: unexpected argument %q\n", fs.Arg(0))
+		return exitUsage
+	}
+	log := slog.New(slog.NewJSONHandler(stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	cfg, ok := loadConfig(log, *cfgFlag, true)
+	if !ok {
+		return exitError
+	}
+	sender, err := agent.NewSender(cfg, "clamfleet-agent/"+version.Version, log)
+	if err != nil {
+		log.Error("invalid configuration", "error", err.Error())
+		return exitError
+	}
+	r := &agent.Runner{
+		Collect:  newCollector(cfg).Collect,
+		Send:     sender.Send,
+		Interval: cfg.Interval,
+		Log:      log,
+	}
+	if *once {
+		if err := r.Once(ctx); err != nil {
+			r.LogFailure(err)
+			return exitError
+		}
+		log.Info("report sent", "server", cfg.Server)
+		return exitOK
+	}
+	log.Info("agent started", "server", cfg.Server, "interval", cfg.Interval.String(), "version", version.Version)
+	if err := r.Loop(ctx); err != nil {
+		log.Error("agent stopped", "error", err.Error())
 		return exitError
 	}
 	return exitOK

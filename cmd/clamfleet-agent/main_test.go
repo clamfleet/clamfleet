@@ -238,3 +238,30 @@ func TestEnvOverridesConfigFile(t *testing.T) {
 		t.Fatalf("err=%v tags=%v", err, r.Tags)
 	}
 }
+
+func TestRunUsageAndConfigErrors(t *testing.T) {
+	if res := runAgent(t, fakeBin(t), nil, "run", "extra"); res.code != 2 {
+		t.Fatalf("run with an argument: %+v", res)
+	}
+	if res := runAgent(t, fakeBin(t), nil, "run", "--nope"); res.code != 2 {
+		t.Fatalf("run with an unknown flag: %+v", res)
+	}
+	cfg := writeConfig(t, serveClamd(t))
+	// No server configured: `run` cannot send anywhere. Exit 1 with the reason, nothing on stdout.
+	res := runAgent(t, fakeBin(t), nil, "run", "--once", "--config", cfg)
+	if res.code != 1 || res.stdout != "" || !strings.Contains(res.stderr, "server is required") {
+		t.Fatalf("%+v", res)
+	}
+	// Plain http to a non-loopback host is refused before anything is sent.
+	res = runAgent(t, fakeBin(t), []string{"CLAMFLEET_AGENT_SERVER=http://clamfleet.example"}, "run", "--once", "--config", cfg)
+	if res.code != 1 || !strings.Contains(res.stderr, "plain http") {
+		t.Fatalf("%+v", res)
+	}
+	// A missing token file is reported by path and fails the pass (server is a closed loopback port).
+	res = runAgent(t, fakeBin(t), []string{
+		"CLAMFLEET_AGENT_SERVER=https://127.0.0.1:1", "CLAMFLEET_AGENT_TOKEN_FILE=/nonexistent/token",
+	}, "run", "--once", "--config", cfg)
+	if res.code != 1 || !strings.Contains(res.stderr, "/nonexistent/token") || !strings.Contains(res.stderr, `"class":"token"`) {
+		t.Fatalf("%+v", res)
+	}
+}
