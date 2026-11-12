@@ -59,6 +59,10 @@ type Store struct {
 	// report at exactly the point where a read-outside-the-lock design would
 	// go wrong. Always nil in production.
 	beforeHealthWrite func() error
+
+	// afterHostDelete is a test hook: DeleteHost calls it between the delete
+	// and the audit insert, to prove a failure there rolls both back.
+	afterHostDelete func() error
 }
 
 // dsn builds the modernc DSN. Pragmas go in the DSN (not in an Exec after

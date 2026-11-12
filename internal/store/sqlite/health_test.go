@@ -6,6 +6,7 @@ package sqlite
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"reflect"
 	"strings"
 	"sync"
@@ -297,5 +298,28 @@ func TestDeleteHostCascadesAndAudits(t *testing.T) {
 	}
 	if n := count(t, s, `SELECT count(*) FROM audit_log WHERE action=?`, store.ActionHostDelete); n != 1 {
 		t.Errorf("a failed delete wrote an audit row")
+	}
+}
+
+// If the audit row cannot be written the deletion must not happen: a deleted
+// host without its audit row is exactly what the same-transaction rule forbids.
+func TestDeleteHostFailureRollsBackDeleteAndAudit(t *testing.T) {
+	ctx := context.Background()
+	s := openTemp(t)
+	h := addHost(t, s, "keep01")
+	record(t, s, h.ID, repDaily("keep01", t0, 100), t0)
+	if _, err := s.EvaluateHosts(ctx, t0, nil, fixed("OK")); err != nil {
+		t.Fatal(err)
+	}
+	s.afterHostDelete = func() error { return errors.New("audit write failed") }
+	if err := s.DeleteHost(ctx, "keep01", t0, cli); err == nil {
+		t.Fatal("the failure must be returned")
+	}
+	d, err := s.HostByName(ctx, "keep01")
+	if err != nil || d.ReportCount != 1 || len(d.StateChanges) != 1 {
+		t.Fatalf("host or its data lost after a failed delete: %+v %v", d, err)
+	}
+	if n := count(t, s, `SELECT count(*) FROM audit_log WHERE action=?`, store.ActionHostDelete); n != 0 {
+		t.Fatalf("%d host.delete audit rows after a failed delete", n)
 	}
 }

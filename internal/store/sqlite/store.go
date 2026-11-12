@@ -167,6 +167,11 @@ func (s *Store) DeleteHost(ctx context.Context, name string, now time.Time, a st
 		if _, err := q.DeleteHost(ctx, id); err != nil {
 			return err
 		}
+		if s.afterHostDelete != nil {
+			if err := s.afterHostDelete(); err != nil {
+				return err
+			}
+		}
 		return writeAudit(ctx, q, now, a, store.ActionHostDelete, name)
 	})
 }
