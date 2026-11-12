@@ -90,4 +90,6 @@ header, the query string and the body are never logged. The client address is th
 the peer is listed in the server's `trusted_proxies`: then `X-Forwarded-For` (all header lines combined) is
 read from right to left and the first address that is not itself a trusted proxy is logged, falling back to
 the peer if there is none or an entry does not parse. From any other peer the header is ignored. The client
-IP is for logging only and is never used for authentication.
+IP is for logging only and is never used for authentication. `trusted_proxies` must list the proxies' own
+addresses, not networks the clients live in: an address inside a trusted range is skipped, so the logged IP
+could be the proxy's or one the client chose.

@@ -65,6 +65,18 @@ type Deps struct {
 	TrustedProxies []netip.Prefix
 }
 
+// NewHandlerFromConfig is NewHandler with the config-derived settings
+// (trusted_proxies) applied to d, so the binary has one call that cannot
+// forget one. The config must have passed Validate.
+func NewHandlerFromConfig(c Config, d Deps) (http.Handler, error) {
+	proxies, err := ParseTrustedProxies(c.TrustedProxies)
+	if err != nil {
+		return nil, err
+	}
+	d.TrustedProxies = proxies
+	return NewHandler(d), nil
+}
+
 // NewHandler builds the complete HTTP handler.
 func NewHandler(d Deps) http.Handler {
 	auth := d.Auth

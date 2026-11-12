@@ -679,6 +679,7 @@ func TestClientIPInRequestLog(t *testing.T) {
 		{"fake entry before a proxy chain", pfx("127.0.0.0/8", "10.0.0.0/8"), []string{"6.6.6.6, 203.0.113.7, 10.0.0.9"}, "203.0.113.7"},
 		{"multiple XFF header lines are combined", pfx("127.0.0.0/8", "10.0.0.0/8"), []string{"6.6.6.6", "203.0.113.7, 10.0.0.9"}, "203.0.113.7"},
 		{"IPv6 client", pfx("127.0.0.0/8"), []string{"2001:db8::1"}, "2001:db8::1"},
+		{"IPv6 zone is not logged", pfx("127.0.0.0/8"), []string{"fe80::1%evil-text"}, "127.0.0.1"},
 		{"garbage falls back to the peer", pfx("127.0.0.0/8"), []string{"garbage"}, "127.0.0.1"},
 		{"garbage at the rightmost untrusted position", pfx("127.0.0.0/8"), []string{"203.0.113.7, garbage"}, "127.0.0.1"},
 		{"only trusted entries fall back to the peer", pfx("127.0.0.0/8", "10.0.0.0/8"), []string{"10.0.0.9"}, "127.0.0.1"},

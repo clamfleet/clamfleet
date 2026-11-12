@@ -103,7 +103,9 @@ func ClientIP(r *http.Request, trusted []netip.Prefix) string {
 	}
 	for i := len(parts) - 1; i >= 0; i-- {
 		a, err := netip.ParseAddr(strings.TrimSpace(parts[i]))
-		if err != nil {
+		// A zone ("fe80::1%text") is peer-supplied free text that would reach
+		// the log; a proxy never appends one. Treat it as unparsable.
+		if err != nil || a.Zone() != "" {
 			return peer.String()
 		}
 		a = a.Unmap()

@@ -136,15 +136,15 @@ func TestExampleConfigsLoadAndValidate(t *testing.T) {
 }
 
 func TestTrustedProxies(t *testing.T) {
-	good := []string{"10.0.0.5", "10.0.0.0/8", "::1", "fd00::/8", " 192.168.1.1 ", "::ffff:10.1.2.3"}
+	good := []string{"10.0.0.5", "10.0.0.0/8", "::1", "fd00::/8", " 192.168.1.1 ", "::ffff:10.1.2.3", "::ffff:10.0.0.0/104"}
 	ps, err := ParseTrustedProxies(good)
 	if err != nil || len(ps) != len(good) {
 		t.Fatalf("%v %v", ps, err)
 	}
-	if ps[0].String() != "10.0.0.5/32" || ps[5].String() != "10.1.2.3/32" {
+	if ps[0].String() != "10.0.0.5/32" || ps[5].String() != "10.1.2.3/32" || ps[6].String() != "10.0.0.0/8" {
 		t.Fatalf("%v", ps)
 	}
-	for _, bad := range []string{"nope", "10.0.0.0/33", "10.0.0.256", "10.0.0.0/", "1.2.3.4/x", ""} {
+	for _, bad := range []string{"nope", "10.0.0.0/33", "10.0.0.256", "10.0.0.0/", "1.2.3.4/x", "", "::ffff:10.0.0.0/64"} {
 		c := DefaultConfig()
 		c.TrustedProxies = []string{"127.0.0.1", bad}
 		if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "trusted_proxies") {

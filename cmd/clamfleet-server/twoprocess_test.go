@@ -10,8 +10,11 @@ package main
 import (
 	"bufio"
 	"bytes"
+	ctls "crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -291,5 +294,40 @@ func TestAgentRunOnceThroughMTLS(t *testing.T) {
 	}
 	if res := ag.runOnce(); res.code != 1 || !strings.Contains(res.stderr, "unauthorized") {
 		t.Fatalf("valid certificate, stale token: exit %d\n%s", res.code, res.stderr)
+	}
+}
+
+// The config key must reach the handler of the real binary: a main() that
+// drops trusted_proxies (or never passes it on) logs the proxy's address.
+func TestServeAppliesTrustedProxies(t *testing.T) {
+	tls, err := testtls.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name, proxies, want string
+	}{
+		{"trusted peer", "10.9.9.9,127.0.0.1", "203.0.113.7"},
+		{"peer not trusted", "10.9.9.9", "127.0.0.1"},
+	} {
+		srv := startServe(t, tls, filepath.Join(t.TempDir(), "cf.db"), "CLAMFLEET_SERVER_TRUSTED_PROXIES="+tc.proxies)
+		ca, _ := os.ReadFile(tls.CA)
+		pool := x509.NewCertPool()
+		pool.AppendCertsFromPEM(ca)
+		client := &http.Client{Transport: &http.Transport{TLSClientConfig: &ctls.Config{RootCAs: pool}}, Timeout: 10 * time.Second}
+		req, _ := http.NewRequest("POST", "https://"+srv.addr+"/v1/report", nil)
+		req.Header.Set("X-Forwarded-For", "6.6.6.6, 203.0.113.7")
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		deadline := time.Now().Add(5 * time.Second)
+		for !strings.Contains(srv.stderr.String(), `"client_ip":"`+tc.want+`"`) && time.Now().Before(deadline) {
+			time.Sleep(20 * time.Millisecond)
+		}
+		if !strings.Contains(srv.stderr.String(), `"client_ip":"`+tc.want+`"`) {
+			t.Errorf("%s: want client_ip %s in the request log:\n%s", tc.name, tc.want, srv.stderr.String())
+		}
 	}
 }

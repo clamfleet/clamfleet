@@ -132,7 +132,8 @@ later milestones (`retention`, `smtp`) fails until those milestones add them.
   direct peer is a trusted proxy, right to left, and logs the first address that is not itself a trusted
   proxy, so an address a client prepends to the header is never chosen. Otherwise (or if the header is
   missing or unparsable) it logs the peer address, and the header is ignored. The client IP is for logs only;
-  it is never used for authentication. An invalid entry stops the server at start.
+  it is never used for authentication. List the proxies' own addresses, not networks your clients live in: an address
+  inside a trusted range is skipped, so the logged IP would be the proxy's or one the client chose. An invalid entry stops the server at start.
 - **Direct TLS:** set `tls.cert` and `tls.key` (both), and `listen` as needed (for example `:8443`). The certificate is loaded at start; after a
   renewal, restart the server.
 - **Mutual TLS (optional):** set `tls.client_ca` to a PEM bundle. Every agent must then present a

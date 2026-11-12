@@ -171,8 +171,11 @@ func (a *app) serve(ctx context.Context, args []string) int {
 		log.Error("database", "error", err.Error())
 		return exitError
 	}
-	proxies, _ := server.ParseTrustedProxies(cfg.TrustedProxies) // already checked by Validate
-	h := server.NewHandler(server.Deps{Store: st, Now: a.now, Log: log, TrustedProxies: proxies})
+	h, err := server.NewHandlerFromConfig(cfg, server.Deps{Store: st, Now: a.now, Log: log})
+	if err != nil {
+		log.Error("invalid configuration", "error", err.Error())
+		return exitError
+	}
 	if err := server.Serve(ctx, cfg, h, log); err != nil {
 		log.Error("server stopped", "error", err.Error())
 		return exitError

@@ -123,6 +123,15 @@ func ParseTrustedProxies(list []string) ([]netip.Prefix, error) {
 		var err error
 		if strings.Contains(e, "/") {
 			p, err = netip.ParsePrefix(e)
+			if err == nil && p.Addr().Is4In6() { // checked before Masked: /64 would zero the ::ffff marker
+				// A 4in6 CIDR (::ffff:10.0.0.0/104) would never match: peers are
+				// unmapped before comparing. Convert it to the IPv4 prefix; a
+				// prefix shorter than /96 spans more than IPv4 and is refused.
+				if p.Bits() < 96 {
+					return nil, fmt.Errorf("trusted_proxies: %q is not an IP address or CIDR this server can match (IPv4-mapped prefixes need at least /96)", e)
+				}
+				p = netip.PrefixFrom(p.Addr().Unmap(), p.Bits()-96)
+			}
 			p = p.Masked()
 		} else {
 			var a netip.Addr
