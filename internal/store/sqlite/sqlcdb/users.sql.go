@@ -59,7 +59,8 @@ func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (int64, 
 
 const listUsers = `-- name: ListUsers :many
 SELECT id, email, display_name, role, auth_source, password_hash, password_must_change,
-       password_changed_at, disabled_at, created_at, last_login_at, auth_version
+       password_changed_at, disabled_at, created_at, last_login_at, auth_version,
+       totp_enabled_at, totp_failures
 FROM users ORDER BY email
 `
 
@@ -76,6 +77,8 @@ type ListUsersRow struct {
 	CreatedAt          int64
 	LastLoginAt        sql.NullInt64
 	AuthVersion        int64
+	TotpEnabledAt      sql.NullInt64
+	TotpFailures       int64
 }
 
 func (q *Queries) ListUsers(ctx context.Context) ([]ListUsersRow, error) {
@@ -100,6 +103,8 @@ func (q *Queries) ListUsers(ctx context.Context) ([]ListUsersRow, error) {
 			&i.CreatedAt,
 			&i.LastLoginAt,
 			&i.AuthVersion,
+			&i.TotpEnabledAt,
+			&i.TotpFailures,
 		); err != nil {
 			return nil, err
 		}
@@ -184,7 +189,7 @@ func (q *Queries) SetUserLastLogin(ctx context.Context, arg SetUserLastLoginPara
 const setUserPassword = `-- name: SetUserPassword :execrows
 UPDATE users SET password_hash = ?1, password_must_change = ?2,
        password_changed_at = ?3, updated_at = ?3,
-       auth_version = auth_version + 1
+       auth_version = auth_version + 1, totp_failures = 0
 WHERE id = ?4
 `
 
@@ -195,6 +200,8 @@ type SetUserPasswordParams struct {
 	ID           int64
 }
 
+// The unconditional (admin or CLI) reset also lifts the second-factor lock: a
+// lock means someone had the password, and the reset is the response to that.
 func (q *Queries) SetUserPassword(ctx context.Context, arg SetUserPasswordParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, setUserPassword,
 		arg.PasswordHash,
@@ -260,7 +267,8 @@ func (q *Queries) SetUserRole(ctx context.Context, arg SetUserRoleParams) (int64
 
 const userByEmail = `-- name: UserByEmail :one
 SELECT id, email, display_name, role, auth_source, password_hash, password_must_change,
-       password_changed_at, disabled_at, created_at, last_login_at, auth_version
+       password_changed_at, disabled_at, created_at, last_login_at, auth_version,
+       totp_enabled_at, totp_failures
 FROM users WHERE email = ?1
 `
 
@@ -277,6 +285,8 @@ type UserByEmailRow struct {
 	CreatedAt          int64
 	LastLoginAt        sql.NullInt64
 	AuthVersion        int64
+	TotpEnabledAt      sql.NullInt64
+	TotpFailures       int64
 }
 
 func (q *Queries) UserByEmail(ctx context.Context, email sql.NullString) (UserByEmailRow, error) {
@@ -295,13 +305,16 @@ func (q *Queries) UserByEmail(ctx context.Context, email sql.NullString) (UserBy
 		&i.CreatedAt,
 		&i.LastLoginAt,
 		&i.AuthVersion,
+		&i.TotpEnabledAt,
+		&i.TotpFailures,
 	)
 	return i, err
 }
 
 const userByID = `-- name: UserByID :one
 SELECT id, email, display_name, role, auth_source, password_hash, password_must_change,
-       password_changed_at, disabled_at, created_at, last_login_at, auth_version
+       password_changed_at, disabled_at, created_at, last_login_at, auth_version,
+       totp_enabled_at, totp_failures
 FROM users WHERE id = ?1
 `
 
@@ -318,6 +331,8 @@ type UserByIDRow struct {
 	CreatedAt          int64
 	LastLoginAt        sql.NullInt64
 	AuthVersion        int64
+	TotpEnabledAt      sql.NullInt64
+	TotpFailures       int64
 }
 
 func (q *Queries) UserByID(ctx context.Context, id int64) (UserByIDRow, error) {
@@ -336,6 +351,8 @@ func (q *Queries) UserByID(ctx context.Context, id int64) (UserByIDRow, error) {
 		&i.CreatedAt,
 		&i.LastLoginAt,
 		&i.AuthVersion,
+		&i.TotpEnabledAt,
+		&i.TotpFailures,
 	)
 	return i, err
 }

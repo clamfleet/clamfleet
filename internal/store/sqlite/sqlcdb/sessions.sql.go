@@ -118,7 +118,7 @@ func (q *Queries) DeleteUserSessionsExcept(ctx context.Context, arg DeleteUserSe
 
 const sessionPrincipalByTokenHash = `-- name: SessionPrincipalByTokenHash :one
 SELECT s.id, s.user_id, s.csrf_token, s.last_seen_at, u.email, u.display_name, u.role,
-       u.password_must_change
+       u.password_must_change, u.auth_source, u.totp_enabled_at
 FROM user_sessions s JOIN users u ON u.id = s.user_id
 WHERE s.token_hash = ?1
   AND s.expires_at > ?2
@@ -141,6 +141,8 @@ type SessionPrincipalByTokenHashRow struct {
 	DisplayName        sql.NullString
 	Role               string
 	PasswordMustChange int64
+	AuthSource         string
+	TotpEnabledAt      sql.NullInt64
 }
 
 // One join, so a disabled user, a changed role or a deleted user takes effect
@@ -158,6 +160,8 @@ func (q *Queries) SessionPrincipalByTokenHash(ctx context.Context, arg SessionPr
 		&i.DisplayName,
 		&i.Role,
 		&i.PasswordMustChange,
+		&i.AuthSource,
+		&i.TotpEnabledAt,
 	)
 	return i, err
 }

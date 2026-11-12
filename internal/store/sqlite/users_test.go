@@ -26,7 +26,11 @@ func mkUser(t *testing.T, s *Store, email, role string) store.User {
 func mkSession(t *testing.T, s *Store, uid int64, tok string, at time.Time, life time.Duration) []byte {
 	t.Helper()
 	h := hash(tok)
-	if err := s.CreateSession(context.Background(), store.Session{TokenHash: h, UserID: uid, CSRF: []byte("csrf-" + tok), CreatedAt: at, ExpiresAt: at.Add(life), PasswordHash: "$argon2id$x"}); err != nil {
+	var ver int64 // the version a login that read the user just now would carry
+	if err := s.r.QueryRow(`SELECT auth_version FROM users WHERE id=?`, uid).Scan(&ver); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.CreateSession(context.Background(), store.Session{TokenHash: h, UserID: uid, CSRF: []byte("csrf-" + tok), CreatedAt: at, ExpiresAt: at.Add(life), PasswordHash: "$argon2id$x", AuthVersion: ver}); err != nil {
 		t.Fatal(err)
 	}
 	return h

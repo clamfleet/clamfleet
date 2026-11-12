@@ -324,6 +324,10 @@ type User struct {
 	// (password set or reset, disable, enable). A login reads it with the user
 	// and the store creates a session only if it is unchanged. Internal.
 	AuthVersion int64 `json:"-"`
+	// TOTPEnabled and TOTPFailures describe the second factor (the secret itself
+	// is never loaded here). Failures at SecondFactorLockLimit means locked.
+	TOTPEnabled  bool `json:"totp_enabled"`
+	TOTPFailures int  `json:"totp_failures"`
 }
 
 // NewUser is a user to create. PasswordHash is a PHC string.
@@ -381,6 +385,10 @@ type SessionPrincipal struct {
 	CSRF       []byte
 	MustChange bool
 	LastSeen   time.Time
+	// AuthSource is the user's identity source ("local"); TOTPEnabled is read
+	// fresh on every request so a forced-enrolment gate applies at once.
+	AuthSource  string
+	TOTPEnabled bool
 }
 
 // UserStore persists console users. Every change that matters writes its audit
@@ -434,6 +442,7 @@ type Store interface {
 	HealthStore
 	UserStore
 	SessionStore
+	TOTPStore
 	// CreateHost registers a host with its token hash and writes the audit
 	// row. ErrHostExists if the name is taken. The name is normalised.
 	CreateHost(ctx context.Context, name string, tokenHash []byte, now time.Time, a Audit) (Host, error)

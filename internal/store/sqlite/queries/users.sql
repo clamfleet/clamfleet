@@ -12,23 +12,28 @@ RETURNING id;
 
 -- name: UserByEmail :one
 SELECT id, email, display_name, role, auth_source, password_hash, password_must_change,
-       password_changed_at, disabled_at, created_at, last_login_at, auth_version
+       password_changed_at, disabled_at, created_at, last_login_at, auth_version,
+       totp_enabled_at, totp_failures
 FROM users WHERE email = sqlc.arg(email);
 
 -- name: UserByID :one
 SELECT id, email, display_name, role, auth_source, password_hash, password_must_change,
-       password_changed_at, disabled_at, created_at, last_login_at, auth_version
+       password_changed_at, disabled_at, created_at, last_login_at, auth_version,
+       totp_enabled_at, totp_failures
 FROM users WHERE id = sqlc.arg(id);
 
 -- name: ListUsers :many
 SELECT id, email, display_name, role, auth_source, password_hash, password_must_change,
-       password_changed_at, disabled_at, created_at, last_login_at, auth_version
+       password_changed_at, disabled_at, created_at, last_login_at, auth_version,
+       totp_enabled_at, totp_failures
 FROM users ORDER BY email;
 
 -- name: SetUserPassword :execrows
+-- The unconditional (admin or CLI) reset also lifts the second-factor lock: a
+-- lock means someone had the password, and the reset is the response to that.
 UPDATE users SET password_hash = sqlc.arg(password_hash), password_must_change = sqlc.arg(must_change),
        password_changed_at = sqlc.arg(now), updated_at = sqlc.arg(now),
-       auth_version = auth_version + 1
+       auth_version = auth_version + 1, totp_failures = 0
 WHERE id = sqlc.arg(id);
 
 -- name: SetUserPasswordIf :execrows
