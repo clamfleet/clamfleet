@@ -13,6 +13,7 @@ Central management for ClamAV on Linux fleets. Spec: `docs/HANDOVER.md`. Current
 - `make check`: `go vet`, `staticcheck`, `sqlc diff`, `go test ./...` and `scripts-test` (the shell tests of `deploy/test`, fake ssh; no container needed).
 - `make e2e`: runs the agent inside the `clamfleet-test` Incus container. Read `docs/testing.md` first.
 - `make webfixture`: builds `bin/webfixture`, a throwaway console on 127.0.0.1 with seeded users and hosts for browser tests (see `docs/testing.md`, "Browser fixture").
+- `make e2e-web`: Playwright browser tests of the console (`e2e/web`, `@playwright/test` 1.63.0 on Chromium 1243 from `/opt/playwright/browsers`); run from a fresh shell so `/opt/env.sh` is loaded.
 - Tests in `cmd/*` and `hack/webfixture` build binaries that `go test` caching cannot see: use `-count=1` when changing code they cover.
 - `make fixtures`: re-records `internal/agent/testdata` from the container. Never hand-edit recorded files.
 - `make generate` runs sqlc over `migrations/sqlite` and `internal/store/sqlite/queries`; `make check` runs `sqlc diff`. Never hand-edit `internal/store/sqlite/sqlcdb`.
