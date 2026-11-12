@@ -19,6 +19,12 @@ tls:
 # Empty: the logged address is the TCP peer. Logging only, never authentication.
 trusted_proxies: []
 db_path: /var/lib/clamfleet-server/clamfleet.db   # local disk only: SQLite WAL does not work on network filesystems
+# The key that protects secrets stored in the database (TOTP secrets now, webhook secrets later).
+# Create it once, as root: `clamfleet-server key generate`, then `chgrp clamfleet-server` it and chmod 0640.
+# The server refuses a file that others can read or the group can write. Keep it OUT of the state
+# directory and back it up separately from database backups: a backup holding both protects nothing.
+# Absent is fine until someone uses TOTP; present but invalid stops the server from starting.
+secret_key_file: /etc/clamfleet/server-secret.key
 
 # Health rules (spec 9) and how often they are re-evaluated. The values shown are the defaults.
 # A host is STALE after stale_factor x its own report interval (the agent sends it; hosts whose agent
@@ -38,6 +44,9 @@ health:
 auth:
   local:
     enabled: true          # email + password accounts; later providers get their own subtree (auth.ldap, auth.oidc)
+    totp_required: false   # true: every local user must set up an authenticator app (TOTP) before using the console.
+                           # Needs secret_key_file below (the server refuses to start without it). Switch it on BEFORE
+                           # handing out one-time passwords: until a user has enrolled, their password alone can enrol.
   session_max_age: 12h     # absolute lifetime: a session ends this long after sign-in, however active (5m..720h)
   session_idle: 1h         # ends after this long without any request (at least 1m); an open fleet tab counts as active
   cookie_secure: true      # false ONLY for plain-HTTP development (SSH tunnel): drops Secure and the __Host- prefix, logs a warning

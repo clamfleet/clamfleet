@@ -46,6 +46,11 @@ const (
 	// DefaultKeyPath is where the key file lives unless secret_key_file says otherwise.
 	DefaultKeyPath = "/etc/clamfleet/server-secret.key"
 
+	// PurposeTOTP seals a user's enrolled TOTP secret (ids: user id).
+	PurposeTOTP = "totp"
+	// PurposeTOTPPending seals the secret of an enrolment in progress (ids: user id, session id).
+	PurposeTOTPPending = "totp-pending"
+
 	blobVersion = 1
 	kidBytes    = 8
 	nonceBytes  = 12
