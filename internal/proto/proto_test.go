@@ -55,7 +55,7 @@ func strictDecode(t *testing.T, raw []byte, into any) {
 // additiveKeys are keys this implementation emits that the spec example lacks.
 // Each one is a documented, schema-1-compatible addition (servers ignore
 // unknown fields, spec 7.2); anything else missing from the spec is a bug.
-var additiveKeys = []string{".freshclam.source"}
+var additiveKeys = []string{".freshclam.source", ".interval_seconds"}
 
 func roundTrip(t *testing.T, file string, into any, additive ...string) {
 	t.Helper()
@@ -127,6 +127,9 @@ func TestZeroReportKeepsEveryKey(t *testing.T) {
 		if v, ok := sigs[k]; !ok || v != nil {
 			t.Fatalf("sigs.%s = %#v (present=%v), want null", k, v, ok)
 		}
+	}
+	if v, ok := generic["interval_seconds"]; !ok || v != nil {
+		t.Fatalf("interval_seconds = %#v (present=%v), want null", v, ok)
 	}
 	fc := generic["freshclam"].(map[string]any)
 	for _, k := range []string{"last_ok", "last_error", "last_error_msg", "source"} {

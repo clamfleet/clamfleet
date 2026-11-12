@@ -66,12 +66,17 @@ func (c *Collector) Collect(ctx context.Context) (proto.Report, []Problem, error
 		return proto.Report{}, nil, fmt.Errorf("hostname: %w", err)
 	}
 	tags := append([]string{}, c.Cfg.Tags...)
+	// Whole seconds; config validation guarantees a positive interval, and a
+	// sub-second one reports 0, which the server treats as "unknown" and
+	// answers with its default.
+	interval := int(c.Cfg.Interval / time.Second)
 	r := proto.Report{
-		Schema:       proto.SchemaVersion,
-		Host:         host,
-		AgentVersion: c.Version,
-		Tags:         tags,
-		TS:           proto.UTC(c.Now()),
+		Schema:          proto.SchemaVersion,
+		Host:            host,
+		AgentVersion:    c.Version,
+		Tags:            tags,
+		IntervalSeconds: &interval,
+		TS:              proto.UTC(c.Now()),
 	}
 	var problems []Problem
 	add := func(p ...Problem) { problems = append(problems, p...) }

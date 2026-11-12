@@ -22,6 +22,7 @@ All notable changes are listed here. The format follows Keep a Changelog; versio
   only; the agent does not link them). sqlc v1.31.1 is a build-time tool.
 - Milestone 1: shared payload structs (`internal/proto`), agent collectors (clamd socket, CVD/CLD
   headers, freshclam, systemd units, host, last scan) and `clamfleet-agent collect --dry-run`.
+- `interval_seconds` in the report: the agent's configured interval, so the server can judge STALE per agent (3 x interval). Additive, schema stays 1.
 - `freshclam.source` in the report (`journal`, `log`, `journal+log`, `mtime`, or null). Additive, schema stays 1.
 
 ### Changed
