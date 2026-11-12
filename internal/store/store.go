@@ -374,9 +374,14 @@ type UserStore interface {
 	// but KeepSession). ErrNotFound for an unknown id.
 	SetPassword(ctx context.Context, id int64, c PasswordChange, now time.Time, a Audit) error
 	// RehashPassword stores an upgraded hash of the SAME password after a login:
-	// no audit row, no session change.
-	RehashPassword(ctx context.Context, id int64, hash string, now time.Time) error
-	// SetRole and SetDisabled delete the user's sessions in the same transaction.
+	// no audit row, no session change. It is a compare-and-swap: it only applies
+	// while the stored hash is still oldHash (the one that was verified), so a
+	// reset or change that committed in between is never overwritten. A lost
+	// race is not an error (nil); the newer password simply stays.
+	RehashPassword(ctx context.Context, id int64, oldHash, newHash string, now time.Time) error
+	// SetRole and SetDisabled (disable AND enable) delete the user's sessions in
+	// the same transaction. Enable matters too: a login that was verifying while
+	// the user was disabled must not turn into a live session on re-enable.
 	SetRole(ctx context.Context, id int64, role string, now time.Time, a Audit) error
 	SetDisabled(ctx context.Context, id int64, disabled bool, now time.Time, a Audit) error
 	// RecordLogin sets last_login_at and writes the user.login audit row.
@@ -390,7 +395,7 @@ type UserStore interface {
 type SessionStore interface {
 	CreateSession(ctx context.Context, s Session) error
 	// SessionByTokenHash returns ErrNotFound when the session is missing,
-	// absolutely expired (expires_at <= now), idle-expired (last seen at or
+	// created before the user's last password change, absolutely expired (expires_at <= now), idle-expired (last seen at or
 	// before now-idle) or its user is disabled.
 	SessionByTokenHash(ctx context.Context, hash []byte, now time.Time, idle time.Duration) (SessionPrincipal, error)
 	// TouchSession records activity, at most once a minute per session.

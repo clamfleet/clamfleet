@@ -33,8 +33,11 @@ WHERE id = sqlc.arg(id);
 -- name: RehashUserPassword :execrows
 -- Parameter upgrade after a successful login: same password, so it is not a
 -- password change (password_changed_at, must_change and sessions stay).
+-- Compare-and-swap on the hash that was verified: if a reset or a password
+-- change committed while the login was hashing, 0 rows match and the newer
+-- password is not overwritten by a hash of the old one.
 UPDATE users SET password_hash = sqlc.arg(password_hash), updated_at = sqlc.arg(now)
-WHERE id = sqlc.arg(id);
+WHERE id = sqlc.arg(id) AND password_hash = sqlc.arg(expected_hash);
 
 -- name: SetUserRole :execrows
 UPDATE users SET role = sqlc.arg(role), updated_at = sqlc.arg(now) WHERE id = sqlc.arg(id);

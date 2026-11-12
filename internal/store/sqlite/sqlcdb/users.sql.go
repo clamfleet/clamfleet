@@ -114,19 +114,28 @@ func (q *Queries) ListUsers(ctx context.Context) ([]ListUsersRow, error) {
 
 const rehashUserPassword = `-- name: RehashUserPassword :execrows
 UPDATE users SET password_hash = ?1, updated_at = ?2
-WHERE id = ?3
+WHERE id = ?3 AND password_hash = ?4
 `
 
 type RehashUserPasswordParams struct {
 	PasswordHash sql.NullString
 	Now          int64
 	ID           int64
+	ExpectedHash sql.NullString
 }
 
 // Parameter upgrade after a successful login: same password, so it is not a
 // password change (password_changed_at, must_change and sessions stay).
+// Compare-and-swap on the hash that was verified: if a reset or a password
+// change committed while the login was hashing, 0 rows match and the newer
+// password is not overwritten by a hash of the old one.
 func (q *Queries) RehashUserPassword(ctx context.Context, arg RehashUserPasswordParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, rehashUserPassword, arg.PasswordHash, arg.Now, arg.ID)
+	result, err := q.db.ExecContext(ctx, rehashUserPassword,
+		arg.PasswordHash,
+		arg.Now,
+		arg.ID,
+		arg.ExpectedHash,
+	)
 	if err != nil {
 		return 0, err
 	}

@@ -154,6 +154,10 @@ func TestChangesEndSessionsAtOnce(t *testing.T) {
 			if _, err := s.SessionByTokenHash(ctx, ho, t0, time.Hour); err != nil {
 				t.Fatalf("another user's session was removed: %v", err)
 			}
+			// The row itself is gone, not merely refused by the lookup.
+			if n := count(t, s, `SELECT count(*) FROM user_sessions WHERE user_id = ?`, u.ID); n != 0 {
+				t.Fatalf("%d session rows of the user left after %s", n, name)
+			}
 		})
 	}
 }
@@ -204,7 +208,7 @@ func TestRehashKeepsSessionsAndMustChange(t *testing.T) {
 	s := openTemp(t)
 	u := mkUser(t, s, "a@example.com", "viewer") // must_change = 1
 	h := mkSession(t, s, u.ID, "tok", t0, 12*time.Hour)
-	if err := s.RehashPassword(ctx, u.ID, "upgraded", t0.Add(time.Minute)); err != nil {
+	if err := s.RehashPassword(ctx, u.ID, "$argon2id$x", "upgraded", t0.Add(time.Minute)); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.SessionByTokenHash(ctx, h, t0, time.Hour); err != nil {
@@ -275,5 +279,76 @@ func TestLogoutDeletesSession(t *testing.T) {
 	}
 	if _, err := s.SessionByTokenHash(ctx, h, t0, time.Hour); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("%v", err)
+	}
+}
+
+// Enabling also ends sessions: a login that was verifying while the user was
+// disabled could have created a session behind the disable.
+func TestEnableDeletesSessionsToo(t *testing.T) {
+	ctx := context.Background()
+	s := openTemp(t)
+	u := mkUser(t, s, "a@example.com", "viewer")
+	if err := s.SetDisabled(ctx, u.ID, true, t0, cliAudit); err != nil {
+		t.Fatal(err)
+	}
+	mkSession(t, s, u.ID, "born-while-disabled", t0, time.Hour) // the race: created behind the disable
+	if err := s.SetDisabled(ctx, u.ID, false, t0, cliAudit); err != nil {
+		t.Fatal(err)
+	}
+	if n := count(t, s, `SELECT count(*) FROM user_sessions WHERE user_id = ?`, u.ID); n != 0 {
+		t.Fatalf("%d sessions survived the enable", n)
+	}
+}
+
+// A reset between the verification and the rehash must not be undone by a hash
+// of the old password.
+func TestRehashDoesNotOverwriteANewerPassword(t *testing.T) {
+	ctx := context.Background()
+	s := openTemp(t)
+	u := mkUser(t, s, "a@example.com", "viewer") // hash "$argon2id$x"
+	if err := s.SetPassword(ctx, u.ID, store.PasswordChange{Hash: "reset-hash", MustChange: true}, t0.Add(time.Second), cliAudit); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RehashPassword(ctx, u.ID, "$argon2id$x", "upgraded-old-password", t0.Add(2*time.Second)); err != nil {
+		t.Fatalf("a lost race is not an error: %v", err)
+	}
+	got, _ := s.UserByEmail(ctx, "a@example.com")
+	if got.PasswordHash != "reset-hash" {
+		t.Fatalf("the reset was overwritten: %q", got.PasswordHash)
+	}
+}
+
+// A session older than the user's last password change is refused, even if its
+// row exists (a login that raced a reset).
+func TestSessionOlderThanPasswordChangeIsRefused(t *testing.T) {
+	ctx := context.Background()
+	s := openTemp(t)
+	u := mkUser(t, s, "a@example.com", "viewer")
+	old := mkSession(t, s, u.ID, "old", t0, 12*time.Hour)
+	// Change the password behind the store's back, so the session row survives.
+	if _, err := s.w.ExecContext(ctx, `UPDATE users SET password_changed_at = ? WHERE id = ?`, t0.Add(time.Minute).Unix(), u.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.SessionByTokenHash(ctx, old, t0.Add(2*time.Minute), time.Hour); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("a session from before the password change is valid: %v", err)
+	}
+	fresh := mkSession(t, s, u.ID, "fresh", t0.Add(time.Minute), 12*time.Hour)
+	if _, err := s.SessionByTokenHash(ctx, fresh, t0.Add(2*time.Minute), time.Hour); err != nil {
+		t.Fatalf("a session created at the change time is refused: %v", err)
+	}
+}
+
+// The session that survives a self-service change is re-dated, so the rule above does not kill it.
+func TestSelfPasswordChangeKeepsItsSessionDespiteTheAgeRule(t *testing.T) {
+	ctx := context.Background()
+	s := openTemp(t)
+	u := mkUser(t, s, "a@example.com", "viewer")
+	cur := mkSession(t, s, u.ID, "current", t0, 12*time.Hour)
+	later := t0.Add(10 * time.Minute)
+	if err := s.SetPassword(ctx, u.ID, store.PasswordChange{Hash: "new", Self: true, KeepSession: cur}, later, cliAudit); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.SessionByTokenHash(ctx, cur, later.Add(time.Minute), time.Hour); err != nil {
+		t.Fatalf("the kept session died: %v", err)
 	}
 }

@@ -589,7 +589,7 @@ func TestRehashOnLogin(t *testing.T) {
 	e := newEnv(t)
 	u := e.addUser("ann@example.com", "viewer", goodPW, false)
 	// Replace the stored hash with one made with lighter parameters.
-	if err := e.st.RehashPassword(context.Background(), u.ID, weakHash(t, goodPW), t0); err != nil {
+	if err := e.st.RehashPassword(context.Background(), u.ID, u.PasswordHash, weakHash(t, goodPW), t0); err != nil {
 		t.Fatal(err)
 	}
 	e.browser().login("ann@example.com", goodPW)
@@ -944,5 +944,62 @@ func TestParallelLoginsCannotBypassTheThrottle(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// raceLogin starts a login whose verification blocks in the hasher, runs
+// during (a password reset by an admin) while it is blocked, then releases it.
+func raceLogin(t *testing.T, e *env, email, password string, during func()) (*browser, page) {
+	t.Helper()
+	e.hasher.gate = make(chan struct{})
+	var release sync.Once
+	open := func() { release.Do(func() { close(e.hasher.gate) }) }
+	t.Cleanup(open)
+	b := e.browser()
+	res := make(chan page, 1)
+	go func() { res <- b.post("/login", url.Values{"email": {email}, "password": {password}}) }()
+	for e.hasher.verifies.Load() == 0 { // the login is now inside the hasher
+		time.Sleep(5 * time.Millisecond)
+	}
+	during()
+	open()
+	return b, <-res
+}
+
+// A password reset that commits while a login is verifying the OLD password
+// must not leave that login with a working session.
+func TestLoginRacingAPasswordResetGetsNoWorkingSession(t *testing.T) {
+	e := newEnv(t)
+	u := e.addUser("ann@example.com", "viewer", goodPW, false)
+	b, p := raceLogin(t, e, "ann@example.com", goodPW, func() {
+		e.advance(time.Second)
+		if err := e.st.SetPassword(context.Background(), u.ID, store.PasswordChange{Hash: "reset-hash", MustChange: true}, e.clock(), cliAudit); err != nil {
+			t.Error(err)
+		}
+	})
+	if p.status != 303 {
+		t.Fatalf("login: %d", p.status) // the credentials were right when verified
+	}
+	if g := b.get("/"); g.status != 303 || !strings.HasPrefix(g.header.Get("Location"), "/login") {
+		t.Fatalf("the session of a login that raced a reset works: %d %q", g.status, g.header.Get("Location"))
+	}
+}
+
+// A login that upgrades the hash must not overwrite a password reset that
+// committed while it was hashing.
+func TestRehashRacingAResetDoesNotOverwriteIt(t *testing.T) {
+	e := newEnv(t)
+	u := e.addUser("ann@example.com", "viewer", goodPW, false)
+	if err := e.st.RehashPassword(context.Background(), u.ID, u.PasswordHash, weakHash(t, goodPW), t0); err != nil {
+		t.Fatal(err)
+	}
+	raceLogin(t, e, "ann@example.com", goodPW, func() {
+		if err := e.st.SetPassword(context.Background(), u.ID, store.PasswordChange{Hash: "reset-hash", MustChange: true}, e.clock(), cliAudit); err != nil {
+			t.Error(err)
+		}
+	})
+	got, _ := e.st.UserByEmail(context.Background(), "ann@example.com")
+	if got.PasswordHash != "reset-hash" {
+		t.Fatalf("the reset was overwritten by the rehash of the old password: %.30s", got.PasswordHash)
 	}
 }

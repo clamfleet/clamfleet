@@ -69,10 +69,19 @@ type Manager struct {
 	Deny func(w http.ResponseWriter, r *http.Request, status int)
 }
 
+// TouchEvery is how often a session's last-seen time is written at most; the
+// store enforces it too, but checking here keeps ordinary requests from
+// opening a write transaction at all.
+const TouchEvery = time.Minute
+
 // Create stores a new session for userID and returns the cookie token. A
 // fresh random token is generated on every call and never taken from the
 // request, so a cookie planted before login (session fixation) is never reused.
-func (m *Manager) Create(ctx context.Context, userID int64) (token string, err error) {
+//
+// started is when the credential check began. The session is dated from it, so
+// a password change that commits while the check was running makes the session
+// older than the change, and the lookup refuses it.
+func (m *Manager) Create(ctx context.Context, userID int64, started time.Time) (token string, err error) {
 	token, hash, err := NewToken()
 	if err != nil {
 		return "", err
@@ -83,7 +92,7 @@ func (m *Manager) Create(ctx context.Context, userID int64) (token string, err e
 	}
 	now := m.Now()
 	err = m.Store.CreateSession(ctx, store.Session{
-		TokenHash: hash, UserID: userID, CSRF: csrf, CreatedAt: now, ExpiresAt: now.Add(m.MaxAge),
+		TokenHash: hash, UserID: userID, CSRF: csrf, CreatedAt: started, ExpiresAt: now.Add(m.MaxAge),
 	})
 	if err != nil {
 		return "", err
@@ -125,10 +134,12 @@ func (m *Manager) Authenticate(r *http.Request) (Principal, error) {
 	if err != nil {
 		return Principal{}, err
 	}
-	// Activity, throttled inside the store to once a minute. A failed touch must
+	// Activity, written at most once a minute (also guarded inside the store). A failed touch must
 	// not fail the request: the session is valid, only its idle clock is stale.
-	if err := m.Store.TouchSession(r.Context(), sp.SessionID, now); err != nil {
-		m.Log.Warn("cannot record session activity", "error", err.Error())
+	if now.Sub(sp.LastSeen) >= TouchEvery {
+		if err := m.Store.TouchSession(r.Context(), sp.SessionID, now); err != nil {
+			m.Log.Warn("cannot record session activity", "error", err.Error())
+		}
 	}
 	return Principal{
 		SessionID: sp.SessionID, UserID: sp.UserID, Email: sp.Email, Name: sp.Name, Role: sp.Role,

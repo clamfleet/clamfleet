@@ -17,11 +17,20 @@ FROM user_sessions s JOIN users u ON u.id = s.user_id
 WHERE s.token_hash = sqlc.arg(token_hash)
   AND s.expires_at > sqlc.arg(now)
   AND s.last_seen_at > sqlc.arg(idle_cutoff)
-  AND u.disabled_at IS NULL;
+  AND u.disabled_at IS NULL
+  -- Rule: a session born before the user's last password change is dead. A login
+  -- stamps its session with the time it STARTED verifying; if a reset commits
+  -- while the hash runs, the session it then creates is older than the change.
+  AND s.created_at >= COALESCE(u.password_changed_at, 0);
 
 -- name: TouchSession :exec
 UPDATE user_sessions SET last_seen_at = sqlc.arg(now)
 WHERE id = sqlc.arg(id) AND last_seen_at < sqlc.arg(touch_before);
+
+-- name: RenewSessionCreated :exec
+-- The session that survives a self-service password change is re-dated to the
+-- change, so the rule above does not kill it.
+UPDATE user_sessions SET created_at = sqlc.arg(now) WHERE token_hash = sqlc.arg(token_hash) AND user_id = sqlc.arg(user_id);
 
 -- name: DeleteSessionByHash :exec
 DELETE FROM user_sessions WHERE token_hash = sqlc.arg(token_hash);

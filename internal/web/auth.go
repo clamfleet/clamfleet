@@ -95,6 +95,10 @@ func (w *Web) loginSubmit(rw http.ResponseWriter, r *http.Request) {
 	outcome := webauth.Aborted // until there is a verdict: a server fault is nobody's failed guess
 	defer func() { done(outcome) }()
 
+	// The session is dated from HERE, before the slow hash: if a password reset
+	// commits while it runs, the session created afterwards is older than the
+	// change and the session lookup refuses it (see SessionPrincipalByTokenHash).
+	started := w.Now()
 	user, reason, err := w.checkPassword(r, email, password)
 	if err != nil {
 		w.Log.Error("login: store or hasher failed", "error", err.Error())
@@ -128,7 +132,7 @@ func (w *Web) loginSubmit(rw http.ResponseWriter, r *http.Request) {
 		w.errorPage(rw, r, http.StatusInternalServerError)
 		return
 	}
-	token, err := w.Auth.Create(r.Context(), user.ID)
+	token, err := w.Auth.Create(r.Context(), user.ID, started)
 	if err != nil {
 		w.Log.Error("login: cannot create session", "error", err.Error())
 		w.errorPage(rw, r, http.StatusInternalServerError)
@@ -180,7 +184,7 @@ func (w *Web) checkPassword(r *http.Request, email, password string) (user store
 		// Best effort: the login succeeded; a failed upgrade is retried next time.
 		if h, err := w.Hasher.Hash(ctx, password); err != nil {
 			w.Log.Warn("cannot rehash password", "error", err.Error())
-		} else if err := w.Store.RehashPassword(ctx, u.ID, h, w.Now()); err != nil {
+		} else if err := w.Store.RehashPassword(ctx, u.ID, u.PasswordHash, h, w.Now()); err != nil {
 			w.Log.Warn("cannot store rehashed password", "error", err.Error())
 		}
 	}

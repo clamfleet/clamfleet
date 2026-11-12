@@ -59,7 +59,7 @@ func newMgr(f *fakeSessions) *Manager {
 // signedIn registers a session with the given role and returns its cookie and principal.
 func signedIn(t *testing.T, f *fakeSessions, m *Manager, role string, mustChange bool) (*http.Cookie, Principal) {
 	t.Helper()
-	tok, err := m.Create(context.Background(), 7)
+	tok, err := m.Create(context.Background(), 7, clk)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -139,9 +139,6 @@ func TestRequireUserAndAdmin(t *testing.T) {
 	admin, _ := signedIn(t, f, m, "admin", false)
 	if w := do(m.RequireUser(ok200), "GET", "/", viewer, nil, ""); w.Code != 200 || w.Body.String() != "hello u@example.com" {
 		t.Fatalf("%d %s", w.Code, w.Body)
-	}
-	if f.touch == 0 {
-		t.Fatal("activity was not recorded")
 	}
 	adm := m.RequireAdmin(ok200)
 	if w := do(adm, "GET", "/admin/hosts", viewer, nil, ""); w.Code != 403 {
@@ -253,11 +250,11 @@ func TestCrossOriginProtection(t *testing.T) {
 func TestCreateIssuesFreshTokenAndIgnoresRequestCookie(t *testing.T) {
 	f := &fakeSessions{byHash: map[string]store.SessionPrincipal{}}
 	m := newMgr(f)
-	a, err := m.Create(context.Background(), 1)
+	a, err := m.Create(context.Background(), 1, clk)
 	if err != nil {
 		t.Fatal(err)
 	}
-	b, _ := m.Create(context.Background(), 1)
+	b, _ := m.Create(context.Background(), 1, clk)
 	if a == b || ParseToken(a) != nil {
 		t.Fatalf("tokens %q %q", a, b)
 	}
@@ -265,6 +262,39 @@ func TestCreateIssuesFreshTokenAndIgnoresRequestCookie(t *testing.T) {
 	for h := range f.byHash {
 		if h == a || strings.Contains(h, a[4:]) {
 			t.Fatal("the store received the raw token")
+		}
+	}
+}
+
+// Ordinary requests must not open a write transaction: a touch is only attempted
+// when the last one is a minute old.
+func TestTouchOnlyWhenTheLastOneIsOld(t *testing.T) {
+	f := &fakeSessions{byHash: map[string]store.SessionPrincipal{}}
+	m := newMgr(f)
+	c, _ := signedIn(t, f, m, "viewer", false)
+	h := string(HashToken(c.Value))
+	set := func(lastSeen time.Time) {
+		sp := f.byHash[h]
+		sp.LastSeen = lastSeen
+		f.byHash[h] = sp
+	}
+	h2 := m.RequireUser(ok200)
+	for name, c2 := range map[string]struct {
+		lastSeen time.Time
+		touches  int
+	}{
+		"just seen":        {clk, 0},
+		"59 s ago":         {clk.Add(-59 * time.Second), 0},
+		"exactly a minute": {clk.Add(-time.Minute), 1},
+		"an hour ago":      {clk.Add(-time.Hour), 1},
+	} {
+		set(c2.lastSeen)
+		f.touch = 0
+		if w := do(h2, "GET", "/", c, nil, ""); w.Code != 200 {
+			t.Fatalf("%s: %d", name, w.Code)
+		}
+		if f.touch != c2.touches {
+			t.Errorf("%s: %d touches, want %d", name, f.touch, c2.touches)
 		}
 	}
 }

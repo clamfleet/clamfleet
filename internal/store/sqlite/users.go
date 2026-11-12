@@ -158,6 +158,9 @@ func (s *Store) SetPassword(ctx context.Context, id int64, c store.PasswordChang
 		}
 		if len(c.KeepSession) > 0 {
 			err = q.DeleteUserSessionsExcept(ctx, sqlcdb.DeleteUserSessionsExceptParams{UserID: id, KeepHash: c.KeepSession})
+			if err == nil {
+				err = q.RenewSessionCreated(ctx, sqlcdb.RenewSessionCreatedParams{Now: unix(now), TokenHash: c.KeepSession, UserID: id})
+			}
 		} else {
 			err = q.DeleteUserSessions(ctx, id)
 		}
@@ -173,13 +176,12 @@ func (s *Store) SetPassword(ctx context.Context, id int64, c store.PasswordChang
 }
 
 // RehashPassword implements store.UserStore.
-func (s *Store) RehashPassword(ctx context.Context, id int64, hash string, now time.Time) error {
+func (s *Store) RehashPassword(ctx context.Context, id int64, oldHash, newHash string, now time.Time) error {
 	return s.inTx(ctx, func(q *sqlcdb.Queries) error {
-		n, err := q.RehashUserPassword(ctx, sqlcdb.RehashUserPasswordParams{PasswordHash: nullStr(hash), Now: unix(now), ID: id})
-		if err == nil && n == 0 {
-			err = store.ErrNotFound
-		}
-		return err
+		_, err := q.RehashUserPassword(ctx, sqlcdb.RehashUserPasswordParams{
+			PasswordHash: nullStr(newHash), Now: unix(now), ID: id, ExpectedHash: nullStr(oldHash),
+		})
+		return err // 0 rows: the password changed meanwhile, which is not an error
 	})
 }
 
@@ -218,10 +220,9 @@ func (s *Store) SetDisabled(ctx context.Context, id int64, disabled bool, now ti
 		if _, err := q.SetUserDisabled(ctx, sqlcdb.SetUserDisabledParams{DisabledAt: at, Now: unix(now), ID: id}); err != nil {
 			return err
 		}
-		if disabled {
-			if err := q.DeleteUserSessions(ctx, id); err != nil {
-				return err
-			}
+		// Both ways: see store.UserStore (enable closes the login-vs-disable race).
+		if err := q.DeleteUserSessions(ctx, id); err != nil {
+			return err
 		}
 		return writeAuditKind(ctx, q, now, a, action, store.TargetUser, email, nil)
 	})
