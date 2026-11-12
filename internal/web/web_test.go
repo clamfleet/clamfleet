@@ -30,6 +30,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/clamfleet/clamfleet/internal/health"
 	"github.com/clamfleet/clamfleet/internal/server"
 	"github.com/clamfleet/clamfleet/internal/store"
 	"github.com/clamfleet/clamfleet/internal/store/sqlite"
@@ -90,7 +91,12 @@ func (e *env) advance(d time.Duration) {
 
 type opt func(*server.Deps)
 
-func newEnv(t *testing.T, opts ...opt) *env {
+func newEnv(t *testing.T, opts ...opt) *env { return newEnvAt(t, t0, opts...) }
+
+// newEnvAt starts the injected clock at the given time. Tests that post the
+// golden agent report start it right after the report's own timestamp, so the
+// signatures are fresh and the baseline state is not CRIT.
+func newEnvAt(t *testing.T, at time.Time, opts ...opt) *env {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "web.db")
 	ctx := context.Background()
@@ -101,9 +107,12 @@ func newEnv(t *testing.T, opts ...opt) *env {
 	if err := st.Migrate(ctx); err != nil {
 		t.Fatal(err)
 	}
-	e := &env{t: t, st: st, dbPath: path, logs: &syncBuf{}, now: t0, hasher: &countingHasher{Hasher: webauth.NewHasher()}}
+	e := &env{t: t, st: st, dbPath: path, logs: &syncBuf{}, now: at, hasher: &countingHasher{Hasher: webauth.NewHasher()}}
 	log := slog.New(slog.NewJSONHandler(e.logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	d := server.Deps{Store: st, Now: e.clock, Log: log, Hasher: e.hasher, Version: "9.9.9-test"}
+	// The evaluator runs after every accepted report, as in the real binary.
+	ev := health.New(st, e.clock, server.DefaultConfig().Health.Thresholds(), log)
+	d.AfterReport = ev.Host
 	for _, o := range opts {
 		o(&d)
 	}
@@ -246,6 +255,7 @@ func (e *env) count(query string, args ...any) int {
 
 func TestLoginFlowThroughRouter(t *testing.T) {
 	e := newEnv(t)
+	registerHost(t, e, "web01")
 	e.addUser("ann@example.com", "admin", goodPW, false)
 	b := e.browser()
 
@@ -277,8 +287,8 @@ func TestLoginFlowThroughRouter(t *testing.T) {
 	if strings.Contains(sc, "Max-Age") || strings.Contains(sc, "Expires") || strings.Contains(sc, "Domain") {
 		t.Errorf("Set-Cookie %q must be a host-only session cookie", sc)
 	}
-	if p := b.get("/"); p.status != 200 || !strings.Contains(p.body, `data-testid="fleet-page"`) {
-		t.Fatalf("GET /: %d", p.status)
+	if p := b.get("/"); p.status != 200 || !strings.Contains(p.body, `data-testid="fleet-row-web01"`) {
+		t.Fatalf("GET /: %d (the fleet page must list the host)", p.status)
 	}
 	if n := e.count(`SELECT count(*) FROM audit_log WHERE action='user.login' AND actor='ann@example.com' AND actor_kind='user' AND detail LIKE '%127.0.0.1%'`); n != 1 {
 		t.Fatalf("%d user.login rows with the client IP, want 1", n)

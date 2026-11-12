@@ -85,9 +85,12 @@ type Web struct {
 func New(d Deps) *Web {
 	w := &Web{Deps: d, pages: map[string]*template.Template{}}
 	funcs := template.FuncMap{"lower": strings.ToLower}
-	for _, p := range []string{"login", "fleet", "account", "error"} {
+	for _, p := range []string{"login", "fleet", "host", "account", "error"} {
 		t := template.New(p).Funcs(funcs)
 		files := []string{"templates/layout.html", "templates/" + p + ".html"}
+		if p == "fleet" {
+			files = append(files, "templates/fleet_rows.html")
+		}
 		w.pages[p] = template.Must(t.ParseFS(templateFS, files...))
 	}
 	if d.Auth != nil {
@@ -104,6 +107,8 @@ func (w *Web) Handlers() map[string]http.HandlerFunc {
 		"POST /login":            w.loginSubmit,
 		"POST /logout":           w.logout,
 		"GET /{$}":               w.fleet,
+		"GET /fleet/rows":        w.fleetRows,
+		"GET /hosts/{name}":      w.host,
 		"GET /account":           w.accountPage,
 		"POST /account/password": w.accountPassword,
 	}
@@ -151,6 +156,19 @@ func (w *Web) render(rw http.ResponseWriter, status int, page string, v *view) {
 	rw.Header().Set("Content-Type", "text/html; charset=utf-8")
 	rw.Header().Set("Cache-Control", "no-store")
 	rw.WriteHeader(status)
+	_, _ = rw.Write(buf.Bytes())
+}
+
+// renderPartial executes one named template without the layout (htmx fragments).
+func (w *Web) renderPartial(rw http.ResponseWriter, page, name string, body any) {
+	var buf bytes.Buffer
+	if err := w.pages[page].ExecuteTemplate(&buf, name, body); err != nil {
+		w.Log.Error("render fragment", "page", page, "error", err.Error())
+		http.Error(rw, "internal error", http.StatusInternalServerError)
+		return
+	}
+	rw.Header().Set("Content-Type", "text/html; charset=utf-8")
+	rw.Header().Set("Cache-Control", "no-store")
 	_, _ = rw.Write(buf.Bytes())
 }
 
@@ -214,9 +232,4 @@ func SecurityHeaders(next http.Handler) http.Handler {
 		h.Set("Referrer-Policy", "same-origin")
 		next.ServeHTTP(rw, r)
 	})
-}
-
-// fleet is replaced by the real fleet page in the next step.
-func (w *Web) fleet(rw http.ResponseWriter, r *http.Request) {
-	w.render(rw, http.StatusOK, "fleet", w.newView(r, "Fleet", "fleet", nil))
 }

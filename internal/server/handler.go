@@ -67,6 +67,8 @@ func Routes() []Route {
 		// {$}, not "/": in Go's mux "GET /" matches EVERY GET path, so an unknown
 		// URL would render the fleet instead of a 404.
 		{"GET", "/{$}", AuthUser},
+		{"GET", "/fleet/rows", AuthUser},
+		{"GET", "/hosts/{name}", AuthUser},
 		{"GET", "/account", AuthUser},
 		{"POST", "/account/password", AuthUser},
 	}
