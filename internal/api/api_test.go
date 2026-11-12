@@ -105,7 +105,9 @@ func (e *env) do(method, path, token string, body []byte) resp {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	r, err := e.srv.Client().Do(req)
+	// Redirects are not followed: the route-table test must see the 303 itself.
+	c := &http.Client{Transport: e.srv.Client().Transport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	r, err := c.Do(req)
 	if err != nil {
 		e.t.Fatal(err)
 	}
@@ -519,13 +521,20 @@ func TestStoreDownGives503(t *testing.T) {
 // exactly and probed against NewHandler: a route registered outside this list, or with the wrong auth
 // class, fails here.
 func TestRouteTable(t *testing.T) {
-	expected := []struct {
-		method, path string
-		agentAuth    bool
-	}{
-		{"POST", "/v1/report", true},
-		{"POST", "/v1/event", true},
-		{"GET", "/healthz", false},
+	// The console routes (classes public, user, admin) are exercised in depth by
+	// internal/web TestUIRouteTable; here they are pinned in the table and probed
+	// without any credential, so a route moved to a weaker class fails in two places.
+	expected := []server.Route{
+		{Method: "POST", Path: "/v1/report", Auth: server.AuthAgent},
+		{Method: "POST", Path: "/v1/event", Auth: server.AuthAgent},
+		{Method: "GET", Path: "/healthz", Auth: server.AuthNone},
+		{Method: "GET", Path: "/static/{file}", Auth: server.AuthPublic},
+		{Method: "GET", Path: "/login", Auth: server.AuthPublic},
+		{Method: "POST", Path: "/login", Auth: server.AuthPublic},
+		{Method: "POST", Path: "/logout", Auth: server.AuthUser},
+		{Method: "GET", Path: "/{$}", Auth: server.AuthUser},
+		{Method: "GET", Path: "/account", Auth: server.AuthUser},
+		{Method: "POST", Path: "/account/password", Auth: server.AuthUser},
 	}
 	// The declared table must match the hardcoded list exactly, so a route that
 	// is added to server.Routes() (even an open one the probe below would not
@@ -535,32 +544,41 @@ func TestRouteTable(t *testing.T) {
 		t.Fatalf("server.Routes() = %v, want exactly %v", got, expected)
 	}
 	for i, rt := range expected {
-		class := server.AuthNone
-		if rt.agentAuth {
-			class = server.AuthAgent
-		}
-		if got[i] != (server.Route{Method: rt.method, Path: rt.path, Auth: class}) {
-			t.Fatalf("server.Routes()[%d] = %v, want %s %s (%s)", i, got[i], rt.method, rt.path, class)
+		if got[i] != rt {
+			t.Fatalf("server.Routes()[%d] = %v, want %v", i, got[i], rt)
 		}
 	}
 	e := newEnv(t)
+	concrete := strings.NewReplacer("{$}", "", "{file}", "app.css")
 	for _, rt := range expected {
-		r := e.do(rt.method, rt.path, "", golden(t))
-		if rt.agentAuth && r.status != 401 {
-			t.Errorf("%s %s: status %d without a token, want 401", rt.method, rt.path, r.status)
-		}
-		if !rt.agentAuth && r.status != 200 {
-			t.Errorf("%s %s: status %d, want 200", rt.method, rt.path, r.status)
-		}
-		if rt.agentAuth {
+		path := concrete.Replace(rt.Path)
+		var r resp
+		switch rt.Auth {
+		case server.AuthAgent:
+			r = e.do(rt.Method, path, "", golden(t))
+			if r.status != 401 {
+				t.Errorf("%s %s: status %d without a token, want 401", rt.Method, rt.Path, r.status)
+			}
 			// A valid token must get through the same route.
-			tok := e.host("probe" + strings.NewReplacer("/", "-", ".", "-").Replace(rt.path))
+			tok := e.host("probe" + strings.NewReplacer("/", "-", ".", "-").Replace(rt.Path))
 			body := golden(t)
-			if strings.HasSuffix(rt.path, "/event") {
+			if strings.HasSuffix(rt.Path, "/event") {
 				body = event(t, nil)
 			}
-			if r := e.do(rt.method, rt.path, tok, body); r.status != 202 {
-				t.Errorf("%s %s: status %d with a valid token, want 202", rt.method, rt.path, r.status)
+			if r := e.do(rt.Method, path, tok, body); r.status != 202 {
+				t.Errorf("%s %s: status %d with a valid token, want 202", rt.Method, rt.Path, r.status)
+			}
+		case server.AuthNone, server.AuthPublic:
+			if r = e.do(rt.Method, path, "", nil); r.status != 200 {
+				t.Errorf("%s %s: status %d, want 200", rt.Method, rt.Path, r.status)
+			}
+		case server.AuthUser, server.AuthAdmin:
+			want := 401
+			if rt.Method == "GET" {
+				want = 303
+			}
+			if r = e.do(rt.Method, path, "", nil); r.status != want {
+				t.Errorf("%s %s: status %d without a session, want %d", rt.Method, rt.Path, r.status, want)
 			}
 		}
 	}
@@ -569,11 +587,13 @@ func TestRouteTable(t *testing.T) {
 	// 401 would mean an unlisted authenticated route exists, a 2xx an open one).
 	listed := map[string]bool{}
 	for _, rt := range expected {
-		listed[rt.method+" "+rt.path] = true
+		listed[rt.Method+" "+concrete.Replace(rt.Path)] = true
 	}
-	paths := []string{"/", "/metrics", "/v1", "/v1/", "/v1/tasks", "/v1/hosts", "/v1/events", "/v1/reports", "/api/v1/report", "/admin", "/login"}
+	paths := []string{"/", "/metrics", "/v1", "/v1/", "/v1/tasks", "/v1/hosts", "/v1/events", "/v1/reports", "/api/v1/report", "/admin", "/login", "/fleet", "/hosts", "/users", "/static/"}
 	for _, rt := range expected {
-		paths = append(paths, rt.path)
+		if !strings.Contains(rt.Path, "{") || rt.Path == "/{$}" {
+			paths = append(paths, concrete.Replace(rt.Path))
+		}
 	}
 	for _, p := range paths {
 		for _, m := range []string{"GET", "POST", "PUT", "PATCH", "DELETE"} {

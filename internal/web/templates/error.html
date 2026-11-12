@@ -1,0 +1,10 @@
+{{/* SPDX-License-Identifier: AGPL-3.0-only */}}
+{{/* SPDX-FileCopyrightText: The ClamFleet Authors */}}
+{{/* error.html: a status page. Body: struct{Status int; StatusText, Message string}. The text is fixed per status. */}}
+{{define "content"}}
+<div class="card" data-testid="error-page" data-status="{{.Body.Status}}">
+  <h1>{{.Body.Status}} {{.Body.StatusText}}</h1>
+  <p>{{.Body.Message}}</p>
+  <p><a href="/">Back to the fleet</a></p>
+</div>
+{{end}}
