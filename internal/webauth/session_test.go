@@ -1,0 +1,173 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-FileCopyrightText: The ClamFleet Authors
+
+package webauth
+
+import (
+	"net/http"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/clamfleet/clamfleet/internal/agentauth"
+)
+
+func TestTokenFormat(t *testing.T) {
+	tok, hash, err := NewToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(tok, "cfs_") || len(tok) != 47 || ParseToken(tok) != nil {
+		t.Fatalf("token %q", tok)
+	}
+	if len(hash) != 32 || string(hash) != string(HashToken(tok)) || strings.Contains(string(hash), tok[4:]) {
+		t.Fatal("hash is not SHA-256 of the token")
+	}
+	// An agent token is not a session token, and the other way round.
+	agentTok, _, _ := agentauth.Generate()
+	if ParseToken(agentTok) == nil {
+		t.Fatal("an agent token (cfa_) was accepted as a session token")
+	}
+	if agentauth.Parse(tok) == nil {
+		t.Fatal("a session token (cfs_) was accepted as an agent token")
+	}
+	for _, bad := range []string{"", "cfs_", tok + "x", tok[:46], "cfs_" + strings.Repeat("!", 43), "xxx_" + tok[4:]} {
+		if ParseToken(bad) == nil {
+			t.Errorf("%q accepted", bad)
+		}
+	}
+}
+
+func TestCookieFlags(t *testing.T) {
+	c := NewCookie("cfs_x", true)
+	if c.Name != "__Host-clamfleet_session" || !c.HttpOnly || !c.Secure || c.SameSite != http.SameSiteLaxMode ||
+		c.Path != "/" || c.Domain != "" || c.MaxAge != 0 || !c.Expires.IsZero() {
+		t.Fatalf("%+v", c)
+	}
+	h := c.String()
+	for _, want := range []string{"HttpOnly", "Secure", "SameSite=Lax", "Path=/"} {
+		if !strings.Contains(h, want) {
+			t.Errorf("Set-Cookie %q lacks %s", h, want)
+		}
+	}
+	d := NewCookie("cfs_x", false)
+	if d.Name != "clamfleet_session" || d.Secure || !d.HttpOnly || d.SameSite != http.SameSiteLaxMode {
+		t.Fatalf("development cookie: %+v", d)
+	}
+	if cl := ClearCookie(true); cl.MaxAge >= 0 || cl.Value != "" {
+		t.Fatalf("clear cookie: %+v", cl)
+	}
+}
+
+func TestSanitizeNext(t *testing.T) {
+	cases := map[string]string{
+		"/hosts/web01":             "/hosts/web01",
+		"/fleet/rows?tag=a&b=c":    "/fleet/rows?tag=a&b=c",
+		"":                         "/",
+		"//evil.example":           "/",
+		"/\\evil.example":          "/",
+		"https://evil.example":     "/",
+		"javascript:alert(1)":      "/",
+		"evil":                     "/",
+		"/ok\r\nSet-Cookie: x":     "/",
+		"/a\\b":                    "/",
+		"/login":                   "/",
+		"/login?next=/x":           "/",
+		"/logout":                  "/",
+		"/%2f%2fevil":              "/%2f%2fevil", // still a local path: the browser does not decode it into //
+		strings.Repeat("/a", 2000): "/",
+	}
+	for in, want := range cases {
+		if got := SanitizeNext(in); got != want {
+			t.Errorf("SanitizeNext(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestCSRFTokenMaskingAndMatching(t *testing.T) {
+	secret := []byte("0123456789abcdef0123456789abcdef")
+	p := Principal{csrf: secret}
+	a, b := p.CSRFToken(), p.CSRFToken()
+	if a == b {
+		t.Fatal("two renderings of the token are identical: no masking")
+	}
+	if !tokenMatches(secret, a) || !tokenMatches(secret, b) {
+		t.Fatal("a freshly masked token does not match")
+	}
+	other := Principal{csrf: []byte("fedcba9876543210fedcba9876543210")}
+	for name, tok := range map[string]string{
+		"empty": "", "garbage": "!!!", "other session": other.CSRFToken(),
+		"truncated": a[:len(a)-4], "too long": a + a, "raw secret": string(secret),
+	} {
+		if tokenMatches(secret, tok) {
+			t.Errorf("%s accepted", name)
+		}
+	}
+	if tokenMatches(nil, a) {
+		t.Fatal("matched against an empty secret")
+	}
+}
+
+func TestThrottle(t *testing.T) {
+	now := time.Date(2031, 1, 1, 12, 0, 0, 0, time.UTC)
+	th := NewThrottle(func() time.Time { return now })
+	for i := 1; i <= 4; i++ {
+		if d := th.Fail("Ann@Example.com"); d != 0 {
+			t.Fatalf("failure %d already delays by %v", i, d)
+		}
+		if w := th.Wait("ann@example.com"); w != 0 {
+			t.Fatalf("wait after %d failures: %v", i, w)
+		}
+	}
+	if d := th.Fail("ann@example.com"); d != 30*time.Second {
+		t.Fatalf("5th failure delay %v, want 30s", d)
+	}
+	if w := th.Wait("ANN@example.com"); w != 30*time.Second {
+		t.Fatalf("wait %v", w)
+	}
+	// Other emails are unaffected; unknown emails are throttled like known ones.
+	if w := th.Wait("bob@example.com"); w != 0 {
+		t.Fatalf("another email is throttled: %v", w)
+	}
+	now = now.Add(31 * time.Second)
+	if w := th.Wait("ann@example.com"); w != 0 {
+		t.Fatalf("still waiting after the delay: %v", w)
+	}
+	// Doubling: 60 s, 120 s, ... capped at 15 min.
+	want := []time.Duration{time.Minute, 2 * time.Minute, 4 * time.Minute, 8 * time.Minute, 15 * time.Minute, 15 * time.Minute}
+	for i, w := range want {
+		d := th.Fail("ann@example.com")
+		if d != w {
+			t.Fatalf("failure %d: delay %v, want %v", i+6, d, w)
+		}
+		now = now.Add(d)
+	}
+	// A success resets everything.
+	th.Success("ann@example.com")
+	if d := th.Fail("ann@example.com"); d != 0 {
+		t.Fatalf("after success a single failure delays by %v", d)
+	}
+}
+
+func TestThrottleWindowForgetsOldFailures(t *testing.T) {
+	now := time.Date(2031, 1, 1, 12, 0, 0, 0, time.UTC)
+	th := NewThrottle(func() time.Time { return now })
+	for i := 0; i < 4; i++ {
+		th.Fail("a@example.com")
+	}
+	now = now.Add(16 * time.Minute) // outside the 15 min window
+	if d := th.Fail("a@example.com"); d != 0 {
+		t.Fatalf("4 old failures + 1 new one delayed by %v; the window should have reset", d)
+	}
+}
+
+func TestThrottleMemoryIsBounded(t *testing.T) {
+	now := time.Date(2031, 1, 1, 12, 0, 0, 0, time.UTC)
+	th := NewThrottle(func() time.Time { return now })
+	for i := 0; i < throttleMaxEntries+500; i++ {
+		th.Fail(strings.Repeat("x", 10) + string(rune('a'+i%26)) + time.Duration(i).String())
+	}
+	if len(th.m) > throttleMaxEntries {
+		t.Fatalf("%d entries, cap %d", len(th.m), throttleMaxEntries)
+	}
+}
