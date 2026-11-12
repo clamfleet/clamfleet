@@ -9,7 +9,7 @@ BIN := bin
 VERSION ?= 0.0.0-dev
 LDFLAGS := -s -w -X github.com/clamfleet/clamfleet/internal/version.Version=$(VERSION)
 
-.PHONY: build vet staticcheck test scripts-test sqlc-check generate check e2e fixtures
+.PHONY: build vet staticcheck test scripts-test sqlc-check generate check e2e fixtures webfixture web-fixture
 
 # Both binaries are static (CGO_ENABLED=0: the server uses pure-Go SQLite).
 build:
@@ -55,3 +55,13 @@ e2e:
 
 fixtures:
 	./deploy/test/capture-fixtures.sh
+
+# Browser fixture (docs/testing.md "Browser fixture"): a throwaway server on 127.0.0.1 with
+# seeded users and hosts. `webfixture` only builds the program (bin/webfixture), which is what
+# a test runner should start so signals reach it directly; `web-fixture` builds everything and
+# runs it in the foreground until Ctrl-C.
+webfixture: build
+	CGO_ENABLED=0 $(GO) build -trimpath -o $(BIN)/webfixture ./hack/webfixture
+
+web-fixture: webfixture
+	$(BIN)/webfixture --server-bin $(BIN)/clamfleet-server $(WEB_FIXTURE_ARGS)
