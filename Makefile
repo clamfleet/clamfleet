@@ -11,8 +11,10 @@ LDFLAGS := -s -w -X github.com/clamfleet/clamfleet/internal/version.Version=$(VE
 
 .PHONY: build vet staticcheck test scripts-test sqlc-check generate check e2e fixtures
 
+# Both binaries are static (CGO_ENABLED=0: the server uses pure-Go SQLite).
 build:
 	CGO_ENABLED=0 $(GO) build -trimpath -ldflags '$(LDFLAGS)' -o $(BIN)/clamfleet-agent ./cmd/clamfleet-agent
+	CGO_ENABLED=0 $(GO) build -trimpath -ldflags '$(LDFLAGS)' -o $(BIN)/clamfleet-server ./cmd/clamfleet-server
 
 vet:
 	$(GO) vet ./...
