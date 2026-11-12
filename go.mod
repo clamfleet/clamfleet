@@ -10,6 +10,7 @@ toolchain go1.27.4
 require (
 	github.com/pressly/goose/v3 v3.30.0
 	go.yaml.in/yaml/v3 v3.0.6
+	golang.org/x/crypto v0.59.0
 	modernc.org/sqlite v1.62.0
 )
 
