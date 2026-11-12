@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# SPDX-FileCopyrightText: The ClamFleet Authors
+#
+# /etc/clamfleet/server.yaml. Every key can also be set by an environment
+# variable: CLAMFLEET_SERVER_ + the key path in capitals, e.g.
+# CLAMFLEET_SERVER_TLS_CERT. The file is read strictly: an unknown key is an error.
+
+# Intended deployment: plaintext on loopback behind a reverse proxy that
+# terminates TLS. Plaintext is refused on any non-loopback address.
+listen: 127.0.0.1:8443
+tls:
+  cert: ""        # set cert and key together for direct TLS (then listen may be ":8443")
+  key: ""
+  client_ca: ""   # optional mTLS: require agent client certificates signed by this CA
+                  # (needs direct TLS; the agent token is still required)
+db_path: /var/lib/clamfleet-server/clamfleet.db   # local disk only: SQLite WAL does not work on network filesystems
