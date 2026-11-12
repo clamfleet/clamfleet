@@ -1,0 +1,79 @@
+{{/* SPDX-License-Identifier: AGPL-3.0-only */}}
+{{/* SPDX-FileCopyrightText: The ClamFleet Authors */}}
+{{/*
+  host.html: one host. Body: web.hostBody. Everything in the report summary is
+  agent-supplied and escaped by html/template. The admin-only block is filled
+  by the handler only for an admin, so a viewer never receives it.
+*/}}
+{{define "content"}}
+{{with .Body}}
+<h1 data-testid="host-page" data-host="{{.Name}}">{{.Name}}
+  <span class="badge {{.State}}" data-testid="host-state">{{.State}}</span>
+  {{if not .HasToken}}<span class="revoked" data-testid="host-revoked">(token revoked)</span>{{end}}
+</h1>
+
+<div class="card">
+  <h2>Why</h2>
+  {{if .Reasons}}
+  <ul class="reasons" data-testid="host-reasons">{{range .Reasons}}<li><strong>{{.Severity}}</strong> <code>{{.Rule}}</code>: {{.Msg}}</li>{{end}}</ul>
+  {{else}}<p data-testid="host-no-reasons">{{if eq .State "OK"}}Nothing to report.{{else}}No evaluation yet.{{end}}</p>{{end}}
+  {{if .Since}}<p class="hint">In this state since <span title="{{.SinceAbs}}">{{.Since}}</span>.</p>{{end}}
+</div>
+
+<div class="card">
+  <h2>Host</h2>
+  <dl class="facts">
+    <dt>First seen</dt><dd>{{if .FirstSeen}}{{.FirstSeen}}{{else}}never{{end}}</dd>
+    <dt>Last seen</dt><dd>{{if .LastSeenAgo}}<span title="{{.LastSeenAbs}}">{{.LastSeenAgo}}</span> ({{.LastSeenAbs}}){{else}}never{{end}}</dd>
+    <dt>Reported as</dt><dd>{{if .ReportedName}}{{.ReportedName}}{{else}}-{{end}}</dd>
+    <dt>Agent</dt><dd>{{if .AgentVersion}}{{.AgentVersion}}{{else}}-{{end}}</dd>
+    <dt>Tags</dt><dd>{{range .Tags}}<span class="tag">{{.}}</span>{{else}}-{{end}}</dd>
+    <dt>Reports stored</dt><dd>{{.ReportCount}}</dd>
+  </dl>
+</div>
+
+{{with .Report}}
+<div class="card" data-testid="host-report">
+  <h2>Newest report <span class="hint">({{.ReportTime}})</span></h2>
+  <dl class="facts">
+    <dt>clamd</dt><dd>{{if .ClamdUp}}up{{else}}<strong>down</strong>{{end}}{{if .ClamdVersion}}, version {{.ClamdVersion}}{{end}}{{if .ClamdQueue}}, queue {{.ClamdQueue}}{{end}}{{if .ClamdError}} ({{.ClamdError}}){{end}}</dd>
+    {{range .Sigs}}<dt>{{.Name}}.cvd</dt><dd>version {{.Version}}, built {{.Built}} ({{.Age}} old), {{.Sigs}} signatures</dd>{{else}}<dt>Signatures</dt><dd><strong>none reported</strong></dd>{{end}}
+    <dt>freshclam</dt><dd>{{if .FreshclamOK}}last OK {{.FreshclamOK}}{{else}}no successful update seen{{end}}{{if .FreshclamErr}}; last error {{.FreshclamErr}}{{if .FreshclamMsg}}: {{.FreshclamMsg}}{{end}}{{end}}{{if .Source}} <span class="hint">(from {{.Source}})</span>{{end}}</dd>
+    {{range .Services}}<dt>{{.Name}} service</dt><dd>{{.State}}</dd>{{end}}
+    <dt>Last scan</dt><dd>{{with .Scan}}finished <span title="{{.Finished}}">{{.FinishedAgo}}</span>, exit {{.Exit}}, {{.Scanned}} scanned, {{.Infected}} infected, {{.Errors}} errors{{else}}none reported{{end}}</dd>
+  </dl>
+</div>
+{{end}}
+
+<div class="card">
+  <h2>State history</h2>
+  {{if .History}}
+  <table data-testid="host-history">
+    <thead><tr><th>When</th><th>Change</th><th>Reasons then</th></tr></thead>
+    <tbody>
+    {{range .History}}
+    <tr data-testid="host-history-row"><td class="num"><span title="{{.WhenAbs}}">{{.When}}</span></td>
+      <td class="num">{{.From}} &rarr; <span class="badge {{.To}}">{{.To}}</span></td>
+      <td>{{if .Reasons}}<ul class="reasons">{{range .Reasons}}<li>{{.Msg}}</li>{{end}}</ul>{{end}}</td></tr>
+    {{end}}
+    </tbody>
+  </table>
+  {{else}}<p data-testid="host-no-history">No state changes recorded yet.</p>{{end}}
+</div>
+
+{{if .IsAdmin}}
+<div class="card" data-testid="host-admin">
+  <h2>Administration</h2>
+  <p>Token set {{if .TokenCreated}}{{.TokenCreated}}{{else}}-{{end}}.</p>
+  {{template "host_actions" (actions .Name .HasToken $.CSRF)}}
+  <h2>Audit</h2>
+  {{if .Audit}}
+  <table data-testid="host-audit">
+    <thead><tr><th>When</th><th>Who</th><th>What</th></tr></thead>
+    <tbody>{{range .Audit}}<tr data-testid="host-audit-row"><td class="num">{{.When}}</td><td>{{.Actor}} <span class="hint">({{.ActorKind}})</span></td><td>{{.Action}}</td></tr>{{end}}</tbody>
+  </table>
+  {{else}}<p>No audit entries.</p>{{end}}
+</div>
+{{end}}
+{{end}}
+{{end}}

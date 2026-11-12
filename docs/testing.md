@@ -11,6 +11,12 @@ SPDX-FileCopyrightText: The ClamFleet Authors
 make check      # go vet, staticcheck, sqlc diff, go test ./..., script tests (no container, no network)
 ```
 
+The web console is tested through the real router: `internal/web` starts `server.NewHandler` behind an
+`httptest` TLS server (the production cookie is `Secure`, so a plain-HTTP client would never send it back),
+signs in with a cookie-jar client and an injected clock, and posts real agent reports. Note that the
+`cmd/clamfleet-server` and `hack/webfixture` tests build the binaries themselves, which `go test` does not
+see as inputs: use `go test -count=1` when you change code they cover, or a cached "ok" proves nothing.
+
 `staticcheck` and `sqlc` must be installed (`go install honnef.co/go/tools/cmd/staticcheck@v0.8.2`;
 2026.2.2 supports Go 1.27; `CGO_ENABLED=0 go install github.com/sqlc-dev/sqlc/cmd/sqlc@v1.31.1`).
 `sqlc diff` fails when `internal/store/sqlite/sqlcdb` is stale: run `make generate`. The tests inject the clock, the time zone, `systemctl`/`journalctl` and the
@@ -99,6 +105,56 @@ Things that fail in ways that do not look like the cause:
 - A missing `CFT_EXEC` is a hard failure, never a skip.
 - The container must be on UTC: freshclam's log times have no zone, and the tests compare them
   with UTC values. The suite checks this first.
+
+## Browser fixture (`make web-fixture`)
+
+The console's browser tests (Playwright) need a server they can start on loopback with known logins and
+hosts. `hack/webfixture` is that server; `make webfixture` builds `bin/webfixture` (and the server), and
+`make web-fixture` runs it in the foreground until Ctrl-C. A test runner should start the binary itself:
+
+```
+bin/webfixture --server-bin bin/clamfleet-server [--port N] [--json-out PATH] [--keep]
+```
+
+It creates a private temp directory with throwaway TLS files, migrates, seeds, starts the real server
+(`https://127.0.0.1:<port>`, 1 s health evaluation, production cookie settings), prints one line
+`READY https://127.0.0.1:<port>` on stdout and waits. SIGINT or SIGTERM stops the server and deletes
+the directory; nothing outlives it and nothing listens beyond 127.0.0.1. The browser must ignore the
+certificate error (`ignoreHTTPSErrors`) or trust `ca_cert`. The server log is `server_log` in the JSON.
+
+`<tmp>/fixture.json` (also copied to `--json-out`; mode 0600) holds the URL, the CA, the logins and the
+host tokens. Passwords and tokens are random per run, so read them from the file:
+
+| Seed | Content |
+|---|---|
+| `admin` | `admin@fixture.example`, role admin |
+| `viewer` | `viewer@fixture.example`, role viewer |
+| `must_change` | `newbie@fixture.example`, viewer with a one-time password: signing in lands on `/account` |
+| `ok01` | OK, tags `prod`, `web` |
+| `warn01` | WARN, freshclam unit inactive (tags `prod`, `db`) |
+| `crit01` | CRIT, clamd down with `ping: timeout` (tag `staging`) |
+| `stale01` | OK at start (report interval 10 s), STALE about 35 s later |
+| `pending01` | registered, never reported: state `pending` |
+| `xss01` | WARN, with HTML in a tag, the reported host name and the freshclam error: it must render inert |
+
+A spec can change a state by posting its own report with the host's token to `POST /v1/report`
+(`Authorization: Bearer <token>`, schema 1, `ts` strictly newer than the previous one; see `docs/api.md`):
+the fleet page's live region refreshes every 15 s.
+
+Stable selectors (`data-testid`): `login-form`, `login-email`, `login-password`, `login-submit`, `error`
+(an error banner), `notice`, `current-user`, `nav-fleet`, `nav-admin` (admins only), `nav-account`,
+`logout-button`, `fleet-live`, `fleet-counts`, `count-<STATE>`, `fleet-table`, `fleet-row-<host>` (with
+`data-state`), `fleet-state-<host>`, `fleet-reasons-<host>`, `fleet-link-<host>`, `fleet-filter-tag`,
+`fleet-filter-state`, `fleet-filter-submit`, `fleet-empty`, `fleet-no-match`; `host-page`, `host-state`,
+`host-reasons`, `host-report`, `host-history`, `host-history-row`, `host-admin`, `host-audit`,
+`host-actions-<host>`; `admin-hosts-page`, `admin-register-form`, `admin-register-name`,
+`admin-register-submit`, `admin-hosts-table`, `admin-host-row-<host>`, `rotate-open-<host>`,
+`rotate-submit-<host>`, `revoke-open-<host>`, `revoke-submit-<host>`, `delete-open-<host>`,
+`delete-confirm-<host>`, `delete-submit-<host>`; `token-page`, `token-value`, `token-done`;
+`account-page`, `account-form`, `account-current`, `account-new`, `account-new2`, `account-submit`,
+`must-change`; `error-page` (with `data-status`). The CSRF token is in `<meta name="csrf-token">`.
+Rotate, revoke and delete forms are inside `<details>` elements: click the `*-open-*` summary first.
+`make check` starts the fixture once and signs in with it (`hack/webfixture`'s own test).
 
 ## Re-recording fixtures (`make fixtures`)
 

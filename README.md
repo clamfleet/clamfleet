@@ -42,6 +42,10 @@ found anything.
   and every token change is written to an audit log. `clamfleet-server migrate` creates or upgrades
   the database.
 - Configuration of the server from a YAML file, with `CLAMFLEET_SERVER_*` environment overrides.
+- **Web console** at the root of the server's origin (see [docs/web.md](docs/web.md)): local accounts
+  with the roles `viewer` and `admin` (managed with `clamfleet-server user ...`), cookie sessions with
+  CSRF protection, a live fleet overview, a page per host with its state history, and host administration
+  for admins (register, rotate, revoke, delete). It is server-rendered, with htmx vendored (no CDN).
 
 A data source that cannot be read does not fail the report. It appears as `null`, and a warning goes
 to stderr.
@@ -65,6 +69,7 @@ make build      # static binaries bin/clamfleet-agent and bin/clamfleet-server (
 make check      # go vet, staticcheck, sqlc diff, go test ./..., script tests; no container needed
 make generate   # regenerate internal/store/sqlite/sqlcdb after changing a migration or query
 make e2e        # end-to-end tests inside a ClamAV container; needs setup
+make web-fixture   # a throwaway console on 127.0.0.1 with seeded users and hosts, for browser tests (docs/testing.md)
 ```
 
 `make e2e` runs the real agent and server binaries in an Incus container as unprivileged users. It
@@ -125,6 +130,10 @@ install -m 644 deploy/server.yaml.example /etc/clamfleet/server.yaml
 | `health.behind_warn` | `CLAMFLEET_SERVER_HEALTH_BEHIND_WARN` | `2` |
 | `health.scan_warn_hours` | `CLAMFLEET_SERVER_HEALTH_SCAN_WARN_HOURS` | `48` (0 = off) |
 | `health.eval_interval` | `CLAMFLEET_SERVER_HEALTH_EVAL_INTERVAL` | `60s` (1s to 60s) |
+| `auth.local.enabled` | `CLAMFLEET_SERVER_AUTH_LOCAL_ENABLED` | `true` (email and password accounts) |
+| `auth.session_max_age` | `CLAMFLEET_SERVER_AUTH_SESSION_MAX_AGE` | `12h` (5m to 720h) |
+| `auth.session_idle` | `CLAMFLEET_SERVER_AUTH_SESSION_IDLE` | `1h` (at least 1m; not above the max age) |
+| `auth.cookie_secure` | `CLAMFLEET_SERVER_AUTH_COOKIE_SECURE` | `true`; `false` only for plain-HTTP development (drops `Secure` and the `__Host-` prefix, logs a warning) |
 
 The config file path is `--config`, else `CLAMFLEET_SERVER_CONFIG`, else `/etc/clamfleet/server.yaml`.
 The file is read strictly: an unknown key is an error, so a copy of the spec's example with keys of
@@ -167,6 +176,15 @@ ReadWritePaths=/var/lib/clamfleet-server
 per request: method, path, status, host name, duration and the client IP address, always.
 `--log-level warn` hides the accepted-request lines; `debug` adds health checks.
 
+**3b. Create the first console user.** A fresh database has no users (see [docs/web.md](docs/web.md)):
+
+```
+sudo -u clamfleet-server clamfleet-server user add you@example.com --role admin   # prints a one-time password
+```
+
+Open the server's HTTPS address, sign in, and choose your own password when asked. The console needs
+HTTPS at the root of its origin (a TLS-terminating reverse proxy is fine).
+
 **4. Register a host and give the agent its token.** Run the admin commands as the server user, so
 audit rows name the person (`SUDO_USER`) and the commands run with least privilege (a host command
 run as root works but warns). `migrate` and `serve` refuse to create a missing database file as a
@@ -182,7 +200,8 @@ sudo -u clamfleet-server clamfleet-server host revoke-token web01   # the host a
 
 The token (`cfa_` plus 43 characters) is shown once; only its SHA-256 is stored, so it cannot be
 shown again, only replaced. Host names are lowercase `[a-z0-9._-]`. Every add, rotate and revoke
-writes an audit row naming the OS user (`SUDO_USER` if set). Deleting a host is not available yet.
+writes an audit row naming the OS user (`SUDO_USER` if set). `host delete NAME --yes` removes a host
+with all its reports, events and history. Admins can do the same in the web console.
 
 On the monitored host, put the token in the file named by `token_file` (default
 `/etc/clamfleet/token`, mode 0640, owner `root`, group `clamfleet`) and set `server` in
@@ -219,8 +238,9 @@ Things to know:
   missing, so a reader can tell "unknown" from "absent".
 - **Small and boring.** The agent is one static binary with one dependency,
   `go.yaml.in/yaml/v3` (the maintained successor of `gopkg.in/yaml.v3`), and never links SQLite (a
-  test enforces it). The server adds `modernc.org/sqlite` (pure Go) and `github.com/pressly/goose/v3`
-  (migrations). New dependencies need a justification in the spec.
+  test enforces it). The server adds `modernc.org/sqlite` (pure Go), `github.com/pressly/goose/v3`
+  (migrations) and `golang.org/x/crypto` (argon2id password hashing), and serves htmx 2.0.11 as a
+  vendored static file. New dependencies need a justification in the spec.
 - **Stable interfaces.** Report and event payloads and config keys are public. Changing them needs a
   schema version bump.
 
@@ -233,24 +253,26 @@ Things to know:
 
 ## Roadmap
 
-Milestones follow [docs/HANDOVER.md](docs/HANDOVER.md). Milestones 1 and 2 are built.
+Milestones follow [docs/HANDOVER.md](docs/HANDOVER.md). Milestones 1 to 3 are built.
 
 | # | Deliverable | Status |
 |---|---|---|
 | 1 | Shared payload structs, agent collectors, `collect --dry-run` | Built. Tested on Debian 13 only. |
 | 2 | Server ingest API, SQLite schema, migrations, token authentication, `run` | Built. Tested on Debian 13 only. |
-| 3 | Health evaluator, state history, fleet page | Planned |
+| 3 | Health evaluator, state history, web console with local accounts | Built. Tested on Debian 13 only. |
 | 4 | Email and webhook alerting | Planned |
 | 5 | Detection events, spool, events page, acknowledgement | Planned |
 | 6 | Packaging (.deb and .rpm), LDAP and OIDC login, `/metrics`, retention job, backup command | Planned |
 
-Planned web console sign-in and access control (not built yet):
+Built: local accounts with email and password and the roles `viewer` and `admin`.
 
-- **Local accounts** with email and password, and optional TOTP two-factor authentication.
-- **TOTP enforcement** for all users, switched on by an environment variable.
+Planned web console sign-in and access control:
+
+- **TOTP two-factor authentication** for local accounts, and enforcement for all users switched on by an
+  environment variable. A console reachable from the internet is password-only until this arrives.
 - **LDAP authentication.**
 - **SSO via OpenID Connect**, for example with Keycloak.
-- **Two roles** to start: `viewer` (read only) and `admin`.
+- **User management in the console** (users are managed with the CLI for now).
 
 Later: scheduled remote actions (for example "update signatures now" or "scan this path") that
 agents pull from the server.

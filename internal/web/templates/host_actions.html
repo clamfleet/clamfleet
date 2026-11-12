@@ -1,0 +1,40 @@
+{{/* SPDX-License-Identifier: AGPL-3.0-only */}}
+{{/* SPDX-FileCopyrightText: The ClamFleet Authors */}}
+{{/*
+  host_actions.html: rotate, revoke and delete forms of one host, shared by the
+  hosts admin page and the host page (admins only). Data: web.hostAction.
+  Each action sits behind a <details> element: two deliberate clicks, no
+  JavaScript (the CSP allows none inline). Delete also needs the host name typed.
+*/}}
+{{define "host_actions"}}
+<div class="actions" data-testid="host-actions-{{.Name}}">
+  <details>
+    <summary data-testid="rotate-open-{{.Name}}">Rotate token&hellip;</summary>
+    <form method="post" action="/admin/hosts/{{.Name}}/rotate-token">
+      <input type="hidden" name="csrf_token" value="{{.CSRF}}">
+      <p class="hint">Issues a new token and shows it once. The old token stops working at once{{if not .HasToken}}; this also re-enables the host{{end}}.</p>
+      <button type="submit" data-testid="rotate-submit-{{.Name}}">Rotate token</button>
+    </form>
+  </details>
+  {{if .HasToken}}
+  <details>
+    <summary data-testid="revoke-open-{{.Name}}">Revoke token&hellip;</summary>
+    <form method="post" action="/admin/hosts/{{.Name}}/revoke-token">
+      <input type="hidden" name="csrf_token" value="{{.CSRF}}">
+      <p class="hint">The agent can no longer report. History is kept; the host leaves the fleet page.</p>
+      <button type="submit" data-testid="revoke-submit-{{.Name}}">Revoke token</button>
+    </form>
+  </details>
+  {{end}}
+  <details>
+    <summary data-testid="delete-open-{{.Name}}">Delete host&hellip;</summary>
+    <form method="post" action="/admin/hosts/{{.Name}}/delete">
+      <input type="hidden" name="csrf_token" value="{{.CSRF}}">
+      <p class="hint">Deletes the host with all its reports, events and history. This cannot be undone.</p>
+      <label for="confirm-{{.Name}}">Type <code>{{.Name}}</code> to confirm</label>
+      <input type="text" id="confirm-{{.Name}}" name="confirm" autocomplete="off" required data-testid="delete-confirm-{{.Name}}">
+      <p><button type="submit" class="danger" data-testid="delete-submit-{{.Name}}">Delete forever</button></p>
+    </form>
+  </details>
+</div>
+{{end}}

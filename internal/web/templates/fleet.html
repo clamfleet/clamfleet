@@ -1,0 +1,32 @@
+{{/* SPDX-License-Identifier: AGPL-3.0-only */}}
+{{/* SPDX-FileCopyrightText: The ClamFleet Authors */}}
+{{/*
+  fleet.html: the fleet overview. Body: web.fleetBody.
+  The filter is a plain GET form (it works without JavaScript and keeps the
+  address bar honest). The live region re-fetches itself every 15 s with the
+  same filter; see fleet.go for why a poll after logout leaves the page.
+*/}}
+{{define "content"}}
+<h1>Fleet</h1>
+<form method="get" action="/" class="filters inline" data-testid="fleet-filter">
+  <div>
+    <label for="tag">Tag</label>
+    <select id="tag" name="tag" data-testid="fleet-filter-tag">
+      <option value="">All tags</option>
+      {{range .Body.Tags}}<option value="{{.}}"{{if eq . $.Body.TagFilter}} selected{{end}}>{{.}}</option>{{end}}
+    </select>
+  </div>
+  <div>
+    <label for="state">State</label>
+    <select id="state" name="state" data-testid="fleet-filter-state">
+      <option value="">All states</option>
+      {{range .Body.States}}<option value="{{.}}"{{if eq . $.Body.StateFilter}} selected{{end}}>{{.}}</option>{{end}}
+    </select>
+  </div>
+  <button type="submit" data-testid="fleet-filter-submit">Filter</button>
+  {{if .Body.Filtered}}<a href="/" data-testid="fleet-filter-clear">Clear filter</a>{{end}}
+</form>
+<div id="fleet-live" data-testid="fleet-live" hx-get="/fleet/rows{{if .Body.Query}}?{{.Body.Query}}{{end}}" hx-trigger="every 15s" hx-swap="innerHTML">
+{{template "fleet_rows" .Body}}
+</div>
+{{end}}

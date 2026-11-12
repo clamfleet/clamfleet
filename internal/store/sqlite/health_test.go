@@ -323,3 +323,39 @@ func TestDeleteHostFailureRollsBackDeleteAndAudit(t *testing.T) {
 		t.Fatalf("%d host.delete audit rows after a failed delete", n)
 	}
 }
+
+func TestListFleetHidesRevokedAndGroupsTags(t *testing.T) {
+	ctx := context.Background()
+	s := openTemp(t)
+	a := addHost(t, s, "alpha")
+	addHost(t, s, "beta")
+	gone := addHost(t, s, "gone")
+	record(t, s, a.ID, repDaily("alpha", t0, 27000), t0)
+	r := repDaily("alpha", t0.Add(time.Minute), 27001)
+	r.Tags = []string{"web", "prod"}
+	record(t, s, a.ID, r, t0.Add(time.Minute))
+	if _, err := s.EvaluateHosts(ctx, t0, []int64{a.ID}, fixed("WARN", "freshclam_inactive")); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetToken(ctx, "gone", nil, t0, cli); err != nil {
+		t.Fatal(err)
+	}
+	_ = gone
+
+	rows, err := s.ListFleet(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 2 || rows[0].Name != "alpha" || rows[1].Name != "beta" {
+		t.Fatalf("rows (revoked host must be hidden, order by name): %+v", rows)
+	}
+	al, be := rows[0], rows[1]
+	if al.State == nil || *al.State != "WARN" || al.DailyVersion == nil || *al.DailyVersion != 27001 ||
+		al.ClamdVersion != "1.4.3" || al.LastSeen == nil || al.DailyBuilt == nil || !reflect.DeepEqual(al.Tags, []string{"prod", "web"}) {
+		t.Fatalf("alpha: %+v", al)
+	}
+	// A host that never reported: pending, no versions, empty (not nil) tags.
+	if be.State != nil || be.DailyVersion != nil || be.LastSeen != nil || be.Tags == nil || len(be.Tags) != 0 || be.ClamdVersion != "" {
+		t.Fatalf("beta: %+v", be)
+	}
+}

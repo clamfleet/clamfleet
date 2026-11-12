@@ -41,6 +41,42 @@ type Config struct {
 	// Empty by default: the header is then ignored.
 	TrustedProxies []string `yaml:"trusted_proxies"`
 	Health         Health   `yaml:"health"`
+	Auth           Auth     `yaml:"auth"`
+}
+
+// Auth configures console sign-in (docs/plans/milestone-3.md 4.4, 4.6). The
+// shape is one subtree per provider, so local accounts, LDAP and OIDC can be
+// on at the same time later (M6): a local break-glass admin next to SSO.
+type Auth struct {
+	Local AuthLocal `yaml:"local"`
+	// SessionMaxAge is the absolute lifetime of a session; SessionIdle ends it
+	// after that long without a request (htmx polls count as activity, so an open
+	// fleet tab stays signed in until SessionMaxAge).
+	SessionMaxAge time.Duration `yaml:"session_max_age"`
+	SessionIdle   time.Duration `yaml:"session_idle"`
+	// CookieSecure false drops the Secure flag and the __Host- cookie prefix.
+	// It exists only for plain-HTTP development (an SSH tunnel); the server
+	// logs a warning at start when it is off.
+	CookieSecure bool `yaml:"cookie_secure"`
+}
+
+// AuthLocal configures email + password accounts.
+type AuthLocal struct {
+	Enabled bool `yaml:"enabled"`
+}
+
+// Validate checks the auth keys. The bounds keep a typo from creating sessions
+// that never expire or that expire before a page has loaded.
+func (a Auth) Validate() error {
+	switch {
+	case a.SessionIdle < time.Minute:
+		return fmt.Errorf("auth.session_idle must be at least 1m, got %s", a.SessionIdle)
+	case a.SessionMaxAge < a.SessionIdle:
+		return fmt.Errorf("auth.session_max_age (%s) must not be shorter than auth.session_idle (%s)", a.SessionMaxAge, a.SessionIdle)
+	case a.SessionMaxAge > 30*24*time.Hour:
+		return fmt.Errorf("auth.session_max_age must be at most 720h (30 days), got %s", a.SessionMaxAge)
+	}
+	return nil
 }
 
 // Health holds the thresholds of the health rules (spec 9) and how often the
@@ -115,6 +151,10 @@ func DefaultConfig() Config {
 			DailyWarnHours: 24, DailyCritHours: 72, BehindWarn: 2, ScanWarnHours: 48,
 			EvalInterval: 60 * time.Second,
 		},
+		Auth: Auth{
+			Local:         AuthLocal{Enabled: true},
+			SessionMaxAge: 12 * time.Hour, SessionIdle: time.Hour, CookieSecure: true,
+		},
 	}
 }
 
@@ -150,6 +190,9 @@ func (c Config) Validate() error {
 		return err
 	}
 	if err := c.Health.Validate(); err != nil {
+		return err
+	}
+	if err := c.Auth.Validate(); err != nil {
 		return err
 	}
 	if c.Listen == "" {

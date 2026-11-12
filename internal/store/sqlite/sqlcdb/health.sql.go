@@ -129,6 +129,58 @@ func (q *Queries) InsertStateChange(ctx context.Context, arg InsertStateChangePa
 	return err
 }
 
+const listFleet = `-- name: ListFleet :many
+SELECT id, name, last_seen, state, state_reason, state_since, daily_version, daily_built, clamd_version
+FROM hosts WHERE token_hash IS NOT NULL ORDER BY name
+`
+
+type ListFleetRow struct {
+	ID           int64
+	Name         string
+	LastSeen     sql.NullInt64
+	State        sql.NullString
+	StateReason  sql.NullString
+	StateSince   sql.NullInt64
+	DailyVersion sql.NullInt64
+	DailyBuilt   sql.NullInt64
+	ClamdVersion sql.NullString
+}
+
+// The fleet page: hosts with a token only (a revoked host's state is frozen and
+// it is hidden from the overview; the hosts admin page lists every host).
+func (q *Queries) ListFleet(ctx context.Context) ([]ListFleetRow, error) {
+	rows, err := q.db.QueryContext(ctx, listFleet)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListFleetRow
+	for rows.Next() {
+		var i ListFleetRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.LastSeen,
+			&i.State,
+			&i.StateReason,
+			&i.StateSince,
+			&i.DailyVersion,
+			&i.DailyBuilt,
+			&i.ClamdVersion,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listStateChanges = `-- name: ListStateChanges :many
 SELECT ts, from_state, to_state, reason FROM state_changes
 WHERE host_id = ?1 ORDER BY ts DESC, id DESC LIMIT ?2

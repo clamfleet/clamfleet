@@ -40,6 +40,7 @@ import (
 	"github.com/clamfleet/clamfleet/internal/store"
 	"github.com/clamfleet/clamfleet/internal/store/sqlite"
 	"github.com/clamfleet/clamfleet/internal/version"
+	"github.com/clamfleet/clamfleet/internal/webauth"
 )
 
 const (
@@ -66,9 +67,17 @@ commands:
   host rotate-token NAME                      issue a new token; the old one stops working at once
   host revoke-token NAME                      disable the host's token (history is kept)
   host delete NAME --yes                      delete the host and ALL its reports, events and history
+  user add EMAIL --role viewer|admin [--name TEXT] [--password-stdin]
+                                              create a console user; prints a one-time password once
+                                              (or reads one line from stdin); it must be changed at first login
+  user list [--json]                          list console users
+  user set-role EMAIL viewer|admin            change a role (ends the user's sessions)
+  user disable EMAIL | enable EMAIL           disable (ends sessions) or re-enable a login
+  user reset-password EMAIL [--password-stdin]
+                                              issue a new one-time password and end the user's sessions
   version                                     print the version
 
-Host commands and migrate take --config FILE too (default: $CLAMFLEET_SERVER_CONFIG or ` + server.DefaultConfigPath + `).
+Host and user commands and migrate take --config FILE too (default: $CLAMFLEET_SERVER_CONFIG or ` + server.DefaultConfigPath + `).
 `
 
 // run is main without os.Exit, so it can be tested.
@@ -77,7 +86,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		fmt.Fprint(stderr, usage)
 		return exitUsage
 	}
-	a := &app{stdout: stdout, stderr: stderr, actor: osActor(), now: time.Now}
+	a := &app{stdout: stdout, stderr: stderr, stdin: os.Stdin, actor: osActor(), now: time.Now}
 	switch args[0] {
 	case "version":
 		fmt.Fprintf(stdout, "clamfleet-server %s\n", version.Version)
@@ -88,6 +97,8 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return a.migrate(ctx, args[1:])
 	case "host":
 		return a.host(ctx, args[1:])
+	case "user":
+		return a.user(ctx, args[1:])
 	case "-h", "--help", "help":
 		fmt.Fprint(stdout, usage)
 		return exitOK
@@ -99,6 +110,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 
 type app struct {
 	stdout, stderr io.Writer
+	stdin          io.Reader // only --password-stdin reads it
 	actor          string
 	now            func() time.Time // the clock for timestamps written by admin commands
 }
@@ -182,18 +194,28 @@ func (a *app) serve(ctx context.Context, args []string) int {
 		log.Error("invalid configuration", "error", err.Error())
 		return exitError
 	}
+	if !cfg.Auth.CookieSecure {
+		log.Warn("auth.cookie_secure is false: the session cookie is sent without the Secure flag and the __Host- prefix; use this only for plain-HTTP development")
+	}
 	loopCtx, stopLoop := context.WithCancel(ctx)
 	tick := time.NewTicker(cfg.Health.EvalInterval)
-	loopDone := make(chan struct{})
+	cleanTick := time.NewTicker(time.Hour)
+	loopDone := make(chan struct{}, 2)
 	go func() {
-		defer close(loopDone)
+		defer func() { loopDone <- struct{}{} }()
 		ev.Run(loopCtx, tick.C)
 	}()
+	go func() {
+		defer func() { loopDone <- struct{}{} }()
+		webauth.RunCleanup(loopCtx, st, a.now, cfg.Auth.SessionIdle, log, cleanTick.C)
+	}()
 	err = server.Serve(ctx, cfg, h, log)
-	// Wait for the loop before the deferred st.Close(): an evaluation cut off by
+	// Wait for the loops before the deferred st.Close(): an evaluation cut off by
 	// a closing database would log a spurious error at every shutdown.
 	stopLoop()
 	tick.Stop()
+	cleanTick.Stop()
+	<-loopDone
 	<-loopDone
 	if err != nil {
 		log.Error("server stopped", "error", err.Error())
@@ -415,6 +437,8 @@ func (a *app) deleteHost(ctx context.Context, log *slog.Logger, st store.Store, 
 	return exitOK
 }
 
+func newTab(w io.Writer) *tabwriter.Writer { return tabwriter.NewWriter(w, 0, 4, 2, ' ', 0) }
+
 func fmtTime(t *time.Time) string {
 	if t == nil {
 		return "-"
@@ -431,7 +455,7 @@ func (a *app) list(ctx context.Context, log *slog.Logger, st store.Store, asJSON
 	if asJSON {
 		return a.printJSON(log, hosts)
 	}
-	tw := tabwriter.NewWriter(a.stdout, 0, 4, 2, ' ', 0)
+	tw := newTab(a.stdout)
 	fmt.Fprintln(tw, "NAME\tSTATE\tTOKEN\tLAST SEEN\tAGENT\tTAGS")
 	for _, h := range hosts {
 		tok := "active"

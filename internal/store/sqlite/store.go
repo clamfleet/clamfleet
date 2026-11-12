@@ -73,9 +73,22 @@ func (s *Store) inTx(ctx context.Context, fn func(q *sqlcdb.Queries) error) erro
 // writeAudit adds the audit row inside the caller's transaction. detail must
 // never hold a secret.
 func writeAudit(ctx context.Context, q *sqlcdb.Queries, now time.Time, a store.Audit, action, target string) error {
+	return writeAuditKind(ctx, q, now, a, action, store.TargetHost, target, nil)
+}
+
+// writeAuditKind is writeAudit for any target kind, with a detail object
+// (nil is "{}"). The detail is JSON text; keys and values are plain strings.
+func writeAuditKind(ctx context.Context, q *sqlcdb.Queries, now time.Time, a store.Audit, action, targetKind, target string, detail map[string]string) error {
+	d := []byte("{}")
+	if len(detail) > 0 {
+		var err error
+		if d, err = json.Marshal(detail); err != nil {
+			return fmt.Errorf("encode audit detail: %w", err)
+		}
+	}
 	return q.InsertAudit(ctx, sqlcdb.InsertAuditParams{
 		Ts: unix(now), ActorKind: a.Kind, Actor: a.Actor, Action: action,
-		TargetKind: "host", Target: target, Detail: sql.NullString{String: "{}", Valid: true},
+		TargetKind: targetKind, Target: target, Detail: sql.NullString{String: string(d), Valid: true},
 	})
 }
 

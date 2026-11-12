@@ -10,6 +10,16 @@ All notable changes are listed here. The format follows Keep a Changelog; versio
 ## Unreleased
 
 ### Added
+- Milestone 3, web console: local accounts (email and password, argon2id) with the roles `viewer` and
+  `admin`, managed with `clamfleet-server user add|list|set-role|disable|enable|reset-password`; cookie
+  sessions (12 h absolute, 1 h idle by default) with CSRF protection (SameSite=Lax, cross-origin check and a
+  per-session token); a fleet overview that refreshes every 15 s, a page per host with its state history,
+  and host administration for admins (register, rotate, revoke, delete). `clamfleet-server host delete NAME --yes`.
+  New config keys `auth.local.enabled`, `auth.session_max_age`, `auth.session_idle` and `auth.cookie_secure`
+  (one subtree per provider, so LDAP and OIDC can follow). See `docs/web.md`. Users and sessions tables come
+  with migration `00002`. TOTP, LDAP and OIDC are not built yet.
+- New dependency: `golang.org/x/crypto` v0.59.0 (argon2id; server only). htmx 2.0.11 (0BSD) is vendored as a
+  static file with its SHA-256 recorded in `internal/web/static/README.md`.
 - Milestone 3, health: the server decides every host's state (OK, WARN, CRIT, STALE) from the newest
   report (spec 9) after each accepted report and every `health.eval_interval`, keeps the reasons
   and one `state_changes` row per transition, and tunes the rules with a `health:` block (see the README).

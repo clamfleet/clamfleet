@@ -1,0 +1,56 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-FileCopyrightText: The ClamFleet Authors
+
+// Flow 4: a viewer cannot reach admin actions, by UI or by direct request; an admin can.
+import { test, expect, fixture, login } from './helpers';
+
+// The browser logs the deliberate 403 page load; nothing else is allowed.
+test.use({ allowedConsole: [/status of 403/] });
+
+test('a viewer gets no admin controls and a 403 on every admin route', async ({ page }) => {
+  const fx = fixture();
+  await login(page, fx.viewer);
+  await expect(page.getByTestId('fleet-table')).toBeVisible();
+  await expect(page.getByTestId('nav-admin')).toHaveCount(0);
+
+  // Host page: the admin block is absent.
+  await page.getByTestId('fleet-link-ok01').click();
+  await expect(page.getByTestId('host-page')).toBeVisible();
+  await expect(page.getByTestId('host-actions-ok01')).toHaveCount(0);
+  await expect(page.getByTestId('host-admin')).toHaveCount(0);
+
+  // Direct navigation.
+  const nav = await page.goto('/admin/hosts');
+  expect(nav!.status()).toBe(403);
+  await expect(page.getByTestId('error-page')).toHaveAttribute('data-status', '403');
+  await expect(page.getByTestId('admin-hosts-page')).toHaveCount(0);
+
+  // Direct writes with a valid session and a valid CSRF token: only the role stops them.
+  await page.goto('/');
+  const csrf = await page.locator('meta[name="csrf-token"]').getAttribute('content');
+  expect(csrf).toBeTruthy();
+  const headers = { 'X-CSRF-Token': csrf! };
+  for (const path of [
+    '/admin/hosts',
+    '/admin/hosts/ok01/rotate-token',
+    '/admin/hosts/ok01/revoke-token',
+    '/admin/hosts/ok01/delete',
+  ]) {
+    const res = await page.request.post(path, { headers, form: { name: 'viewer-made-host' } });
+    expect(res.status(), path).toBe(403);
+  }
+
+  // Nothing happened: ok01 still exists and still reports OK.
+  await page.goto('/');
+  await expect(page.getByTestId('fleet-row-ok01')).toHaveAttribute('data-state', 'OK');
+  await expect(page.getByTestId('fleet-row-viewer-made-host')).toHaveCount(0);
+});
+
+test('an admin sees the admin controls', async ({ page }) => {
+  const fx = fixture();
+  await login(page, fx.admin);
+  await page.getByTestId('nav-admin').click();
+  await expect(page.getByTestId('admin-hosts-page')).toBeVisible();
+  await expect(page.getByTestId('admin-register-form')).toBeVisible();
+  await expect(page.getByTestId('admin-host-row-ok01')).toBeVisible();
+});

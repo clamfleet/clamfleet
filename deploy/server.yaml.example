@@ -31,3 +31,13 @@ health:
   behind_warn: 2           # WARN when the daily version trails the fleet's newest by more than this
   scan_warn_hours: 48      # WARN when the last scan finished longer ago; 0 switches the rule off
   eval_interval: 60s       # 1s to 60s: how often silent (STALE) hosts are noticed
+
+# Web console sign-in. The values shown are the defaults. Users are managed with
+# `clamfleet-server user ...` (see docs/web.md). Environment: CLAMFLEET_SERVER_AUTH_<KEY>,
+# e.g. CLAMFLEET_SERVER_AUTH_LOCAL_ENABLED.
+auth:
+  local:
+    enabled: true          # email + password accounts; later providers get their own subtree (auth.ldap, auth.oidc)
+  session_max_age: 12h     # absolute lifetime: a session ends this long after sign-in, however active (5m..720h)
+  session_idle: 1h         # ends after this long without any request (at least 1m); an open fleet tab counts as active
+  cookie_secure: true      # false ONLY for plain-HTTP development (SSH tunnel): drops Secure and the __Host- prefix, logs a warning

@@ -31,3 +31,9 @@ VALUES (sqlc.arg(host_id), sqlc.arg(ts), sqlc.arg(from_state), sqlc.arg(to_state
 -- name: ListStateChanges :many
 SELECT ts, from_state, to_state, reason FROM state_changes
 WHERE host_id = sqlc.arg(host_id) ORDER BY ts DESC, id DESC LIMIT sqlc.arg(max_rows);
+
+-- name: ListFleet :many
+-- The fleet page: hosts with a token only (a revoked host's state is frozen and
+-- it is hidden from the overview; the hosts admin page lists every host).
+SELECT id, name, last_seen, state, state_reason, state_since, daily_version, daily_built, clamd_version
+FROM hosts WHERE token_hash IS NOT NULL ORDER BY name;
