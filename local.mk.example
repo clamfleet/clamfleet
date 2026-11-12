@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# SPDX-FileCopyrightText: The ClamFleet Authors
+#
+# Copy to local.mk (gitignored; the Makefile includes it). Values come from the
+# environment first (?=). Also copy deploy/test/local.env.example for the scripts.
+#
+# CFT_EXEC: command prefix that runs a command inside the test container. Its
+# arguments must contain no spaces or shell syntax (ssh re-parses them).
+CFT_EXEC ?= ssh <incus-host> sudo incus exec <container> --
+# INCUS_HOST: ssh target of the host that runs Incus.
+INCUS_HOST ?= <incus-host>
