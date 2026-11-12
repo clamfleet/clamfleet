@@ -1,0 +1,14 @@
+# Local agent memory, never part of the project.
+.remember/
+/bin/
+/dist/
+*.test
+
+# Maintainer-specific test infrastructure names (spec 15a: nothing org-specific in the repo).
+/local.mk
+/deploy/test/local.env
+/deploy/test/scrub-private.txt
+
+# Planning and research notes stay local.
+/docs/plans/
+/docs/research/
