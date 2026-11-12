@@ -133,9 +133,11 @@ func TestTouchSessionIsThrottled(t *testing.T) {
 func TestChangesEndSessionsAtOnce(t *testing.T) {
 	ctx := context.Background()
 	for name, change := range map[string]func(s *Store, id int64) error{
-		"disable":        func(s *Store, id int64) error { return s.SetDisabled(ctx, id, true, t0, cliAudit) },
-		"role":           func(s *Store, id int64) error { return s.SetRole(ctx, id, "admin", t0, cliAudit) },
-		"password reset": func(s *Store, id int64) error { return s.SetPassword(ctx, id, store.PasswordChange{Hash: "n"}, t0, cliAudit) },
+		"disable": func(s *Store, id int64) error { return s.SetDisabled(ctx, id, true, t0, cliAudit) },
+		"role":    func(s *Store, id int64) error { return s.SetRole(ctx, id, "admin", t0, cliAudit) },
+		"password reset": func(s *Store, id int64) error {
+			return s.SetPassword(ctx, id, store.PasswordChange{Hash: "n"}, t0, cliAudit)
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			s := openTemp(t)
