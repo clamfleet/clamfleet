@@ -1,15 +1,19 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // SPDX-FileCopyrightText: The ClamFleet Authors
 
-// Starts bin/webfixture on 127.0.0.1, waits for its READY line, and hands URL and logins to
-// the specs through a JSON file (path in CLAMFLEET_E2E_FIXTURE). The returned function is
-// Playwright's global teardown: it stops the fixture, which deletes its own temp directory.
+// Starts bin/webfixture twice on 127.0.0.1 (plain, and with --totp-required), waits for the READY
+// lines, and hands URL and logins to the specs through JSON files (CLAMFLEET_E2E_FIXTURE and
+// CLAMFLEET_E2E_FIXTURE_REQUIRED, with _URL variants). The returned function is Playwright's
+// global teardown: it stops both, and each deletes its own temp directory.
 import { spawn } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 
-export default async function globalSetup(): Promise<() => Promise<void>> {
+interface Started { url: string; json: string; stop: () => Promise<void> }
+
+// Starts one fixture process and waits for its READY line.
+async function startFixture(extraArgs: string[]): Promise<Started> {
   const root = path.resolve(__dirname, '..', '..');
   const bin = path.join(root, 'bin', 'webfixture');
   const serverBin = path.join(root, 'bin', 'clamfleet-server');
@@ -18,7 +22,9 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
   }
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'clamfleet-e2e-web-'));
   const json = path.join(dir, 'fixture.json');
-  const child = spawn(bin, ['--server-bin', serverBin, '--json-out', json], { stdio: ['ignore', 'pipe', 'inherit'] });
+  const child = spawn(bin, ['--server-bin', serverBin, '--json-out', json, ...extraArgs], {
+    stdio: ['ignore', 'pipe', 'inherit'],
+  });
 
   const stop = async () => {
     if (child.exitCode === null && child.signalCode === null) {
@@ -45,11 +51,29 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
         }
       });
     });
-    process.env.CLAMFLEET_E2E_FIXTURE = json;
-    process.env.CLAMFLEET_E2E_URL = url;
+    return { url, json, stop };
   } catch (e) {
     await stop();
     throw e;
   }
-  return stop;
+}
+
+// Two fixtures: the normal console (all specs but the forced-enrolment one) and one with
+// auth.local.totp_required. Two origins, so the cookies of the two never meet in one test.
+export default async function globalSetup(): Promise<() => Promise<void>> {
+  const plain = await startFixture([]);
+  let required: Started;
+  try {
+    required = await startFixture(['--totp-required']);
+  } catch (e) {
+    await plain.stop();
+    throw e;
+  }
+  process.env.CLAMFLEET_E2E_FIXTURE = plain.json;
+  process.env.CLAMFLEET_E2E_URL = plain.url;
+  process.env.CLAMFLEET_E2E_FIXTURE_REQUIRED = required.json;
+  process.env.CLAMFLEET_E2E_URL_REQUIRED = required.url;
+  return async () => {
+    await Promise.all([plain.stop(), required.stop()]);
+  };
 }
