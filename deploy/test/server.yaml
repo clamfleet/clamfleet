@@ -8,3 +8,11 @@ tls:
   cert: /etc/clamfleet/tls.crt
   key: /etc/clamfleet/tls.key
 db_path: /var/lib/clamfleet-server/clamfleet.db
+# The snapshot's signatures are frozen and freshclam is disabled, so with the
+# default thresholds the host would start CRIT (daily_old_crit) and the clamd
+# transition the health e2e looks for would be invisible. The baseline with these
+# overrides is WARN (freshclam_inactive). eval_interval 2s lets STALE show in seconds.
+health:
+  daily_warn_hours: 100000
+  daily_crit_hours: 200000
+  eval_interval: 2s

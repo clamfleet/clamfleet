@@ -65,6 +65,23 @@ the token is `/etc/clamfleet/token`, `root:clamfleet`, 0640. Admin commands run 
 files and the transient units, so nothing needs cleaning up. The server scenarios take about 12 s
 each, the agent service-loop scenario about 22 s.
 
+The health scenarios (`e2e/health_e2e_test.go`, spec 14 acceptance for M3) run the agent as a service
+next to the server and read the state with `host show --json`: stopping clamd (service and socket)
+turns the host CRIT within one report interval, restarting it brings the state back, and stopping
+the agent turns the host STALE after 3 intervals. They depend on two settings worth knowing when
+one of them fails in a way that does not look like the cause:
+
+- `deploy/test/server.yaml` carries a `health:` block (`daily_warn_hours: 100000`,
+  `daily_crit_hours: 200000`, `eval_interval: 2s`). The snapshot's signatures are frozen and freshclam is
+  disabled, so with the default thresholds the host starts CRIT (`daily_old_crit`) and the clamd
+  transition is invisible. With the override the baseline is WARN (`freshclam_inactive`), which each test
+  asserts first. If you refresh the snapshot with newer signatures nothing changes; if you remove the block,
+  both tests fail at the baseline.
+- The server clamps the agent's reported interval to at least 10 s, so the STALE test runs the agent at
+  10 s (window 30 s); the CRIT test uses 5 s. A 5 s agent would still be judged as 10 s.
+- STALE is measured on the server clock only (`last_seen` against the transition time), so the
+  assertion does not depend on the clock of the test host.
+
 Unknown JSON fields and body limits are not repeated here: they are tested through the real router
 and listener at functional level, and the container may not have curl.
 
