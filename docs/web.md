@@ -147,7 +147,7 @@ sudo chmod 0640 /etc/clamfleet/server-secret.key
   started again.
 - **A lost key.** The enrolments cannot be opened and the server refuses to start. Create a new key with
   `key generate` (move the broken file away first), run `user reset-totp EMAIL` for each user listed by
-  `user list` as `on`, and start the server. Users enrol again (at once, with `totp_required`).
+  `user list` with TOTP `on` or `locked` (anything but `off`), and start the server. Users enrol again (at once, with `totp_required`).
   If the old key turns up, restoring it also works.
 
 ## Protection against forged requests (CSRF)

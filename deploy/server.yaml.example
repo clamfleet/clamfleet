@@ -45,7 +45,7 @@ auth:
   local:
     enabled: true          # email + password accounts; later providers get their own subtree (auth.ldap, auth.oidc)
     totp_required: false   # true: every local user must set up an authenticator app (TOTP) before using the console.
-                           # Needs secret_key_file below (the server refuses to start without it). Switch it on BEFORE
+                           # Needs the top-level secret_key_file (the server refuses to start without it). Switch it on BEFORE
                            # handing out one-time passwords: until a user has enrolled, their password alone can enrol.
   session_max_age: 12h     # absolute lifetime: a session ends this long after sign-in, however active (5m..720h)
   session_idle: 1h         # ends after this long without any request (at least 1m); an open fleet tab counts as active
