@@ -265,3 +265,22 @@ func TestRunUsageAndConfigErrors(t *testing.T) {
 		t.Fatalf("%+v", res)
 	}
 }
+
+// The agent must stay free of the server's storage stack: SQLite, goose and
+// the store packages would blow the 30 MB RSS budget of the spec (section 13)
+// and widen the attack surface of every monitored host.
+func TestAgentBinaryHasNoSQLite(t *testing.T) {
+	out, err := exec.Command("go", "list", "-deps", "-f", "{{.ImportPath}}", ".").CombinedOutput()
+	if err != nil {
+		t.Fatalf("go list: %v\n%s", err, out)
+	}
+	deps := string(out)
+	if !strings.Contains(deps, "github.com/clamfleet/clamfleet/internal/agent") {
+		t.Fatalf("go list did not report the agent's dependencies (the test would be vacuous):\n%s", deps)
+	}
+	for _, banned := range []string{"modernc.org/", "github.com/pressly/goose", "database/sql", "clamfleet/internal/store", "clamfleet/internal/server", "clamfleet/migrations"} {
+		if strings.Contains(deps, banned) {
+			t.Errorf("the agent depends on %s", banned)
+		}
+	}
+}

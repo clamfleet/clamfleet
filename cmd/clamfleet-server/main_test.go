@@ -18,9 +18,9 @@ import (
 	"github.com/clamfleet/clamfleet/internal/store/sqlite"
 )
 
-// serverBin is the real server binary, built once. The tests run the compiled
-// program through its real command dispatch.
-var serverBin string
+// serverBin and agentBin are the real binaries, built once. The tests run the
+// compiled programs through their real command dispatch.
+var serverBin, agentBin string
 
 func TestMain(m *testing.M) {
 	dir, err := os.MkdirTemp("", "cfserver")
@@ -28,10 +28,13 @@ func TestMain(m *testing.M) {
 		panic(err)
 	}
 	serverBin = filepath.Join(dir, "clamfleet-server")
-	if out, err := exec.Command("go", "build", "-o", serverBin, ".").CombinedOutput(); err != nil {
-		os.Stderr.Write(out)
-		os.RemoveAll(dir)
-		os.Exit(1)
+	agentBin = filepath.Join(dir, "clamfleet-agent")
+	for _, b := range [][]string{{serverBin, "."}, {agentBin, "../clamfleet-agent"}} {
+		if out, err := exec.Command("go", "build", "-o", b[0], b[1]).CombinedOutput(); err != nil {
+			os.Stderr.Write(out)
+			os.RemoveAll(dir)
+			os.Exit(1)
+		}
 	}
 	code := m.Run()
 	os.RemoveAll(dir)
