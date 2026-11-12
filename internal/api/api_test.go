@@ -531,6 +531,8 @@ func TestRouteTable(t *testing.T) {
 		{Method: "GET", Path: "/static/{file}", Auth: server.AuthPublic},
 		{Method: "GET", Path: "/login", Auth: server.AuthPublic},
 		{Method: "POST", Path: "/login", Auth: server.AuthPublic},
+		{Method: "GET", Path: "/login/totp", Auth: server.AuthPublic},
+		{Method: "POST", Path: "/login/totp", Auth: server.AuthPublic},
 		{Method: "POST", Path: "/logout", Auth: server.AuthUser},
 		{Method: "GET", Path: "/{$}", Auth: server.AuthUser},
 		{Method: "GET", Path: "/fleet/rows", Auth: server.AuthUser},
@@ -542,6 +544,11 @@ func TestRouteTable(t *testing.T) {
 		{Method: "POST", Path: "/admin/hosts/{name}/delete", Auth: server.AuthAdmin},
 		{Method: "GET", Path: "/account", Auth: server.AuthUser},
 		{Method: "POST", Path: "/account/password", Auth: server.AuthUser},
+		{Method: "GET", Path: "/account/totp", Auth: server.AuthUser},
+		{Method: "POST", Path: "/account/totp/setup", Auth: server.AuthUser},
+		{Method: "POST", Path: "/account/totp/confirm", Auth: server.AuthUser},
+		{Method: "POST", Path: "/account/totp/recovery-codes", Auth: server.AuthUser},
+		{Method: "POST", Path: "/account/totp/disable", Auth: server.AuthUser},
 	}
 	// The declared table must match the hardcoded list exactly, so a route that
 	// is added to server.Routes() (even an open one the probe below would not
@@ -576,8 +583,12 @@ func TestRouteTable(t *testing.T) {
 				t.Errorf("%s %s: status %d with a valid token, want 202", rt.Method, rt.Path, r.status)
 			}
 		case server.AuthNone, server.AuthPublic:
-			if r = e.do(rt.Method, path, "", nil); r.status != 200 {
-				t.Errorf("%s %s: status %d, want 200", rt.Method, rt.Path, r.status)
+			want := 200
+			if rt.Path == "/login/totp" {
+				want = 303 // public, but needs a login challenge: without one it redirects to /login
+			}
+			if r = e.do(rt.Method, path, "", nil); r.status != want {
+				t.Errorf("%s %s: status %d, want %d", rt.Method, rt.Path, r.status, want)
 			}
 		case server.AuthUser, server.AuthAdmin:
 			want := 401

@@ -26,7 +26,11 @@ func mkUser(t *testing.T, s *Store, email, role string) store.User {
 func mkSession(t *testing.T, s *Store, uid int64, tok string, at time.Time, life time.Duration) []byte {
 	t.Helper()
 	h := hash(tok)
-	if err := s.CreateSession(context.Background(), store.Session{TokenHash: h, UserID: uid, CSRF: []byte("csrf-" + tok), CreatedAt: at, ExpiresAt: at.Add(life), PasswordHash: "$argon2id$x"}); err != nil {
+	var ver int64 // the version a login that read the user just now would carry
+	if err := s.r.QueryRow(`SELECT auth_version FROM users WHERE id=?`, uid).Scan(&ver); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.CreateSession(context.Background(), store.Session{TokenHash: h, UserID: uid, CSRF: []byte("csrf-" + tok), CreatedAt: at, ExpiresAt: at.Add(life), PasswordHash: "$argon2id$x", AuthVersion: ver}); err != nil {
 		t.Fatal(err)
 	}
 	return h
@@ -330,8 +334,9 @@ func TestCreateSessionIsConditionalOnTheVerifiedCredential(t *testing.T) {
 	ctx := context.Background()
 	s := openTemp(t)
 	u := mkUser(t, s, "a@example.com", "viewer") // hash "$argon2id$x"
+	version := u.AuthVersion
 	try := func(tok, hash string) error {
-		return s.CreateSession(ctx, store.Session{TokenHash: hash0(tok), UserID: u.ID, CSRF: []byte("c"), CreatedAt: t0, ExpiresAt: t0.Add(time.Hour), PasswordHash: hash})
+		return s.CreateSession(ctx, store.Session{TokenHash: hash0(tok), UserID: u.ID, CSRF: []byte("c"), CreatedAt: t0, ExpiresAt: t0.Add(time.Hour), PasswordHash: hash, AuthVersion: version})
 	}
 	if err := try("ok", "$argon2id$x"); err != nil {
 		t.Fatalf("matching credential: %v", err)
@@ -346,6 +351,7 @@ func TestCreateSessionIsConditionalOnTheVerifiedCredential(t *testing.T) {
 	if err := try("after-reset", "$argon2id$x"); !errors.Is(err, store.ErrCredentialChanged) {
 		t.Fatalf("a login verified before a same-second reset got a session: %v", err)
 	}
+	version++ // the reset bumped auth_version; a login that read the user after it carries the new one
 	if err := try("new", "reset"); err != nil {
 		t.Fatalf("login with the new hash: %v", err)
 	}
@@ -386,5 +392,76 @@ func TestSelfPasswordChangeCannotOverwriteAReset(t *testing.T) {
 	// And the happy path with the right expected hash.
 	if err := s.SetPassword(ctx, u.ID, store.PasswordChange{Hash: "mine", Self: true, ExpectedHash: "reset-hash"}, t0, cliAudit); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func authVersion(t *testing.T, s *Store, id int64) int64 {
+	t.Helper()
+	var v int64
+	if err := s.r.QueryRow(`SELECT auth_version FROM users WHERE id=?`, id).Scan(&v); err != nil {
+		t.Fatal(err)
+	}
+	return v
+}
+
+// Rule: auth_version goes up on every change that must kill a login in flight,
+// and on nothing else (a rehash, a role change and a last-login update must not
+// invalidate a login that is verifying right now).
+func TestAuthVersionBumps(t *testing.T) {
+	ctx := context.Background()
+	s := openTemp(t)
+	u := mkUser(t, s, "a@example.com", "viewer")
+	if u.AuthVersion != 0 {
+		t.Fatalf("a new user starts at 0, got %d", u.AuthVersion)
+	}
+	for _, c := range []struct {
+		name string
+		do   func() error
+		bump bool
+	}{
+		{"admin password reset", func() error { return s.SetPassword(ctx, u.ID, store.PasswordChange{Hash: "h2"}, t0, cliAudit) }, true},
+		{"self password change", func() error {
+			return s.SetPassword(ctx, u.ID, store.PasswordChange{Hash: "h3", Self: true, ExpectedHash: "h2"}, t0, cliAudit)
+		}, true},
+		{"disable", func() error { return s.SetDisabled(ctx, u.ID, true, t0, cliAudit) }, true},
+		{"enable", func() error { return s.SetDisabled(ctx, u.ID, false, t0, cliAudit) }, true},
+		{"rehash of the same password", func() error { _, err := s.RehashPassword(ctx, u.ID, "h3", "h3b", t0); return err }, false},
+		{"role change", func() error { return s.SetRole(ctx, u.ID, store.RoleAdmin, t0, cliAudit) }, false},
+		{"last login", func() error { return s.RecordLogin(ctx, u.ID, t0, cliAudit, nil) }, false},
+	} {
+		before := authVersion(t, s, u.ID)
+		if err := c.do(); err != nil {
+			t.Fatalf("%s: %v", c.name, err)
+		}
+		after := authVersion(t, s, u.ID)
+		if c.bump && after != before+1 || !c.bump && after != before {
+			t.Errorf("%s: auth_version %d -> %d, bump expected: %v", c.name, before, after, c.bump)
+		}
+	}
+	if got, _ := s.UserByEmail(ctx, "a@example.com"); got.AuthVersion != authVersion(t, s, u.ID) {
+		t.Errorf("UserByEmail reports auth_version %d", got.AuthVersion)
+	}
+}
+
+// Closes the M3 known limit: disable then enable leaves the password hash as it
+// was, but the login that read the user before has a stale auth_version.
+func TestCreateSessionRefusesAStaleAuthVersionAfterDisableEnable(t *testing.T) {
+	ctx := context.Background()
+	s := openTemp(t)
+	u := mkUser(t, s, "a@example.com", "viewer")
+	if err := s.SetDisabled(ctx, u.ID, true, t0, cliAudit); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetDisabled(ctx, u.ID, false, t0, cliAudit); err != nil {
+		t.Fatal(err)
+	}
+	mk := func(v int64) error {
+		return s.CreateSession(ctx, store.Session{TokenHash: hash("x" + time.Now().String()), UserID: u.ID, CSRF: []byte("c"), CreatedAt: t0, ExpiresAt: t0.Add(time.Hour), PasswordHash: "$argon2id$x", AuthVersion: v})
+	}
+	if err := mk(u.AuthVersion); !errors.Is(err, store.ErrCredentialChanged) {
+		t.Fatalf("a login that read the user before disable+enable got a session: %v", err)
+	}
+	if err := mk(authVersion(t, s, u.ID)); err != nil {
+		t.Fatalf("a login with the current version: %v", err)
 	}
 }

@@ -1,0 +1,29 @@
+{{/* SPDX-License-Identifier: AGPL-3.0-only */}}
+{{/* SPDX-FileCopyrightText: The ClamFleet Authors */}}
+{{/*
+  totp_setup.html: shows the new shared secret and asks for a first code. Body: web.setupBody.
+  Never cached (Cache-Control: no-store). The secret is text only: no QR code and no
+  otpauth: link (html/template would filter that scheme, and a remote QR service
+  would send the secret to a third party).
+*/}}
+{{define "content"}}
+<h1>Set up two-factor sign-in</h1>
+<div class="card" data-testid="totp-setup-page">
+  <ol>
+    <li>In your authenticator app, add an account with a key you type in (time-based, 6 digits, 30 seconds). Key:
+      <p><code data-testid="totp-secret">{{.Body.Secret}}</code></p>
+    </li>
+    <li>Or paste this setup URI where the app accepts one:
+      <input type="text" readonly value="{{.Body.URI}}" aria-label="Setup URI" data-testid="totp-uri">
+    </li>
+    <li>Enter the 6-digit code the app shows now:</li>
+  </ol>
+  <form method="post" action="/account/totp/confirm" data-testid="totp-confirm-form">
+    <input type="hidden" name="csrf_token" value="{{.CSRF}}">
+    <label for="code">Code</label>
+    <input type="text" id="code" name="code" autocomplete="one-time-code" inputmode="numeric" required maxlength="16" data-testid="totp-confirm-code">
+    <p><button type="submit" class="primary" data-testid="totp-confirm-submit">Confirm and turn on</button></p>
+  </form>
+  <p class="hint">Keep this key private: anyone who has it can produce your codes. It is shown here only while you set up.</p>
+</div>
+{{end}}

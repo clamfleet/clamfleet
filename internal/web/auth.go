@@ -64,7 +64,11 @@ func (w *Web) loginPage(rw http.ResponseWriter, r *http.Request) {
 		http.Redirect(rw, r, target, http.StatusSeeOther)
 		return
 	}
-	w.render(rw, http.StatusOK, "login", w.loginView(r, next, ""))
+	msg := ""
+	if r.URL.Query().Get("expired") == "1" {
+		msg = "Sign-in timed out. Start again."
+	}
+	w.render(rw, http.StatusOK, "login", w.loginView(r, next, msg))
 }
 
 // loginSubmit checks the credentials and starts a session.
@@ -121,18 +125,22 @@ func (w *Web) loginSubmit(rw http.ResponseWriter, r *http.Request) {
 	if err := w.Auth.Destroy(r.Context(), r); err != nil {
 		w.Log.Warn("cannot delete the previous session", "error", err.Error())
 	}
+	// Rule: a user with TOTP is not signed in by their password. They get a login
+	// challenge (its own table and cookie) and no session until the second factor
+	// is verified. This branch comes before any session is created, and nothing
+	// below it runs for such a user.
+	if user.TOTPEnabled {
+		w.startChallenge(rw, r, user, next, email, ip, &outcome)
+		return
+	}
 	// The session is created conditionally on the hash that was verified (after a
 	// rehash, the new one). If a reset, a password change or a disable committed
 	// while the hash was running, the store refuses and nobody is signed in. That
 	// is not a wrong guess, so the attempt is Aborted (it does not count towards
 	// the backoff) and the user sees the generic failure: signing in again works.
-	token, err := w.Auth.Create(r.Context(), user.ID, user.PasswordHash)
+	token, err := w.Auth.Create(r.Context(), user.ID, user.PasswordHash, user.AuthVersion)
 	if errors.Is(err, store.ErrCredentialChanged) {
-		w.Log.Warn("login refused: the account changed while the password was being checked", "client_ip", ip)
-		if err := w.Store.RecordAudit(r.Context(), w.Now(), store.Audit{Kind: store.ActorUser, Actor: email},
-			store.ActionUserLoginFailed, store.TargetUser, email, map[string]string{"ip": ip, "reason": "credential changed during login"}); err != nil {
-			w.Log.Error("cannot audit failed login", "error", err.Error())
-		}
+		w.auditCredentialChanged(r, email, ip)
 		outcome = webauth.Aborted
 		w.render(rw, http.StatusOK, "login", w.loginView(r, next, genericLoginError))
 		return
@@ -161,6 +169,16 @@ func (w *Web) loginSubmit(rw http.ResponseWriter, r *http.Request) {
 		next = "/account"
 	}
 	http.Redirect(rw, r, next, http.StatusSeeOther)
+}
+
+// auditCredentialChanged records a login (either step) that was refused because
+// the account changed while it was in flight. Not a wrong guess: no throttle count.
+func (w *Web) auditCredentialChanged(r *http.Request, email, ip string) {
+	w.Log.Warn("login refused: the account changed while it was being checked", "client_ip", ip)
+	if err := w.Store.RecordAudit(r.Context(), w.Now(), store.Audit{Kind: store.ActorUser, Actor: email},
+		store.ActionUserLoginFailed, store.TargetUser, email, map[string]string{"ip": ip, "reason": "credential changed during login"}); err != nil {
+		w.Log.Error("cannot audit failed login", "error", err.Error())
+	}
 }
 
 // checkPassword verifies the credentials. It returns the user on success, or a
@@ -234,11 +252,28 @@ func (w *Web) logout(rw http.ResponseWriter, r *http.Request) {
 	http.Redirect(rw, r, "/login", http.StatusSeeOther)
 }
 
-type accountBody struct{ MustChange bool }
+type accountBody struct {
+	MustChange bool
+	// TOTPLocal is false for users whose second factor is their identity provider's: no card.
+	TOTPLocal   bool
+	TOTPEnabled bool
+	CodesLeft   int
+}
+
+// accountBodyFor fills the account page's data for p.
+func (w *Web) accountBodyFor(r *http.Request, p webauth.Principal) accountBody {
+	b := accountBody{MustChange: p.MustChange, TOTPLocal: p.AuthSource == store.AuthLocal, TOTPEnabled: p.TOTPEnabled}
+	if p.TOTPEnabled {
+		if n, err := w.Store.RecoveryCodesLeft(r.Context(), p.UserID); err == nil {
+			b.CodesLeft = n
+		}
+	}
+	return b
+}
 
 func (w *Web) accountPage(rw http.ResponseWriter, r *http.Request) {
 	p, _ := webauth.FromContext(r.Context())
-	v := w.newView(r, "Account", "account", accountBody{MustChange: p.MustChange})
+	v := w.newView(r, "Account", "account", w.accountBodyFor(r, p))
 	if r.URL.Query().Get("changed") == "1" {
 		v.Notice = "Password changed."
 	}
@@ -252,7 +287,7 @@ func (w *Web) accountPage(rw http.ResponseWriter, r *http.Request) {
 func (w *Web) accountPassword(rw http.ResponseWriter, r *http.Request) {
 	p, _ := webauth.FromContext(r.Context())
 	fail := func(status int, msg string) {
-		v := w.newView(r, "Account", "account", accountBody{MustChange: p.MustChange})
+		v := w.newView(r, "Account", "account", w.accountBodyFor(r, p))
 		v.Error = msg
 		w.render(rw, status, "account", v)
 	}

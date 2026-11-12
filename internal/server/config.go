@@ -19,6 +19,7 @@ import (
 
 	"github.com/clamfleet/clamfleet/internal/config"
 	"github.com/clamfleet/clamfleet/internal/health"
+	"github.com/clamfleet/clamfleet/internal/secrets"
 )
 
 // DefaultConfigPath is used when neither --config nor CLAMFLEET_SERVER_CONFIG is set.
@@ -42,6 +43,11 @@ type Config struct {
 	TrustedProxies []string `yaml:"trusted_proxies"`
 	Health         Health   `yaml:"health"`
 	Auth           Auth     `yaml:"auth"`
+	// SecretKeyFile holds the key that protects secrets at rest (TOTP secrets;
+	// webhook secrets in M4); see internal/secrets. It lives outside the state
+	// directory on purpose: a backup of the database must not carry the key.
+	// Intended ownership: root:clamfleet-server mode 0640. Absolute path.
+	SecretKeyFile string `yaml:"secret_key_file"`
 }
 
 // Auth configures console sign-in (docs/plans/milestone-3.md 4.4, 4.6). The
@@ -63,6 +69,11 @@ type Auth struct {
 // AuthLocal configures email + password accounts.
 type AuthLocal struct {
 	Enabled bool `yaml:"enabled"`
+	// TOTPRequired makes every local user enrol a TOTP authenticator: a user
+	// without one can reach only the enrolment pages until they have. Trust on
+	// first use: until a user has enrolled, their password alone can enrol (docs/web.md).
+	// Turning it on needs a usable secret_key_file (the server refuses to start without).
+	TOTPRequired bool `yaml:"totp_required"`
 }
 
 // Validate checks the auth keys. The bounds keep a typo from creating sessions
@@ -145,6 +156,7 @@ func DefaultConfig() Config {
 	return Config{
 		Listen:         "127.0.0.1:8443",
 		DBPath:         "/var/lib/clamfleet-server/clamfleet.db",
+		SecretKeyFile:  secrets.DefaultKeyPath,
 		TrustedProxies: []string{},
 		Health: Health{
 			StaleFactor: 3, DefaultInterval: 5 * time.Minute,
@@ -198,7 +210,7 @@ func (c Config) Validate() error {
 	if c.Listen == "" {
 		return fmt.Errorf("listen must not be empty")
 	}
-	for k, p := range map[string]string{"db_path": c.DBPath} {
+	for k, p := range map[string]string{"db_path": c.DBPath, "secret_key_file": c.SecretKeyFile} {
 		if !filepath.IsAbs(p) {
 			return fmt.Errorf("%s must be an absolute path, got %q", k, p)
 		}

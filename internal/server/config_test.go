@@ -26,13 +26,14 @@ func TestEnvNamesMatchDocumentedTable(t *testing.T) {
 	c := DefaultConfig()
 	want := []string{
 		"CLAMFLEET_SERVER_AUTH_COOKIE_SECURE", "CLAMFLEET_SERVER_AUTH_LOCAL_ENABLED",
+		"CLAMFLEET_SERVER_AUTH_LOCAL_TOTP_REQUIRED",
 		"CLAMFLEET_SERVER_AUTH_SESSION_IDLE", "CLAMFLEET_SERVER_AUTH_SESSION_MAX_AGE",
 		"CLAMFLEET_SERVER_DB_PATH",
 		"CLAMFLEET_SERVER_HEALTH_BEHIND_WARN", "CLAMFLEET_SERVER_HEALTH_DAILY_CRIT_HOURS",
 		"CLAMFLEET_SERVER_HEALTH_DAILY_WARN_HOURS", "CLAMFLEET_SERVER_HEALTH_DEFAULT_INTERVAL",
 		"CLAMFLEET_SERVER_HEALTH_EVAL_INTERVAL", "CLAMFLEET_SERVER_HEALTH_SCAN_WARN_HOURS",
 		"CLAMFLEET_SERVER_HEALTH_STALE_FACTOR",
-		"CLAMFLEET_SERVER_LISTEN", "CLAMFLEET_SERVER_TLS_CERT",
+		"CLAMFLEET_SERVER_LISTEN", "CLAMFLEET_SERVER_SECRET_KEY_FILE", "CLAMFLEET_SERVER_TLS_CERT",
 		"CLAMFLEET_SERVER_TLS_CLIENT_CA", "CLAMFLEET_SERVER_TLS_KEY", "CLAMFLEET_SERVER_TRUSTED_PROXIES",
 	}
 	if got := config.EnvNames(&c, EnvPrefix); !reflect.DeepEqual(got, want) {
@@ -91,6 +92,9 @@ func TestValidate(t *testing.T) {
 		{"relative db_path", Config{Listen: ":8443", TLS: TLS{Cert: "/c", Key: "/k"}, DBPath: "db"}, false},
 		{"relative cert", Config{Listen: ":8443", TLS: TLS{Cert: "c", Key: "/k"}, DBPath: "/d"}, false},
 		{"relative client_ca", Config{Listen: ":8443", TLS: TLS{Cert: "/c", Key: "/k", ClientCA: "ca"}, DBPath: "/d"}, false},
+		{"relative secret_key_file", Config{Listen: ":8443", TLS: TLS{Cert: "/c", Key: "/k"}, DBPath: "/d", SecretKeyFile: "k.key"}, false},
+		{"empty secret_key_file", Config{Listen: ":8443", TLS: TLS{Cert: "/c", Key: "/k"}, DBPath: "/d", SecretKeyFile: ""}, false},
+		{"absolute secret_key_file", Config{Listen: ":8443", TLS: TLS{Cert: "/c", Key: "/k"}, DBPath: "/d", SecretKeyFile: "/etc/x.key"}, true},
 	}
 	for _, tc := range cases {
 		// A literal without a health block stands for a loaded config, which always has the defaults.
@@ -99,6 +103,9 @@ func TestValidate(t *testing.T) {
 		}
 		if tc.c.Auth == (Auth{}) {
 			tc.c.Auth = DefaultConfig().Auth
+		}
+		if tc.c.SecretKeyFile == "" && !strings.Contains(tc.name, "secret_key_file") {
+			tc.c.SecretKeyFile = DefaultConfig().SecretKeyFile
 		}
 		if err := tc.c.Validate(); (err == nil) != tc.ok {
 			t.Errorf("%s: err = %v, want ok=%v", tc.name, err, tc.ok)
@@ -307,5 +314,29 @@ func TestAuthKeysFromFileAndEnvironment(t *testing.T) {
 	}
 	if _, _, err := LoadConfig(p, true, noEnv()); err == nil || !strings.Contains(err.Error(), "mode") {
 		t.Fatalf("the spec's auth.mode is not a key here (decision 3b); err = %v", err)
+	}
+}
+
+// The second-factor keys: defaults, the file, and the environment names.
+func TestTOTPAndSecretKeyConfig(t *testing.T) {
+	c := DefaultConfig()
+	if c.Auth.Local.TOTPRequired || c.SecretKeyFile != "/etc/clamfleet/server-secret.key" {
+		t.Fatalf("defaults: totp_required=%v secret_key_file=%q", c.Auth.Local.TOTPRequired, c.SecretKeyFile)
+	}
+	p := filepath.Join(t.TempDir(), "server.yaml")
+	if err := os.WriteFile(p, []byte("secret_key_file: /srv/k.key\nauth: {local: {totp_required: true}}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, _, err := LoadConfig(p, true, noEnv())
+	if err != nil || !c.Auth.Local.TOTPRequired || c.SecretKeyFile != "/srv/k.key" || !c.Auth.Local.Enabled {
+		t.Fatalf("from file: %+v %v", c, err)
+	}
+	// The documented environment names override the file.
+	o := noEnv()
+	env := map[string]string{"CLAMFLEET_SERVER_AUTH_LOCAL_TOTP_REQUIRED": "false", "CLAMFLEET_SERVER_SECRET_KEY_FILE": "/other.key"}
+	o.LookupEnv = func(k string) (string, bool) { v, ok := env[k]; return v, ok }
+	c, _, err = LoadConfig(p, true, o)
+	if err != nil || c.Auth.Local.TOTPRequired || c.SecretKeyFile != "/other.key" {
+		t.Fatalf("from env: %+v %v", c, err)
 	}
 }

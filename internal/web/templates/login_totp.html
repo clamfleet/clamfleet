@@ -1,0 +1,16 @@
+{{/* SPDX-License-Identifier: AGPL-3.0-only */}}
+{{/* SPDX-FileCopyrightText: The ClamFleet Authors */}}
+{{/* login_totp.html: the second sign-in step. Body: struct{}. The layout shows the error. */}}
+{{define "content"}}
+<div class="card narrow" data-testid="totp-login-page">
+  <h1>Two-factor sign-in</h1>
+  <p>Enter the 6-digit code from your authenticator app, or one of your recovery codes.</p>
+  <form method="post" action="/login/totp" data-testid="totp-login-form">
+    <label for="code">Code</label>
+    <input type="text" id="code" name="code" autocomplete="one-time-code" required autofocus maxlength="64" spellcheck="false" autocapitalize="off" data-testid="totp-code">
+    <p><button type="submit" class="primary" data-testid="totp-submit">Sign in</button></p>
+  </form>
+  <p class="hint">Codes depend on the time: if every code is refused, check that your phone's clock is set automatically.</p>
+  <p><a href="/login" data-testid="totp-restart">Start again</a></p>
+</div>
+{{end}}

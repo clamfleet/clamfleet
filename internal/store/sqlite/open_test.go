@@ -72,9 +72,11 @@ func TestMigrateEmptyThenNoop(t *testing.T) {
 func TestMigrateUpDownUp(t *testing.T) {
 	ctx := context.Background()
 	s := openTemp(t)
-	// MigrateDown reverts one migration at a time: 00002 first, then 00001.
-	if err := s.MigrateDown(ctx); err != nil {
-		t.Fatal(err)
+	// MigrateDown reverts one migration at a time: 00003 first, then 00002, then 00001.
+	for range 2 {
+		if err := s.MigrateDown(ctx); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if n := tableCount(t, s.w); n != 5 {
 		t.Fatalf("after reverting 00002 only, %d of the M2 tables remain, want all 5", n)

@@ -112,7 +112,12 @@ install -d -o clamfleet-server -g clamfleet-server -m 700 /var/lib/clamfleet-ser
 install -m 755 bin/clamfleet-server /usr/local/bin/
 install -d /etc/clamfleet
 install -m 644 deploy/server.yaml.example /etc/clamfleet/server.yaml
+clamfleet-server key generate                       # the secret key file (TOTP); see docs/web.md
+chgrp clamfleet-server /etc/clamfleet/server-secret.key && chmod 0640 /etc/clamfleet/server-secret.key
 ```
+
+The key file is optional until someone uses two-factor sign-in. If it exists it must be valid and not
+readable by others, or the server refuses to start; keep it out of your database backups.
 
 **2. Configure** `/etc/clamfleet/server.yaml` (the example is annotated). Keys:
 
@@ -123,6 +128,7 @@ install -m 644 deploy/server.yaml.example /etc/clamfleet/server.yaml
 | `tls.key` | `CLAMFLEET_SERVER_TLS_KEY` | empty |
 | `tls.client_ca` | `CLAMFLEET_SERVER_TLS_CLIENT_CA` | empty (mTLS off) |
 | `db_path` | `CLAMFLEET_SERVER_DB_PATH` | `/var/lib/clamfleet-server/clamfleet.db` |
+| `secret_key_file` | `CLAMFLEET_SERVER_SECRET_KEY_FILE` | `/etc/clamfleet/server-secret.key` (protects TOTP secrets; see below) |
 | `trusted_proxies` | `CLAMFLEET_SERVER_TRUSTED_PROXIES` | empty |
 | `health.stale_factor` | `CLAMFLEET_SERVER_HEALTH_STALE_FACTOR` | `3` (at least 2) |
 | `health.default_interval` | `CLAMFLEET_SERVER_HEALTH_DEFAULT_INTERVAL` | `5m` (10s to 24h; for agents that do not report their interval) |
@@ -131,6 +137,7 @@ install -m 644 deploy/server.yaml.example /etc/clamfleet/server.yaml
 | `health.scan_warn_hours` | `CLAMFLEET_SERVER_HEALTH_SCAN_WARN_HOURS` | `48` (0 = off) |
 | `health.eval_interval` | `CLAMFLEET_SERVER_HEALTH_EVAL_INTERVAL` | `60s` (1s to 60s) |
 | `auth.local.enabled` | `CLAMFLEET_SERVER_AUTH_LOCAL_ENABLED` | `true` (email and password accounts) |
+| `auth.local.totp_required` | `CLAMFLEET_SERVER_AUTH_LOCAL_TOTP_REQUIRED` | `false`; `true` makes every local user set up an authenticator app (needs the key file) |
 | `auth.session_max_age` | `CLAMFLEET_SERVER_AUTH_SESSION_MAX_AGE` | `12h` (5m to 720h) |
 | `auth.session_idle` | `CLAMFLEET_SERVER_AUTH_SESSION_IDLE` | `1h` (at least 1m; not above the max age) |
 | `auth.cookie_secure` | `CLAMFLEET_SERVER_AUTH_COOKIE_SECURE` | `true`; `false` only for plain-HTTP development (drops `Secure` and the `__Host-` prefix, logs a warning) |
@@ -253,7 +260,7 @@ Things to know:
 
 ## Roadmap
 
-Milestones follow [docs/HANDOVER.md](docs/HANDOVER.md). Milestones 1 to 3 are built.
+Milestones follow [docs/HANDOVER.md](docs/HANDOVER.md). Milestones 1 to 3 are built, with TOTP two-factor sign-in for local accounts.
 
 | # | Deliverable | Status |
 |---|---|---|
@@ -264,12 +271,11 @@ Milestones follow [docs/HANDOVER.md](docs/HANDOVER.md). Milestones 1 to 3 are bu
 | 5 | Detection events, spool, events page, acknowledgement | Planned |
 | 6 | Packaging (.deb and .rpm), LDAP and OIDC login, `/metrics`, retention job, backup command | Planned |
 
-Built: local accounts with email and password and the roles `viewer` and `admin`.
+Built: local accounts with email and password and the roles `viewer` and `admin`, and TOTP two-factor
+sign-in (optional per user, or required for all local users with `auth.local.totp_required`; see `docs/web.md`).
 
 Planned web console sign-in and access control:
 
-- **TOTP two-factor authentication** for local accounts, and enforcement for all users switched on by an
-  environment variable. A console reachable from the internet is password-only until this arrives.
 - **LDAP authentication.**
 - **SSO via OpenID Connect**, for example with Keycloak.
 - **User management in the console** (users are managed with the CLI for now).

@@ -7,7 +7,12 @@ import (
 	"context"
 	"database/sql"
 	"path/filepath"
+	"strings"
 	"testing"
+	"testing/fstest"
+
+	"github.com/clamfleet/clamfleet/migrations"
+	"github.com/pressly/goose/v3"
 )
 
 // columns lists the column names of a table.
@@ -98,8 +103,11 @@ func TestMigration00002OnExistingData(t *testing.T) {
 	}
 
 	// Down removes exactly what 00002 added and keeps the hosts; up restores it.
-	if err := s.MigrateDown(ctx); err != nil {
-		t.Fatal(err)
+	// 00003 sits on top of it now, so it is reverted first.
+	for range 2 {
+		if err := s.MigrateDown(ctx); err != nil {
+			t.Fatal(err)
+		}
 	}
 	cols := columns(t, s.w, "hosts")
 	for _, c := range []string{"state", "state_reason", "state_since", "daily_version", "daily_built", "clamd_version"} {
@@ -157,5 +165,104 @@ func TestMigration00002ConstraintsAndCascade(t *testing.T) {
 	}
 	if _, err := s.w.Exec(ins, nil, "ldap", "dn1"); err == nil {
 		t.Fatal("a duplicate (auth_source, external_id) must be refused")
+	}
+}
+
+// 00003 on a database that holds M3 users and sessions: nothing is lost, every
+// existing user starts with auth_version 0 and no TOTP, and down/up round-trips.
+func TestMigration00003OnExistingData(t *testing.T) {
+	ctx := context.Background()
+	s, err := Open(ctx, filepath.Join(t.TempDir(), "t.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if _, err := s.prov.UpTo(ctx, 2); err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range []string{
+		`INSERT INTO users (id, email, role, auth_source, password_hash, created_at, updated_at) VALUES (1, 'a@example.org', 'admin', 'local', 'phc', 1, 1)`,
+		`INSERT INTO user_sessions (token_hash, user_id, csrf_token, created_at, last_seen_at, expires_at) VALUES (x'01', 1, x'02', 1, 1, 9)`,
+	} {
+		if _, err := s.w.Exec(q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	var av, failures int
+	var secret, enabled, last sql.NullString
+	if err := s.r.QueryRow(`SELECT auth_version, totp_failures, totp_secret, totp_enabled_at, totp_last_step FROM users WHERE id=1`).
+		Scan(&av, &failures, &secret, &enabled, &last); err != nil {
+		t.Fatal(err)
+	}
+	if av != 0 || failures != 0 || secret.Valid || enabled.Valid || last.Valid {
+		t.Fatalf("an existing user must start with auth_version 0 and no TOTP: %d %d %v %v %v", av, failures, secret, enabled, last)
+	}
+	if n := count(t, s, `SELECT count(*) FROM user_sessions WHERE totp_pending IS NULL AND totp_pending_at IS NULL`); n != 1 {
+		t.Fatalf("the existing session was lost or got a pending secret: %d", n)
+	}
+	for _, tb := range []string{"user_recovery_codes", "user_login_challenges"} {
+		if !tableExists(t, s.w, tb) {
+			t.Errorf("table %s missing", tb)
+		}
+	}
+
+	if err := s.MigrateDown(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for table, cols := range map[string][]string{
+		"users":         {"auth_version", "totp_secret", "totp_enabled_at", "totp_last_step", "totp_failures"},
+		"user_sessions": {"totp_pending", "totp_pending_at"},
+	} {
+		have := columns(t, s.w, table)
+		for _, c := range cols {
+			if have[c] {
+				t.Errorf("column %s.%s survived the down migration", table, c)
+			}
+		}
+	}
+	for _, tb := range []string{"user_recovery_codes", "user_login_challenges"} {
+		if tableExists(t, s.w, tb) {
+			t.Errorf("table %s survived the down migration", tb)
+		}
+	}
+	if n := count(t, s, `SELECT count(*) FROM users`); n != 1 {
+		t.Fatalf("%d users after down", n)
+	}
+	if err := s.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if n := count(t, s, `SELECT count(*) FROM users WHERE auth_version = 0`); n != 1 {
+		t.Fatalf("%d users after down/up", n)
+	}
+}
+
+// Rule: an M3 binary must refuse a 00003 database, because it would ignore TOTP
+// and let a password alone in. The M3 binary is simulated by a provider that
+// knows only migrations 1 and 2, which is what its embedded set was.
+func TestM3BinaryRefusesAMigration00003Database(t *testing.T) {
+	ctx := context.Background()
+	s := openTemp(t) // migrated to the newest version
+	if v, err := s.SchemaVersion(ctx); err != nil || v < 3 {
+		t.Fatalf("schema version %d, %v: the test needs 00003 applied", v, err)
+	}
+	old := fstest.MapFS{}
+	for _, n := range []string{"00001_init.sql", "00002_health_users.sql"} {
+		b, err := migrations.SQLite.ReadFile("sqlite/" + n)
+		if err != nil {
+			t.Fatal(err)
+		}
+		old[n] = &fstest.MapFile{Data: b}
+	}
+	prov, err := goose.NewProvider(goose.DialectSQLite3, s.w, old, goose.WithDisableGlobalRegistry(true))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m3 := &Store{path: s.path, w: s.w, r: s.r, prov: prov}
+	err = m3.checkNotNewer(ctx)
+	if err == nil || !strings.Contains(err.Error(), "newer than this binary supports") {
+		t.Fatalf("an M3 binary must refuse the database: %v", err)
 	}
 }

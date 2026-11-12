@@ -16,7 +16,7 @@ own session cookie. Neither credential works on the other's routes.
 ## Users and roles
 
 Users are managed on the server with `clamfleet-server user ...` and nowhere else in this release
-(user management in the console, TOTP, LDAP and OIDC come later). Run the commands as the server
+(user management in the console, LDAP and OIDC come later; two-factor sign-in is below). Run the commands as the server
 user, so the audit log names you:
 
 ```
@@ -25,6 +25,7 @@ sudo -u clamfleet-server clamfleet-server user list [--json]
 sudo -u clamfleet-server clamfleet-server user set-role ann@example.com viewer
 sudo -u clamfleet-server clamfleet-server user disable ann@example.com     # and: enable
 sudo -u clamfleet-server clamfleet-server user reset-password ann@example.com
+sudo -u clamfleet-server clamfleet-server user reset-totp ann@example.com   # remove their authenticator
 ```
 
 - **Roles:** `viewer` sees the fleet and the host pages. `admin` can also register, rotate, revoke and
@@ -57,14 +58,97 @@ The cookie is `__Host-clamfleet_session` with `HttpOnly`, `Secure`, `SameSite=La
 `Domain`; it has no expiry date of its own (the server enforces the limits). A fresh token is issued at
 every login.
 
-### Known limit: disable and enable within one login
+A session is created only if nothing about the account changed while the password was being checked:
+a password reset or change, a disable, or a disable followed by an enable (a per-user `auth_version`
+counter catches the last one) leaves that login without a session.
 
-A session is only created if the user still has the password hash that the login verified and is not
-disabled, so a password reset, a password change or a disable that commits while a login is hashing
-leaves that login without a session. One window stays open: if an admin disables a user and enables
-them again while that user's login is hashing (a few tens of milliseconds), the hash is unchanged and
-the login succeeds. Closing it would need a per-user version counter (a schema change). Enabling a user
-ends the sessions that existed at that moment.
+## Two-factor sign-in (TOTP)
+
+A local user can protect their account with an authenticator app (any app for time-based one-time
+passwords: Aegis, 2FAS, Google Authenticator, a password manager). It is optional per user, or required
+for everyone with `auth.local.totp_required: true` (below). Accounts that sign in through an identity
+provider (LDAP, OIDC; later milestones) are not offered it: their second factor is the provider's.
+
+**Setting it up** (Account, then "Two-factor sign-in"):
+
+1. Enter your current password. Every change to two-factor sign-in asks for it again, the first set-up
+   included, so a stolen session cookie alone cannot plant someone else's authenticator.
+2. The page shows the key as text, in groups of four, and the same key as an `otpauth://` setup URI. There
+   is no QR code: add the account in your app by typing the key (time-based, 6 digits, 30 seconds, SHA-1
+   are the defaults of every app) or by pasting the URI where the app accepts one. No third party ever
+   sees the key.
+3. Enter the 6-digit code the app shows. Only then is it switched on. You then see 10 **recovery codes**,
+   once. Store them like a password; each works once, if you lose your phone.
+
+Switching it on ends your other sessions. An unfinished set-up expires after 15 minutes and belongs to the
+browser session that started it.
+
+**Signing in** takes two steps. After the right password you are sent to a second page and are **not**
+signed in yet (the pending login is a separate, short-lived record with its own cookie, valid for 5 minutes,
+and cannot be used as a session). Enter the code from the app, or one recovery code. A code works once: the
+same code is refused a second time even inside its 90-second window. If every code is refused, check
+that the phone's clock is set automatically; the server's clock must be right too (run NTP, for example
+systemd-timesyncd), because the server accepts the code of the current 30 seconds and one step either side.
+
+After a recovery code the page tells you how many are left. "New recovery codes" (password needed) replaces
+all of them. "Turn off" (password needed) removes the authenticator and the codes and ends your other
+sessions; it is not offered when TOTP is required.
+
+**Wrong codes.** They are slowed like wrong passwords (5 free attempts, then 30 s, doubling to 15 min), and
+after **100 consecutive wrong codes** the second factor is locked: even the right code is refused. That
+only a holder of the password can cause, so treat a lock as a sign the password is known: **reset the
+password** (`user reset-password`, which also lifts the lock) or reset the authenticator (`user reset-totp`).
+Everything is audited: `user.login` with `mfa` = `totp` or `recovery_code`, `user.login.failed` with the
+reason, `user.totp.enable`, `.replace`, `.disable`, `.reset`, `.recovery.regenerate` and `.locked`. A code,
+a secret or a recovery code is never written to the audit log or the log.
+
+**An administrator's reset** is `user reset-totp EMAIL` on the server. It removes the authenticator and the
+recovery codes, lifts a lock and ends the user's sessions and pending logins. It needs no key file. `user
+list` shows each user's TOTP state (`off`, `on`, `locked`).
+
+### Requiring it for everyone
+
+`auth.local.totp_required: true` (or `CLAMFLEET_SERVER_AUTH_LOCAL_TOTP_REQUIRED=true`) makes every local
+user enrol. A user without an authenticator can then open only the set-up pages and sign out, on every
+request and in sessions that already exist; a user with a one-time password changes it first and enrols in
+the same session. Turning it off again leaves enrolled users enrolled.
+
+**Trust on first use.** Until a user has enrolled, their password alone is enough to enrol. Switch the
+setting on **before** handing out one-time passwords, so the first thing a new user does is set up their
+authenticator, and treat a password issued earlier as unprotected until its owner has enrolled. An
+administrator-issued enrolment code would remove this; it is not built.
+
+## The secret key file
+
+TOTP secrets are stored encrypted (AES-256-GCM) with a key from a file, `secret_key_file` (default
+`/etc/clamfleet/server-secret.key`). The key is not in the database, and a backup of the database does not
+carry it. Recovery codes are stored as SHA-256 hashes and do not depend on the key.
+
+```
+sudo clamfleet-server key generate                     # as root: creates the file, mode 0600, never overwrites
+sudo chgrp clamfleet-server /etc/clamfleet/server-secret.key
+sudo chmod 0640 /etc/clamfleet/server-secret.key
+```
+
+- **Ownership and mode.** `root:clamfleet-server` `0640`, or the server user with `0600`. The server
+  **refuses to start** with a key file that others can read, that its group can write, or that is a
+  symbolic link or not a key file at all: a file that exists must be valid.
+- **Keep it out of the state directory and back it up separately.** A backup that holds the database and
+  the key protects nothing.
+- **Start-up checks.** No key file and nobody uses TOTP: the server starts and logs a warning, TOTP is
+  unavailable (a TOTP user's password alone is never enough: the second step answers 503 for a code, and a
+  recovery code still works). With `totp_required` on, or with users who have TOTP, and no key file: it
+  refuses to start and says how many. With a key file that cannot open every stored secret: it refuses to
+  start and names the count.
+- **Rotation.** `key generate --add` puts a new key at the top of the file (the first key seals, every key
+  opens); restart the server; `sudo -u clamfleet-server clamfleet-server key reencrypt` re-seals every
+  secret with the new key (all or nothing, audited, safe to repeat); delete the old key line; restart. The
+  server reads the file only at start. An enrolment that was in progress during a rotation has to be
+  started again.
+- **A lost key.** The enrolments cannot be opened and the server refuses to start. Create a new key with
+  `key generate` (move the broken file away first), run `user reset-totp EMAIL` for each user listed by
+  `user list` with TOTP `on` or `locked` (anything but `off`), and start the server. Users enrol again (at once, with `totp_required`).
+  If the old key turns up, restoring it also works.
 
 ## Protection against forged requests (CSRF)
 
@@ -114,7 +198,9 @@ cookie loses `Secure` and the `__Host-` prefix, and the server logs a warning at
 ## Privacy
 
 `users` holds email addresses and `audit_log` holds the emails typed at login plus client IP
-addresses. All of it stays in your database. Deleting a user is not available; the audit rows keep the
+addresses. With two-factor sign-in, `users` also holds each user's encrypted TOTP secret, the last
+accepted time step and a failure counter, and the database holds the SHA-256 of each recovery code. All of
+it stays in your database: no QR-code service, no CDN, no other third party is involved. Deleting a user is not available; the audit rows keep the
 email as text, and retention for the audit log arrives with a later milestone.
 
 ## Pages
@@ -122,9 +208,11 @@ email as text, and retention for the audit log arrives with a later milestone.
 | Path | Who | What |
 |---|---|---|
 | `/login` | everyone | sign in |
+| `/login/totp` | everyone, with a pending login | the second step: a code from the authenticator app or a recovery code |
 | `/` | signed in | fleet: state counts, filters by tag and state, one row per host, worst state first |
 | `/hosts/NAME` | signed in | state and reasons, newest report, state history; admins also see audit rows and actions |
-| `/account` | signed in | change your password |
+| `/account` | signed in | change your password; a card for two-factor sign-in |
+| `/account/totp` | signed in | set up, replace or turn off the authenticator; new recovery codes (each asks for your password) |
 | `/admin/hosts` | admin | all hosts including revoked ones; register, rotate, revoke, delete (type the name to confirm) |
 
 Revoked hosts are not on the fleet page, because their state is frozen.

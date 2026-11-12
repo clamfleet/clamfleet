@@ -57,6 +57,8 @@ func cliEnv(db string, extra ...string) []string {
 		"CLAMFLEET_SERVER_DB_PATH=" + db,
 		"CLAMFLEET_SERVER_TLS_CERT=", "CLAMFLEET_SERVER_TLS_KEY=",
 		"CLAMFLEET_SERVER_LISTEN=127.0.0.1:0",
+		// Never the developer's own key file: tests that need one set their own (later entries win).
+		"CLAMFLEET_SERVER_SECRET_KEY_FILE=/nonexistent/clamfleet-test-secret.key",
 	}, extra...)
 }
 

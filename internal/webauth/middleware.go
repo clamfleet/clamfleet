@@ -13,6 +13,9 @@
 //  3. a per-session synchronizer token (CSRF) in a form field or the
 //     X-CSRF-Token header, for every non-GET request with a session.
 //
+// Two gates sit behind a valid session, in this order: a forced password change
+// (MustChange) and a forced TOTP enrolment (TOTPRequired).
+//
 // Failure model: every cause of "no valid session" (no cookie, malformed,
 // unknown, expired, idle, user disabled) is the same outcome, so nothing says
 // which. A store failure is a 503, never a redirect to the login page.
@@ -48,6 +51,14 @@ const (
 // may use: the change form itself, logout, and static assets (login page style).
 var mustChangeAllowed = map[string]bool{"/account": true, "/account/password": true, "/logout": true}
 
+// totpEnrolAllowed are the only paths a local user who must enrol a TOTP
+// authenticator (auth.local.totp_required) may use. The setup and confirm pages
+// are on the list on purpose: gating them would lock the user out of the very
+// thing the gate asks of them. Static assets are a public route and never pass here.
+var totpEnrolAllowed = map[string]bool{
+	"/account/totp": true, "/account/totp/setup": true, "/account/totp/confirm": true, "/logout": true,
+}
+
 // SessionStore is what Manager needs from the store.
 type SessionStore interface {
 	CreateSession(ctx context.Context, s store.Session) error
@@ -63,7 +74,10 @@ type Manager struct {
 	MaxAge time.Duration    // absolute session lifetime (auth.session_max_age)
 	Idle   time.Duration    // idle timeout (auth.session_idle)
 	Secure bool             // Secure + __Host- cookie (auth.cookie_secure)
-	Log    *slog.Logger
+	// TOTPRequired is auth.local.totp_required: a local user without an
+	// authenticator reaches only the enrolment pages (RequireUser).
+	TOTPRequired bool
+	Log          *slog.Logger
 	// Deny renders an error page for status 401 or 403 where the middleware
 	// refuses a request that cannot be redirected. Nil: a plain-text error.
 	Deny func(w http.ResponseWriter, r *http.Request, status int)
@@ -85,23 +99,37 @@ const TouchEvery = time.Minute
 // and no session. That check is by value, not by time: timestamps are whole
 // seconds, and a clock comparison would let a login that started in the same
 // second as a reset through.
-func (m *Manager) Create(ctx context.Context, userID int64, passwordHash string) (token string, err error) {
-	token, hash, err := NewToken()
+//
+// authVersion is the user's auth_version as read with the user, before hashing.
+// It also catches a disable followed by an enable, which leaves the hash as it was.
+func (m *Manager) Create(ctx context.Context, userID int64, passwordHash string, authVersion int64) (token string, err error) {
+	token, s, err := m.PrepareSession()
 	if err != nil {
 		return "", err
 	}
-	csrf := make([]byte, secretBytes)
-	if _, err := rand.Read(csrf); err != nil {
-		return "", fmt.Errorf("generate csrf token: %w", err)
-	}
-	now := m.Now()
-	err = m.Store.CreateSession(ctx, store.Session{
-		TokenHash: hash, UserID: userID, CSRF: csrf, CreatedAt: now, ExpiresAt: now.Add(m.MaxAge), PasswordHash: passwordHash,
-	})
-	if err != nil {
+	s.UserID, s.PasswordHash, s.AuthVersion = userID, passwordHash, authVersion
+	if err := m.Store.CreateSession(ctx, s); err != nil {
 		return "", err
 	}
 	return token, nil
+}
+
+// PrepareSession returns a fresh cookie token and the session record for it
+// (token hash, CSRF secret, created and expiry times), with no user yet. The
+// second-factor login stores it itself, inside the transaction that consumes the
+// login challenge (store.CompleteLogin), and takes the user from the challenge.
+// The token is generated here and never taken from a request.
+func (m *Manager) PrepareSession() (token string, s store.Session, err error) {
+	token, hash, err := NewToken()
+	if err != nil {
+		return "", store.Session{}, err
+	}
+	csrf := make([]byte, secretBytes)
+	if _, err := rand.Read(csrf); err != nil {
+		return "", store.Session{}, fmt.Errorf("generate csrf token: %w", err)
+	}
+	now := m.Now()
+	return token, store.Session{TokenHash: hash, CSRF: csrf, CreatedAt: now, ExpiresAt: now.Add(m.MaxAge)}, nil
 }
 
 // Destroy deletes the session behind the request's cookie, if any.
@@ -147,7 +175,7 @@ func (m *Manager) Authenticate(r *http.Request) (Principal, error) {
 	}
 	return Principal{
 		SessionID: sp.SessionID, UserID: sp.UserID, Email: sp.Email, Name: sp.Name, Role: sp.Role,
-		MustChange: sp.MustChange, TokenHash: hash, csrf: sp.CSRF,
+		MustChange: sp.MustChange, AuthSource: sp.AuthSource, TOTPEnabled: sp.TOTPEnabled, TokenHash: hash, csrf: sp.CSRF,
 	}, nil
 }
 
@@ -181,19 +209,37 @@ func (m *Manager) RequireUser(next http.Handler) http.Handler {
 		// it before doing anything else. Enforced here, on the server, for every
 		// route, not by hiding links.
 		if p.MustChange && !mustChangeAllowed[r.URL.Path] {
-			if r.Method == http.MethodGet && r.Header.Get("HX-Request") == "" {
-				w.Header().Set("Cache-Control", "no-store")
-				http.Redirect(w, r, "/account", http.StatusSeeOther)
-			} else {
-				if r.Header.Get("HX-Request") != "" {
-					w.Header().Set("HX-Redirect", "/account")
-				}
-				m.deny(w, r, http.StatusForbidden)
-			}
+			m.gateRedirect(w, r, "/account")
+			return
+		}
+		// Rule: with auth.local.totp_required, a local user without an authenticator
+		// must enrol one before anything else. Second in order, so a one-time password
+		// is changed first and then the authenticator is set up, in one session.
+		// Evaluated on every request from the join (not cached in the session), so
+		// switching the setting on applies to sessions that already exist. External
+		// users are not gated: their second factor is the identity provider's.
+		if !p.MustChange && m.TOTPRequired && p.AuthSource == store.AuthLocal && !p.TOTPEnabled && !totpEnrolAllowed[r.URL.Path] {
+			m.gateRedirect(w, r, "/account/totp")
 			return
 		}
 		next.ServeHTTP(w, r.WithContext(WithPrincipal(r.Context(), p)))
 	})
+}
+
+// gateRedirect answers a request that a gate keeps from its target: a plain GET
+// is redirected to the page the gate wants, an htmx request gets 403 plus
+// HX-Redirect (so the tab leaves instead of swapping an error into a fragment),
+// anything else gets 403.
+func (m *Manager) gateRedirect(w http.ResponseWriter, r *http.Request, to string) {
+	if r.Method == http.MethodGet && r.Header.Get("HX-Request") == "" {
+		w.Header().Set("Cache-Control", "no-store")
+		http.Redirect(w, r, to, http.StatusSeeOther)
+		return
+	}
+	if r.Header.Get("HX-Request") != "" {
+		w.Header().Set("HX-Redirect", to)
+	}
+	m.deny(w, r, http.StatusForbidden)
 }
 
 func (m *Manager) unauthenticated(w http.ResponseWriter, r *http.Request) {

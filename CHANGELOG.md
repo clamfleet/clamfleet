@@ -10,6 +10,17 @@ All notable changes are listed here. The format follows Keep a Changelog; versio
 ## Unreleased
 
 ### Added
+- Milestone 3b, TOTP two-factor sign-in for local accounts. A user sets up an authenticator app under Account
+  (password required for every change; the key is shown as text and an `otpauth://` URI, no QR code), gets 10
+  one-time recovery codes, and then signs in in two steps; a pending login is a separate record and cookie,
+  never a session. Codes are single use, wrong codes are slowed and, after 100 in a row, locked until
+  `user reset-password` or `user reset-totp EMAIL`. `auth.local.totp_required` (env
+  `CLAMFLEET_SERVER_AUTH_LOCAL_TOTP_REQUIRED`) makes every local user enrol; trust on first use applies, see
+  `docs/web.md`. TOTP secrets are encrypted with a key file, `secret_key_file` (default
+  `/etc/clamfleet/server-secret.key`, mode 0640 root:clamfleet-server), made with `clamfleet-server key
+  generate`; `key generate --add` and `key reencrypt` rotate it. The server refuses to start when the key file
+  is invalid, or missing while TOTP is in use. New migration `00003`, additive: stop the server and copy the
+  database first; an older binary refuses the database. No new dependency.
 - Milestone 3, web console: local accounts (email and password, argon2id) with the roles `viewer` and
   `admin`, managed with `clamfleet-server user add|list|set-role|disable|enable|reset-password`; cookie
   sessions (12 h absolute, 1 h idle by default) with CSRF protection (SameSite=Lax, cross-origin check and a
@@ -40,6 +51,10 @@ All notable changes are listed here. The format follows Keep a Changelog; versio
   headers, freshclam, systemd units, host, last scan) and `clamfleet-agent collect --dry-run`.
 - `interval_seconds` in the report: the agent's configured interval, so the server can judge STALE per agent (3 x interval). Additive, schema stays 1.
 - `freshclam.source` in the report (`journal`, `log`, `journal+log`, `mtime`, or null). Additive, schema stays 1.
+
+### Fixed
+- A user disabled and re-enabled while their login was verifying no longer gets a session from that login
+  (a per-user `auth_version`; this was the known limit of Milestone 3).
 
 ### Changed
 - New server key `trusted_proxies` (env `CLAMFLEET_SERVER_TRUSTED_PROXIES`): the logged client IP comes from `X-Forwarded-For` (rightmost address that is not a trusted proxy) only when the direct peer is a trusted proxy. Default empty.

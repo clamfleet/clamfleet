@@ -75,6 +75,11 @@ commands:
   user disable EMAIL | enable EMAIL           disable (ends sessions) or re-enable a login
   user reset-password EMAIL [--password-stdin]
                                               issue a new one-time password and end the user's sessions
+  user reset-totp EMAIL                       remove the user's authenticator and recovery codes, lift a second-factor
+                                              lock and end their sessions (needs no key file)
+  key generate [--file PATH] [--add]          create the secret key file (as root; default: secret_key_file);
+                                              --add puts a new key on top of an existing file (rotation)
+  key reencrypt                               re-seal stored secrets with the active key (after key generate --add)
   version                                     print the version
 
 Host and user commands and migrate take --config FILE too (default: $CLAMFLEET_SERVER_CONFIG or ` + server.DefaultConfigPath + `).
@@ -99,6 +104,8 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return a.host(ctx, args[1:])
 	case "user":
 		return a.user(ctx, args[1:])
+	case "key":
+		return a.key(ctx, args[1:])
 	case "-h", "--help", "help":
 		fmt.Fprint(stdout, usage)
 		return exitOK
@@ -185,11 +192,22 @@ func (a *app) serve(ctx context.Context, args []string) int {
 		log.Error("database", "error", err.Error())
 		return exitError
 	}
+	// The key file is checked after the database is open (the check needs the
+	// stored secrets) and before anything is served: a missing or wrong key must
+	// stop the server, never turn the second factor off.
+	keys, err := startupKeys(ctx, log, cfg, st)
+	if err != nil {
+		log.Error("secret key", "error", err.Error())
+		return exitError
+	}
+	if keys != nil {
+		log.Info("secret key file loaded", "key_id", keys.ActiveID(), "keys", keys.Len())
+	}
 	// The evaluator is built before the handler so both share it: ingest calls
 	// Host after each report, the loop below notices hosts that went silent.
 	// Its start time is the restart-grace reference (see health.Evaluate).
 	ev := health.New(st, a.now, cfg.Health.Thresholds(), log)
-	h, err := server.NewHandlerFromConfig(cfg, server.Deps{Store: st, Now: a.now, Log: log, AfterReport: ev.Host})
+	h, err := server.NewHandlerFromConfig(cfg, server.Deps{Store: st, Now: a.now, Log: log, AfterReport: ev.Host, Keys: keys})
 	if err != nil {
 		log.Error("invalid configuration", "error", err.Error())
 		return exitError
