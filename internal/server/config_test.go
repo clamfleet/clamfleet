@@ -25,6 +25,8 @@ func noEnv() config.Options {
 func TestEnvNamesMatchDocumentedTable(t *testing.T) {
 	c := DefaultConfig()
 	want := []string{
+		"CLAMFLEET_SERVER_AUTH_COOKIE_SECURE", "CLAMFLEET_SERVER_AUTH_LOCAL_ENABLED",
+		"CLAMFLEET_SERVER_AUTH_SESSION_IDLE", "CLAMFLEET_SERVER_AUTH_SESSION_MAX_AGE",
 		"CLAMFLEET_SERVER_DB_PATH",
 		"CLAMFLEET_SERVER_HEALTH_BEHIND_WARN", "CLAMFLEET_SERVER_HEALTH_DAILY_CRIT_HOURS",
 		"CLAMFLEET_SERVER_HEALTH_DAILY_WARN_HOURS", "CLAMFLEET_SERVER_HEALTH_DEFAULT_INTERVAL",
@@ -94,6 +96,9 @@ func TestValidate(t *testing.T) {
 		// A literal without a health block stands for a loaded config, which always has the defaults.
 		if tc.c.Health == (Health{}) {
 			tc.c.Health = DefaultConfig().Health
+		}
+		if tc.c.Auth == (Auth{}) {
+			tc.c.Auth = DefaultConfig().Auth
 		}
 		if err := tc.c.Validate(); (err == nil) != tc.ok {
 			t.Errorf("%s: err = %v, want ok=%v", tc.name, err, tc.ok)
@@ -248,5 +253,59 @@ func TestHealthKeysFromFileAndEnvironment(t *testing.T) {
 	}
 	if _, _, err := LoadConfig(p, true, noEnv()); err == nil || !strings.Contains(err.Error(), "stale_factr") {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestAuthDefaultsAndValidation(t *testing.T) {
+	c := DefaultConfig()
+	if !c.Auth.Local.Enabled || c.Auth.SessionMaxAge != 12*time.Hour || c.Auth.SessionIdle != time.Hour || !c.Auth.CookieSecure {
+		t.Fatalf("%+v", c.Auth)
+	}
+	cases := []struct {
+		name string
+		mut  func(a *Auth)
+		bad  string
+	}{
+		{"defaults", func(a *Auth) {}, ""},
+		{"idle 59s", func(a *Auth) { a.SessionIdle = 59 * time.Second }, "session_idle"},
+		{"idle 1m", func(a *Auth) { a.SessionIdle = time.Minute }, ""},
+		{"max age below idle", func(a *Auth) { a.SessionMaxAge = 30 * time.Minute }, "session_max_age"},
+		{"max age equals idle", func(a *Auth) { a.SessionMaxAge = a.SessionIdle }, ""},
+		{"max age 30d", func(a *Auth) { a.SessionMaxAge = 30 * 24 * time.Hour }, ""},
+		{"max age over 30d", func(a *Auth) { a.SessionMaxAge = 30*24*time.Hour + time.Second }, "session_max_age"},
+	}
+	for _, tc := range cases {
+		c := DefaultConfig()
+		tc.mut(&c.Auth)
+		err := c.Validate()
+		switch {
+		case tc.bad == "" && err != nil:
+			t.Errorf("%s: unexpected error %v", tc.name, err)
+		case tc.bad != "" && (err == nil || !strings.Contains(err.Error(), tc.bad)):
+			t.Errorf("%s: err = %v, want it to mention %q", tc.name, err, tc.bad)
+		}
+	}
+}
+
+// auth.local.* reaches the config from the file and from the environment.
+func TestAuthKeysFromFileAndEnvironment(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "server.yaml")
+	if err := os.WriteFile(p, []byte("auth: {local: {enabled: false}, session_idle: 30m}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	o := noEnv()
+	o.LookupEnv = func(k string) (string, bool) { return "false", k == "CLAMFLEET_SERVER_AUTH_COOKIE_SECURE" }
+	c, _, err := LoadConfig(p, true, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Auth.Local.Enabled || c.Auth.SessionIdle != 30*time.Minute || c.Auth.CookieSecure || c.Auth.SessionMaxAge != 12*time.Hour {
+		t.Fatalf("%+v", c.Auth)
+	}
+	if err := os.WriteFile(p, []byte("auth: {mode: local}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := LoadConfig(p, true, noEnv()); err == nil || !strings.Contains(err.Error(), "mode") {
+		t.Fatalf("the spec's auth.mode is not a key here (decision 3b); err = %v", err)
 	}
 }
