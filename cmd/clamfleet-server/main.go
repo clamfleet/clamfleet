@@ -138,7 +138,7 @@ func newFlags(name string, stderr io.Writer) (*flag.FlagSet, *string) {
 
 func (a *app) serve(ctx context.Context, args []string) int {
 	fs, cfgFlag := newFlags("serve", a.stderr)
-	lvl := fs.String("log-level", "info", "debug, info, warn or error (debug also logs every successful request)")
+	lvl := fs.String("log-level", "info", "debug, info, warn or error (info logs every request; debug adds health checks)")
 	if err := fs.Parse(args); err != nil {
 		return exitUsage
 	}

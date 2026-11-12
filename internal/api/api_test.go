@@ -50,7 +50,10 @@ type env struct {
 	logs   *syncBuf
 }
 
-func newEnv(t *testing.T) *env {
+func newEnv(t *testing.T) *env { return newEnvLevel(t, slog.LevelDebug) }
+
+// newEnvLevel is newEnv with the log handler at a given level (the server default is info).
+func newEnvLevel(t *testing.T, level slog.Level) *env {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "api.db")
 	ctx := context.Background()
@@ -62,7 +65,7 @@ func newEnv(t *testing.T) *env {
 		t.Fatal(err)
 	}
 	logs := &syncBuf{}
-	log := slog.New(slog.NewJSONHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	log := slog.New(slog.NewJSONHandler(logs, &slog.HandlerOptions{Level: level}))
 	h := server.NewHandler(server.Deps{Store: st, Now: func() time.Time { return now }, Log: log})
 	e := &env{t: t, srv: httptest.NewServer(h), st: st, dbPath: path, logs: logs}
 	t.Cleanup(func() { e.srv.Close(); st.Close() })
@@ -547,7 +550,8 @@ func TestRouteTable(t *testing.T) {
 }
 
 func TestRequestLogFields(t *testing.T) {
-	e := newEnv(t)
+	// Info is the default level of `serve`: decision 10 needs the client IP of accepted requests there.
+	e := newEnvLevel(t, slog.LevelInfo)
 	tok := e.host("app01")
 	e.do("POST", "/v1/report", tok, golden(t))
 	e.do("POST", "/v1/report", "", golden(t))
@@ -566,7 +570,7 @@ func TestRequestLogFields(t *testing.T) {
 	if okLine == nil || badLine == nil {
 		t.Fatalf("missing request lines:\n%s", e.logs.String())
 	}
-	if okLine["level"] != "DEBUG" || badLine["level"] != "WARN" {
+	if okLine["level"] != "INFO" || badLine["level"] != "WARN" {
 		t.Fatalf("levels: %v / %v", okLine["level"], badLine["level"])
 	}
 	// Decision 10: the client IP is always logged, on success too.

@@ -150,7 +150,7 @@ ReadWritePaths=/var/lib/clamfleet-server
 
 `serve` creates and migrates the database. Logs are JSON lines on stderr (use the journal). One line
 per request: method, path, status, host name, duration and the client IP address, always.
-`--log-level debug` also logs successful requests.
+`--log-level warn` hides the accepted-request lines; `debug` adds health checks.
 
 **4. Register a host and give the agent its token.** Run the admin commands as the server user, so
 SQLite files stay owned by it (a command run as root works but warns, and can leave files the

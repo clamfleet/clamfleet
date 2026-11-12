@@ -68,9 +68,9 @@ func freshServer(t *testing.T) string {
 		"chmod 644 /etc/clamfleet/ca.pem /etc/clamfleet/tls.crt\n"+
 		"chown clamfleet-server:clamfleet-server /etc/clamfleet/tls.key; chmod 600 /etc/clamfleet/tls.key\n")
 
-	// Debug level so the journal also holds the successful request lines.
+	// Default (info) level: the journal must already hold the successful request lines.
 	sh(t, "systemd-run --quiet --collect --unit="+serverUnit+" --uid=clamfleet-server "+
-		"/usr/local/bin/clamfleet-server serve --log-level=debug")
+		"/usr/local/bin/clamfleet-server serve")
 	sh(t, "for _ in $(seq 1 30); do journalctl -u "+serverUnit+" -o cat --no-pager -q | grep -q '\"msg\":\"listening\"' && exit 0; sleep 1; done; "+
 		"journalctl -u "+serverUnit+" --no-pager >&2; echo server did not start >&2; exit 1")
 

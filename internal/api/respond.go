@@ -85,7 +85,8 @@ func clientIP(r *http.Request) string {
 	return host
 }
 
-// RequestLog logs every request once, after it is served: 2xx at debug, 4xx at
+// RequestLog logs every request once, after it is served: 2xx at info (the client IP of every accepted report must be
+// on record at the default level; /healthz 2xx stays at debug so a proxy health probe does not flood the log), 4xx at
 // warn, 5xx at error. Fields: method, path, status, host (the authenticated
 // host name, if any), duration and the client IP, always (decision 10: what an
 // operator does with source addresses is their business; they are not hidden).
@@ -102,7 +103,10 @@ func RequestLog(log *slog.Logger, now func() time.Time) func(http.Handler) http.
 			if status == 0 {
 				status = http.StatusOK
 			}
-			level := slog.LevelDebug
+			level := slog.LevelInfo
+			if r.URL.Path == "/healthz" {
+				level = slog.LevelDebug
+			}
 			switch {
 			case status >= 500:
 				level = slog.LevelError

@@ -85,6 +85,6 @@ No authentication. `200 {"status":"ok"}` when the database answers within two se
 
 The server logs one line per request: method, path, status, the authenticated host name (empty for
 a rejected request), duration and the client IP address (always, decision of the maintainers).
-Successful requests are logged at debug level, 4xx at warn, 5xx at error. The `Authorization`
+Successful requests are logged at info level (the default), except `GET /healthz`, which is logged at debug; 4xx at warn, 5xx at error. The `Authorization`
 header, the query string and the body are never logged. Behind a reverse proxy the client address
 is the proxy's: `X-Forwarded-For` is deliberately not trusted.
