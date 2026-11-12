@@ -511,9 +511,8 @@ func TestStoreDownGives503(t *testing.T) {
 	}
 }
 
-// The expected routes are written out by hand and probed against NewHandler
-// only (not against server.Routes(), which could be wrong in step with the
-// handler): a route registered outside this list, or with the wrong auth
+// The expected routes are written out by hand, compared with server.Routes()
+// exactly and probed against NewHandler: a route registered outside this list, or with the wrong auth
 // class, fails here.
 func TestRouteTable(t *testing.T) {
 	expected := []struct {
@@ -523,6 +522,22 @@ func TestRouteTable(t *testing.T) {
 		{"POST", "/v1/report", true},
 		{"POST", "/v1/event", true},
 		{"GET", "/healthz", false},
+	}
+	// The declared table must match the hardcoded list exactly, so a route that
+	// is added to server.Routes() (even an open one the probe below would not
+	// find) fails here.
+	got := server.Routes()
+	if len(got) != len(expected) {
+		t.Fatalf("server.Routes() = %v, want exactly %v", got, expected)
+	}
+	for i, rt := range expected {
+		class := server.AuthNone
+		if rt.agentAuth {
+			class = server.AuthAgent
+		}
+		if got[i] != (server.Route{Method: rt.method, Path: rt.path, Auth: class}) {
+			t.Fatalf("server.Routes()[%d] = %v, want %s %s (%s)", i, got[i], rt.method, rt.path, class)
+		}
 	}
 	e := newEnv(t)
 	for _, rt := range expected {
