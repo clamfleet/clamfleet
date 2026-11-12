@@ -106,8 +106,8 @@ func (q *Queries) HealthInputs(ctx context.Context) ([]HealthInputsRow, error) {
 }
 
 const insertStateChange = `-- name: InsertStateChange :exec
-INSERT INTO state_changes (host_id, ts, from_state, to_state, reason)
-VALUES (?1, ?2, ?3, ?4, ?5)
+INSERT INTO state_changes (host_id, ts, from_state, to_state, reason, alert_pending)
+VALUES (?1, ?2, ?3, ?4, ?5, 1)
 `
 
 type InsertStateChangeParams struct {
@@ -118,6 +118,9 @@ type InsertStateChangeParams struct {
 	Reason    string
 }
 
+// alert_pending = 1: the alert planner (M4) picks the row up. It is set in this
+// insert, in EvaluateHosts's own transaction, so a transition and its pending
+// alert exist together or not at all.
 func (q *Queries) InsertStateChange(ctx context.Context, arg InsertStateChangeParams) error {
 	_, err := q.db.ExecContext(ctx, insertStateChange,
 		arg.HostID,

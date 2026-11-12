@@ -25,8 +25,11 @@ WHERE id = sqlc.arg(id);
 UPDATE hosts SET state_reason = sqlc.arg(reason) WHERE id = sqlc.arg(id);
 
 -- name: InsertStateChange :exec
-INSERT INTO state_changes (host_id, ts, from_state, to_state, reason)
-VALUES (sqlc.arg(host_id), sqlc.arg(ts), sqlc.arg(from_state), sqlc.arg(to_state), sqlc.arg(reason));
+-- alert_pending = 1: the alert planner (M4) picks the row up. It is set in this
+-- insert, in EvaluateHosts's own transaction, so a transition and its pending
+-- alert exist together or not at all.
+INSERT INTO state_changes (host_id, ts, from_state, to_state, reason, alert_pending)
+VALUES (sqlc.arg(host_id), sqlc.arg(ts), sqlc.arg(from_state), sqlc.arg(to_state), sqlc.arg(reason), 1);
 
 -- name: ListStateChanges :many
 SELECT ts, from_state, to_state, reason FROM state_changes
