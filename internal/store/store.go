@@ -110,37 +110,37 @@ type EventRecord struct {
 
 // HostSummary is a row of the host list.
 type HostSummary struct {
-	ID           int64
-	Name         string
-	Tags         []string
-	HasToken     bool // false: the token is revoked
-	CreatedAt    time.Time
-	FirstSeen    *time.Time
-	LastSeen     *time.Time
-	ReportedName string
-	AgentVersion string
+	ID           int64      `json:"id"`
+	Name         string     `json:"name"`
+	Tags         []string   `json:"tags"`
+	HasToken     bool       `json:"has_token"` // false: the token is revoked
+	CreatedAt    time.Time  `json:"created_at"`
+	FirstSeen    *time.Time `json:"first_seen"`
+	LastSeen     *time.Time `json:"last_seen"`
+	ReportedName string     `json:"reported_name"`
+	AgentVersion string     `json:"agent_version"`
 }
 
 // AuditEntry is a row of the audit log.
 type AuditEntry struct {
-	TS         time.Time
-	ActorKind  string
-	Actor      string
-	Action     string
-	TargetKind string
-	Target     string
-	Detail     string
+	TS         time.Time `json:"ts"`
+	ActorKind  string    `json:"actor_kind"`
+	Actor      string    `json:"actor"`
+	Action     string    `json:"action"`
+	TargetKind string    `json:"target_kind"`
+	Target     string    `json:"target"`
+	Detail     string    `json:"detail"`
 }
 
 // HostDetail is HostSummary plus the newest report and counters.
 type HostDetail struct {
-	HostSummary
-	TokenCreatedAt *time.Time
+	HostSummary               // embedded: its fields are flattened into the JSON object
+	TokenCreatedAt *time.Time `json:"token_created_at"`
 	// LastReport is the canonical JSON of the newest report, nil before the first.
-	LastReport  json.RawMessage
-	ReportCount int64
-	EventCount  int64
-	Audit       []AuditEntry // newest first, at most 50
+	LastReport  json.RawMessage `json:"last_report"`
+	ReportCount int64           `json:"report_count"`
+	EventCount  int64           `json:"event_count"`
+	Audit       []AuditEntry    `json:"audit"` // newest first, at most 50
 }
 
 // Store is the persistence interface. All methods are safe for concurrent use.
