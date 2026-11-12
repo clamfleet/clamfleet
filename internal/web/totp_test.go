@@ -9,6 +9,7 @@ package web_test
 
 import (
 	"context"
+	"github.com/clamfleet/clamfleet/internal/server"
 	"net/http"
 	"net/url"
 	"strings"
@@ -528,5 +529,36 @@ func TestNoSecretOrCodeInLogsOrAuditAtLogin(t *testing.T) {
 		if strings.Contains(dump, secret) {
 			t.Fatal("the TOTP secret is in the logs or the audit log")
 		}
+	}
+}
+
+// lockOnComplete makes the failure count reach the limit just before
+// CompleteLogin runs: the lock lands between the handler's read and the store's check.
+type lockOnComplete struct {
+	store.Store
+	lock func()
+}
+
+func (l lockOnComplete) CompleteLogin(ctx context.Context, c store.CompleteLogin, now time.Time, d map[string]string) error {
+	l.lock()
+	return l.Store.CompleteLogin(ctx, c, now, d)
+}
+
+func TestLockLandingMidLoginRefusesTheSession(t *testing.T) {
+	ring := testRing(t)
+	var e *env
+	e = newEnv(t, withKeys(ring), func(d *server.Deps) {
+		d.Store = lockOnComplete{d.Store, func() {
+			e.exec(`UPDATE users SET totp_failures = 100`)
+		}}
+	})
+	u := e.addTOTPUser(ring, "ann@example.com", "viewer", goodPW)
+	b, _ := e.passwordStep("ann@example.com", goodPW)
+	p := b.code(codeNow(u, e, 0))
+	if p.status != 200 || !strings.Contains(p.body, "Ask an administrator") || e.cookieFor(b) != nil {
+		t.Fatalf("a lock that landed mid-login: %d", p.status)
+	}
+	if n := e.count(`SELECT count(*) FROM user_sessions`); n != 0 {
+		t.Fatalf("%d sessions", n)
 	}
 }

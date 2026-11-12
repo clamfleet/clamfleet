@@ -616,3 +616,25 @@ func TestCompleteLoginRefusesAUserWithoutTOTP(t *testing.T) {
 		t.Fatalf("%d sessions", n)
 	}
 }
+
+// A lock that lands while a login is in flight (the failures reach the limit
+// after the challenge was made) must refuse the session, with the production
+// limit: CompleteLogin re-checks inside its transaction.
+func TestCompleteLoginRefusesALockThatLandedMidLogin(t *testing.T) {
+	ctx := context.Background()
+	s := openTemp(t)
+	u := enrolled(t, s, "a@example.com")
+	ch := challenge(t, s, u, "ch", t0)
+	// 100 is the documented limit, written as a literal on purpose: a test that used the
+	// constant would follow it when it is raised. Set directly: 100 round trips add nothing.
+	if _, err := s.w.Exec(`UPDATE users SET totp_failures = 100 WHERE id = ?`, u.ID); err != nil {
+		t.Fatal(err)
+	}
+	c := complete(ch, step(900), nil) // Limit: store.SecondFactorLockLimit, as the web layer passes it
+	if err := s.CompleteLogin(ctx, c, t0, nil); !errors.Is(err, store.ErrSecondFactorLocked) {
+		t.Fatalf("%v, want ErrSecondFactorLocked", err)
+	}
+	if n := count(t, s, `SELECT count(*) FROM user_sessions`); n != 0 {
+		t.Fatalf("%d sessions", n)
+	}
+}
