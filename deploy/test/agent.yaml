@@ -1,0 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# SPDX-FileCopyrightText: The ClamFleet Authors
+# Agent config for the clamfleet-test container (Debian 13). Installed to
+# /etc/clamfleet/agent.yaml by prepare-agent.sh.
+interval: 5m
+tags: [e2e]

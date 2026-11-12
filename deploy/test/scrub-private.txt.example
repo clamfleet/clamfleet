@@ -1,0 +1,6 @@
+# One private name per line (host names, lab domains). capture-fixtures.sh
+# replaces each with mirror.example and aborts if one survives. Copy to
+# deploy/test/scrub-private.txt (gitignored). Names are matched as regular
+# expressions (escape dots if it matters); blank lines and # lines are ignored.
+my-incus-host
+my-lab-domain
