@@ -153,6 +153,24 @@ func (s *Store) SetToken(ctx context.Context, name string, hash []byte, now time
 	})
 }
 
+// DeleteHost implements store.Store.
+func (s *Store) DeleteHost(ctx context.Context, name string, now time.Time, a store.Audit) error {
+	name = lower(name)
+	return s.inTx(ctx, func(q *sqlcdb.Queries) error {
+		id, err := q.HostIDByName(ctx, name)
+		if errors.Is(err, sql.ErrNoRows) {
+			return store.ErrNotFound
+		}
+		if err != nil {
+			return err
+		}
+		if _, err := q.DeleteHost(ctx, id); err != nil {
+			return err
+		}
+		return writeAudit(ctx, q, now, a, store.ActionHostDelete, name)
+	})
+}
+
 // RecordReport implements store.Store.
 //
 // One immediate transaction:

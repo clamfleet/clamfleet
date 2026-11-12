@@ -50,6 +50,7 @@ const (
 	ActionHostAdd     = "host.add"
 	ActionTokenRotate = "host.token.rotate"
 	ActionTokenRevoke = "host.token.revoke"
+	ActionHostDelete  = "host.delete"
 )
 
 // Rule: host names are lowercase, 1-253 characters of [a-z0-9._-], starting
@@ -223,6 +224,11 @@ type Store interface {
 	// when hash is nil. The old token stops working immediately. ErrNotFound
 	// for an unknown host.
 	SetToken(ctx context.Context, name string, hash []byte, now time.Time, a Audit) error
+	// DeleteHost removes the host and, by cascade, its reports, events, tags and
+	// state history (M2 decision 2), and writes the audit row in the same
+	// transaction. The audit row keeps the host name as text, so it outlives the
+	// host. ErrNotFound for an unknown host.
+	DeleteHost(ctx context.Context, name string, now time.Time, a Audit) error
 	// RecordReport stores a heartbeat idempotently and updates the host.
 	RecordReport(ctx context.Context, r ReportRecord) (ReportResult, error)
 	// RecordEvent stores a detection idempotently; stored is false for a duplicate.

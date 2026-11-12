@@ -260,3 +260,42 @@ func TestEvaluateHostsReadsAndWritesUnderOneLock(t *testing.T) {
 		t.Fatalf("history %v, want %v", got, want)
 	}
 }
+
+// DeleteHost removes everything of the host, including its state history, and
+// the audit row (same transaction, host name as text) survives it.
+func TestDeleteHostCascadesAndAudits(t *testing.T) {
+	ctx := context.Background()
+	s := openTemp(t)
+	h := addHost(t, s, "Gone01")
+	other := addHost(t, s, "stays")
+	record(t, s, h.ID, repDaily("gone01", t0, 100), t0)
+	if _, err := s.EvaluateHosts(ctx, t0, nil, fixed("OK")); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DeleteHost(ctx, "GONE01", t0.Add(time.Hour), cli); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.HostByName(ctx, "gone01"); err != store.ErrNotFound {
+		t.Fatalf("host still there: %v", err)
+	}
+	for _, tbl := range []string{"host_tags", "reports", "events"} {
+		if n := count(t, s, "SELECT count(*) FROM "+tbl+" WHERE host_id=?", h.ID); n != 0 {
+			t.Errorf("%s: %d rows left", tbl, n)
+		}
+	}
+	if n := count(t, s, `SELECT count(*) FROM state_changes WHERE host_id=?`, h.ID); n != 0 {
+		t.Errorf("state_changes: %d rows left", n)
+	}
+	if n := count(t, s, `SELECT count(*) FROM state_changes WHERE host_id=?`, other.ID); n != 1 {
+		t.Errorf("the other host's history was touched: %d rows", n)
+	}
+	if n := count(t, s, `SELECT count(*) FROM audit_log WHERE action=? AND target=? AND ts=?`, store.ActionHostDelete, "gone01", t0.Add(time.Hour).Unix()); n != 1 {
+		t.Errorf("host.delete audit rows: %d, want 1", n)
+	}
+	if err := s.DeleteHost(ctx, "gone01", t0, cli); err != store.ErrNotFound {
+		t.Fatalf("second delete: %v, want ErrNotFound", err)
+	}
+	if n := count(t, s, `SELECT count(*) FROM audit_log WHERE action=?`, store.ActionHostDelete); n != 1 {
+		t.Errorf("a failed delete wrote an audit row")
+	}
+}
