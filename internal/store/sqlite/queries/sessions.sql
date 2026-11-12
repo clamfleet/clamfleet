@@ -3,9 +3,16 @@
 
 -- Web console sessions (Milestone 3). Only the SHA-256 of the cookie token is stored.
 
--- name: CreateSession :exec
+-- name: CreateSession :execrows
+-- Conditional on the credential that was verified: the row is inserted only if
+-- the user still has that password hash and is not disabled. A reset, a
+-- password change or a disable that committed while the login was hashing
+-- leaves 0 rows, and the login fails instead of producing a session behind it.
+-- This does not depend on any clock (timestamps are whole seconds).
 INSERT INTO user_sessions (token_hash, user_id, csrf_token, created_at, last_seen_at, expires_at)
-VALUES (sqlc.arg(token_hash), sqlc.arg(user_id), sqlc.arg(csrf_token), sqlc.arg(now), sqlc.arg(now), sqlc.arg(expires_at));
+SELECT sqlc.arg(token_hash), u.id, sqlc.arg(csrf_token), sqlc.arg(now), sqlc.arg(now), sqlc.arg(expires_at)
+FROM users u
+WHERE u.id = sqlc.arg(user_id) AND u.password_hash = sqlc.arg(expected_hash) AND u.disabled_at IS NULL;
 
 -- name: SessionPrincipalByTokenHash :one
 -- One join, so a disabled user, a changed role or a deleted user takes effect
@@ -17,20 +24,11 @@ FROM user_sessions s JOIN users u ON u.id = s.user_id
 WHERE s.token_hash = sqlc.arg(token_hash)
   AND s.expires_at > sqlc.arg(now)
   AND s.last_seen_at > sqlc.arg(idle_cutoff)
-  AND u.disabled_at IS NULL
-  -- Rule: a session born before the user's last password change is dead. A login
-  -- stamps its session with the time it STARTED verifying; if a reset commits
-  -- while the hash runs, the session it then creates is older than the change.
-  AND s.created_at >= COALESCE(u.password_changed_at, 0);
+  AND u.disabled_at IS NULL;
 
 -- name: TouchSession :exec
 UPDATE user_sessions SET last_seen_at = sqlc.arg(now)
 WHERE id = sqlc.arg(id) AND last_seen_at < sqlc.arg(touch_before);
-
--- name: RenewSessionCreated :exec
--- The session that survives a self-service password change is re-dated to the
--- change, so the rule above does not kill it.
-UPDATE user_sessions SET created_at = sqlc.arg(now) WHERE token_hash = sqlc.arg(token_hash) AND user_id = sqlc.arg(user_id);
 
 -- name: DeleteSessionByHash :exec
 DELETE FROM user_sessions WHERE token_hash = sqlc.arg(token_hash);

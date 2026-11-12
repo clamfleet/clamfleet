@@ -95,10 +95,6 @@ func (w *Web) loginSubmit(rw http.ResponseWriter, r *http.Request) {
 	outcome := webauth.Aborted // until there is a verdict: a server fault is nobody's failed guess
 	defer func() { done(outcome) }()
 
-	// The session is dated from HERE, before the slow hash: if a password reset
-	// commits while it runs, the session created afterwards is older than the
-	// change and the session lookup refuses it (see SessionPrincipalByTokenHash).
-	started := w.Now()
 	user, reason, err := w.checkPassword(r, email, password)
 	if err != nil {
 		w.Log.Error("login: store or hasher failed", "error", err.Error())
@@ -124,17 +120,36 @@ func (w *Web) loginSubmit(rw http.ResponseWriter, r *http.Request) {
 	if err := w.Auth.Destroy(r.Context(), r); err != nil {
 		w.Log.Warn("cannot delete the previous session", "error", err.Error())
 	}
-	// Audit first, session second: if the audit row cannot be written the user is
-	// not signed in, instead of being signed in without a record.
-	audit := store.Audit{Kind: store.ActorUser, Actor: user.Email}
-	if err := w.Store.RecordLogin(r.Context(), user.ID, w.Now(), audit, map[string]string{"ip": ip}); err != nil {
-		w.Log.Error("login: cannot record", "error", err.Error())
+	// The session is created conditionally on the hash that was verified (after a
+	// rehash, the new one). If a reset, a password change or a disable committed
+	// while the hash was running, the store refuses and nobody is signed in. That
+	// is not a wrong guess, so the attempt is Aborted (it does not count towards
+	// the backoff) and the user sees the generic failure: signing in again works.
+	token, err := w.Auth.Create(r.Context(), user.ID, user.PasswordHash)
+	if errors.Is(err, store.ErrCredentialChanged) {
+		w.Log.Warn("login refused: the account changed while the password was being checked", "client_ip", ip)
+		if err := w.Store.RecordAudit(r.Context(), w.Now(), store.Audit{Kind: store.ActorUser, Actor: email},
+			store.ActionUserLoginFailed, store.TargetUser, email, map[string]string{"ip": ip, "reason": "credential changed during login"}); err != nil {
+			w.Log.Error("cannot audit failed login", "error", err.Error())
+		}
+		outcome = webauth.Aborted
+		w.render(rw, http.StatusOK, "login", w.loginView(r, next, genericLoginError))
+		return
+	}
+	if err != nil {
+		w.Log.Error("login: cannot create session", "error", err.Error())
 		w.errorPage(rw, r, http.StatusInternalServerError)
 		return
 	}
-	token, err := w.Auth.Create(r.Context(), user.ID, started)
-	if err != nil {
-		w.Log.Error("login: cannot create session", "error", err.Error())
+	// Session first, audit second: the audit row says "logged in", so it is only
+	// written for a login that exists. If it cannot be written the session is
+	// removed again and nobody is signed in without a record.
+	audit := store.Audit{Kind: store.ActorUser, Actor: user.Email}
+	if err := w.Store.RecordLogin(r.Context(), user.ID, w.Now(), audit, map[string]string{"ip": ip}); err != nil {
+		w.Log.Error("login: cannot record", "error", err.Error())
+		if derr := w.Store.DeleteSession(r.Context(), webauth.HashToken(token)); derr != nil {
+			w.Log.Error("login: cannot remove the unrecorded session", "error", derr.Error())
+		}
 		w.errorPage(rw, r, http.StatusInternalServerError)
 		return
 	}
@@ -184,8 +199,10 @@ func (w *Web) checkPassword(r *http.Request, email, password string) (user store
 		// Best effort: the login succeeded; a failed upgrade is retried next time.
 		if h, err := w.Hasher.Hash(ctx, password); err != nil {
 			w.Log.Warn("cannot rehash password", "error", err.Error())
-		} else if err := w.Store.RehashPassword(ctx, u.ID, u.PasswordHash, h, w.Now()); err != nil {
+		} else if applied, err := w.Store.RehashPassword(ctx, u.ID, u.PasswordHash, h, w.Now()); err != nil {
 			w.Log.Warn("cannot store rehashed password", "error", err.Error())
+		} else if applied {
+			u.PasswordHash = h // the session must be bound to the hash that is stored now
 		}
 	}
 	return u, "", nil
@@ -289,8 +306,16 @@ func (w *Web) accountPassword(rw http.ResponseWriter, r *http.Request) {
 		w.errorPage(rw, r, http.StatusInternalServerError)
 		return
 	}
-	err = w.Store.SetPassword(r.Context(), u.ID, store.PasswordChange{Hash: hash, Self: true, KeepSession: p.TokenHash},
+	// Compare-and-swap on the hash verified above: an admin reset that committed
+	// while this request was hashing is not overwritten by this change.
+	err = w.Store.SetPassword(r.Context(), u.ID, store.PasswordChange{Hash: hash, Self: true, KeepSession: p.TokenHash, ExpectedHash: u.PasswordHash},
 		w.Now(), store.Audit{Kind: store.ActorUser, Actor: p.Email})
+	if errors.Is(err, store.ErrCredentialChanged) {
+		outcome = webauth.Aborted
+		w.Log.Warn("password change refused: the account changed meanwhile", "client_ip", w.ClientIP(r))
+		fail(http.StatusConflict, "Your password was changed elsewhere while you were changing it. Nothing was saved; sign in again.")
+		return
+	}
 	if err != nil {
 		w.Log.Error("account: cannot store password", "error", err.Error())
 		w.errorPage(rw, r, http.StatusInternalServerError)

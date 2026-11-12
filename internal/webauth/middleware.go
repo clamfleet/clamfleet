@@ -78,10 +78,14 @@ const TouchEvery = time.Minute
 // fresh random token is generated on every call and never taken from the
 // request, so a cookie planted before login (session fixation) is never reused.
 //
-// started is when the credential check began. The session is dated from it, so
-// a password change that commits while the check was running makes the session
-// older than the change, and the lookup refuses it.
-func (m *Manager) Create(ctx context.Context, userID int64, started time.Time) (token string, err error) {
+// passwordHash is the hash of the credential the login verified (after a
+// rehash: the new one). The store inserts the session only if the user still
+// has exactly that hash and is not disabled, so a reset, a password change or a
+// disable that committed while the login was hashing yields store.ErrCredentialChanged
+// and no session. That check is by value, not by time: timestamps are whole
+// seconds, and a clock comparison would let a login that started in the same
+// second as a reset through.
+func (m *Manager) Create(ctx context.Context, userID int64, passwordHash string) (token string, err error) {
 	token, hash, err := NewToken()
 	if err != nil {
 		return "", err
@@ -92,7 +96,7 @@ func (m *Manager) Create(ctx context.Context, userID int64, started time.Time) (
 	}
 	now := m.Now()
 	err = m.Store.CreateSession(ctx, store.Session{
-		TokenHash: hash, UserID: userID, CSRF: csrf, CreatedAt: started, ExpiresAt: now.Add(m.MaxAge),
+		TokenHash: hash, UserID: userID, CSRF: csrf, CreatedAt: now, ExpiresAt: now.Add(m.MaxAge), PasswordHash: passwordHash,
 	})
 	if err != nil {
 		return "", err

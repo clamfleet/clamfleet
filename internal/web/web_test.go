@@ -589,7 +589,7 @@ func TestRehashOnLogin(t *testing.T) {
 	e := newEnv(t)
 	u := e.addUser("ann@example.com", "viewer", goodPW, false)
 	// Replace the stored hash with one made with lighter parameters.
-	if err := e.st.RehashPassword(context.Background(), u.ID, u.PasswordHash, weakHash(t, goodPW), t0); err != nil {
+	if _, err := e.st.RehashPassword(context.Background(), u.ID, u.PasswordHash, weakHash(t, goodPW), t0); err != nil {
 		t.Fatal(err)
 	}
 	e.browser().login("ann@example.com", goodPW)
@@ -975,16 +975,19 @@ func TestLoginRacingAPasswordResetGetsNoWorkingSession(t *testing.T) {
 	e := newEnv(t)
 	u := e.addUser("ann@example.com", "viewer", goodPW, false)
 	b, p := raceLogin(t, e, "ann@example.com", goodPW, func() {
-		e.advance(time.Second)
+		// Same second as the login's start: no clock comparison may be what saves us.
 		if err := e.st.SetPassword(context.Background(), u.ID, store.PasswordChange{Hash: "reset-hash", MustChange: true}, e.clock(), cliAudit); err != nil {
 			t.Error(err)
 		}
 	})
-	if p.status != 303 {
-		t.Fatalf("login: %d", p.status) // the credentials were right when verified
+	if p.status != 200 || !strings.Contains(p.body, "Invalid email or password.") || e.cookieFor(b) != nil {
+		t.Fatalf("a login that raced a reset must fail without a cookie: %d", p.status)
 	}
-	if g := b.get("/"); g.status != 303 || !strings.HasPrefix(g.header.Get("Location"), "/login") {
-		t.Fatalf("the session of a login that raced a reset works: %d %q", g.status, g.header.Get("Location"))
+	if g := b.get("/"); g.status != 303 {
+		t.Fatalf("a session exists for a login that raced a reset: %d", g.status)
+	}
+	if n := e.count(`SELECT count(*) FROM audit_log WHERE action='user.login.failed' AND detail LIKE '%credential changed%'`); n != 1 {
+		t.Fatalf("%d audit rows for the raced login", n)
 	}
 }
 
@@ -993,7 +996,7 @@ func TestLoginRacingAPasswordResetGetsNoWorkingSession(t *testing.T) {
 func TestRehashRacingAResetDoesNotOverwriteIt(t *testing.T) {
 	e := newEnv(t)
 	u := e.addUser("ann@example.com", "viewer", goodPW, false)
-	if err := e.st.RehashPassword(context.Background(), u.ID, u.PasswordHash, weakHash(t, goodPW), t0); err != nil {
+	if _, err := e.st.RehashPassword(context.Background(), u.ID, u.PasswordHash, weakHash(t, goodPW), t0); err != nil {
 		t.Fatal(err)
 	}
 	raceLogin(t, e, "ann@example.com", goodPW, func() {
@@ -1004,5 +1007,43 @@ func TestRehashRacingAResetDoesNotOverwriteIt(t *testing.T) {
 	got, _ := e.st.UserByEmail(context.Background(), "ann@example.com")
 	if got.PasswordHash != "reset-hash" {
 		t.Fatalf("the reset was overwritten by the rehash of the old password: %.30s", got.PasswordHash)
+	}
+}
+
+// A self-service password change racing an admin reset must not overwrite the
+// reset: the user gets an error, the reset stands, and the stale session is dead.
+func TestSelfPasswordChangeRacingAResetDoesNotOverwriteIt(t *testing.T) {
+	e := newEnv(t)
+	u := e.addUser("ann@example.com", "viewer", goodPW, false)
+	b := e.browser()
+	b.login("ann@example.com", goodPW)
+	tok := csrf(t, b.get("/account"))
+
+	e.hasher.gate = make(chan struct{})
+	var release sync.Once
+	open := func() { release.Do(func() { close(e.hasher.gate) }) }
+	t.Cleanup(open)
+	before := e.hasher.verifies.Load()
+	res := make(chan page, 1)
+	go func() {
+		res <- b.post("/account/password", url.Values{"csrf_token": {tok}, "current_password": {goodPW}, "new_password": {"a-brand-new-password"}, "new_password2": {"a-brand-new-password"}})
+	}()
+	for e.hasher.verifies.Load() == before { // the change is now verifying the current password
+		time.Sleep(5 * time.Millisecond)
+	}
+	if err := e.st.SetPassword(context.Background(), u.ID, store.PasswordChange{Hash: "reset-hash", MustChange: true}, e.clock(), cliAudit); err != nil {
+		t.Fatal(err)
+	}
+	open()
+	p := <-res
+	if p.status != 409 || !strings.Contains(p.body, "changed elsewhere") {
+		t.Fatalf("the user must see an error, got %d", p.status)
+	}
+	got, _ := e.st.UserByEmail(context.Background(), "ann@example.com")
+	if got.PasswordHash != "reset-hash" || !got.MustChange {
+		t.Fatalf("the admin reset was overwritten by the self-service change: %.30s", got.PasswordHash)
+	}
+	if g := b.get("/"); g.status != 303 {
+		t.Fatalf("the stale session still works: %d", g.status)
 	}
 }

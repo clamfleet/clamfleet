@@ -26,7 +26,7 @@ func mkUser(t *testing.T, s *Store, email, role string) store.User {
 func mkSession(t *testing.T, s *Store, uid int64, tok string, at time.Time, life time.Duration) []byte {
 	t.Helper()
 	h := hash(tok)
-	if err := s.CreateSession(context.Background(), store.Session{TokenHash: h, UserID: uid, CSRF: []byte("csrf-" + tok), CreatedAt: at, ExpiresAt: at.Add(life)}); err != nil {
+	if err := s.CreateSession(context.Background(), store.Session{TokenHash: h, UserID: uid, CSRF: []byte("csrf-" + tok), CreatedAt: at, ExpiresAt: at.Add(life), PasswordHash: "$argon2id$x"}); err != nil {
 		t.Fatal(err)
 	}
 	return h
@@ -208,7 +208,7 @@ func TestRehashKeepsSessionsAndMustChange(t *testing.T) {
 	s := openTemp(t)
 	u := mkUser(t, s, "a@example.com", "viewer") // must_change = 1
 	h := mkSession(t, s, u.ID, "tok", t0, 12*time.Hour)
-	if err := s.RehashPassword(ctx, u.ID, "$argon2id$x", "upgraded", t0.Add(time.Minute)); err != nil {
+	if applied, err := s.RehashPassword(ctx, u.ID, "$argon2id$x", "upgraded", t0.Add(time.Minute)); err != nil || !applied {
 		t.Fatal(err)
 	}
 	if _, err := s.SessionByTokenHash(ctx, h, t0, time.Hour); err != nil {
@@ -291,7 +291,12 @@ func TestEnableDeletesSessionsToo(t *testing.T) {
 	if err := s.SetDisabled(ctx, u.ID, true, t0, cliAudit); err != nil {
 		t.Fatal(err)
 	}
-	mkSession(t, s, u.ID, "born-while-disabled", t0, time.Hour) // the race: created behind the disable
+	// A row that got in behind the disable (CreateSession itself refuses disabled
+	// users now; this pins the defence in depth of the enable).
+	if _, err := s.w.ExecContext(ctx, `INSERT INTO user_sessions (token_hash, user_id, csrf_token, created_at, last_seen_at, expires_at) VALUES (?, ?, ?, ?, ?, ?)`,
+		hash("x"), u.ID, []byte("c"), t0.Unix(), t0.Unix(), t0.Add(time.Hour).Unix()); err != nil {
+		t.Fatal(err)
+	}
 	if err := s.SetDisabled(ctx, u.ID, false, t0, cliAudit); err != nil {
 		t.Fatal(err)
 	}
@@ -309,8 +314,8 @@ func TestRehashDoesNotOverwriteANewerPassword(t *testing.T) {
 	if err := s.SetPassword(ctx, u.ID, store.PasswordChange{Hash: "reset-hash", MustChange: true}, t0.Add(time.Second), cliAudit); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.RehashPassword(ctx, u.ID, "$argon2id$x", "upgraded-old-password", t0.Add(2*time.Second)); err != nil {
-		t.Fatalf("a lost race is not an error: %v", err)
+	if applied, err := s.RehashPassword(ctx, u.ID, "$argon2id$x", "upgraded-old-password", t0.Add(2*time.Second)); err != nil || applied {
+		t.Fatalf("a lost race is not an error and applies nothing: applied=%v err=%v", applied, err)
 	}
 	got, _ := s.UserByEmail(ctx, "a@example.com")
 	if got.PasswordHash != "reset-hash" {
@@ -318,37 +323,68 @@ func TestRehashDoesNotOverwriteANewerPassword(t *testing.T) {
 	}
 }
 
-// A session older than the user's last password change is refused, even if its
-// row exists (a login that raced a reset).
-func TestSessionOlderThanPasswordChangeIsRefused(t *testing.T) {
+// A session is only created for the credential that was verified: a login that
+// raced a reset, a password change or a disable gets none. By value, so it holds
+// within the same second too.
+func TestCreateSessionIsConditionalOnTheVerifiedCredential(t *testing.T) {
 	ctx := context.Background()
 	s := openTemp(t)
-	u := mkUser(t, s, "a@example.com", "viewer")
-	old := mkSession(t, s, u.ID, "old", t0, 12*time.Hour)
-	// Change the password behind the store's back, so the session row survives.
-	if _, err := s.w.ExecContext(ctx, `UPDATE users SET password_changed_at = ? WHERE id = ?`, t0.Add(time.Minute).Unix(), u.ID); err != nil {
+	u := mkUser(t, s, "a@example.com", "viewer") // hash "$argon2id$x"
+	try := func(tok, hash string) error {
+		return s.CreateSession(ctx, store.Session{TokenHash: hash0(tok), UserID: u.ID, CSRF: []byte("c"), CreatedAt: t0, ExpiresAt: t0.Add(time.Hour), PasswordHash: hash})
+	}
+	if err := try("ok", "$argon2id$x"); err != nil {
+		t.Fatalf("matching credential: %v", err)
+	}
+	if err := try("stale", "$argon2id$other"); !errors.Is(err, store.ErrCredentialChanged) {
+		t.Fatalf("a session for a credential that is no longer the stored one: %v", err)
+	}
+	// A reset in the very same second as the login's start.
+	if err := s.SetPassword(ctx, u.ID, store.PasswordChange{Hash: "reset"}, t0, cliAudit); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.SessionByTokenHash(ctx, old, t0.Add(2*time.Minute), time.Hour); !errors.Is(err, store.ErrNotFound) {
-		t.Fatalf("a session from before the password change is valid: %v", err)
+	if err := try("after-reset", "$argon2id$x"); !errors.Is(err, store.ErrCredentialChanged) {
+		t.Fatalf("a login verified before a same-second reset got a session: %v", err)
 	}
-	fresh := mkSession(t, s, u.ID, "fresh", t0.Add(time.Minute), 12*time.Hour)
-	if _, err := s.SessionByTokenHash(ctx, fresh, t0.Add(2*time.Minute), time.Hour); err != nil {
-		t.Fatalf("a session created at the change time is refused: %v", err)
+	if err := try("new", "reset"); err != nil {
+		t.Fatalf("login with the new hash: %v", err)
+	}
+	// Disabled users get none.
+	if err := s.SetDisabled(ctx, u.ID, true, t0, cliAudit); err != nil {
+		t.Fatal(err)
+	}
+	if err := try("disabled", "reset"); !errors.Is(err, store.ErrCredentialChanged) {
+		t.Fatalf("a session for a disabled user: %v", err)
+	}
+	if n := count(t, s, `SELECT count(*) FROM user_sessions`); n != 0 { // the disable removed "new"
+		t.Fatalf("%d session rows, want 0", n)
 	}
 }
 
-// The session that survives a self-service change is re-dated, so the rule above does not kill it.
-func TestSelfPasswordChangeKeepsItsSessionDespiteTheAgeRule(t *testing.T) {
+func hash0(tok string) []byte { return hash(tok) }
+
+// A self-service change is a compare-and-swap on the verified current hash.
+func TestSelfPasswordChangeCannotOverwriteAReset(t *testing.T) {
 	ctx := context.Background()
 	s := openTemp(t)
-	u := mkUser(t, s, "a@example.com", "viewer")
+	u := mkUser(t, s, "a@example.com", "viewer") // "$argon2id$x"
 	cur := mkSession(t, s, u.ID, "current", t0, 12*time.Hour)
-	later := t0.Add(10 * time.Minute)
-	if err := s.SetPassword(ctx, u.ID, store.PasswordChange{Hash: "new", Self: true, KeepSession: cur}, later, cliAudit); err != nil {
+	if err := s.SetPassword(ctx, u.ID, store.PasswordChange{Hash: "reset-hash", MustChange: true}, t0, cliAudit); err != nil { // the admin reset, same second
 		t.Fatal(err)
 	}
-	if _, err := s.SessionByTokenHash(ctx, cur, later.Add(time.Minute), time.Hour); err != nil {
-		t.Fatalf("the kept session died: %v", err)
+	err := s.SetPassword(ctx, u.ID, store.PasswordChange{Hash: "mine", Self: true, KeepSession: cur, ExpectedHash: "$argon2id$x"}, t0, store.Audit{Kind: store.ActorUser, Actor: "a@example.com"})
+	if !errors.Is(err, store.ErrCredentialChanged) {
+		t.Fatalf("err = %v, want ErrCredentialChanged", err)
+	}
+	got, _ := s.UserByEmail(ctx, "a@example.com")
+	if got.PasswordHash != "reset-hash" || !got.MustChange {
+		t.Fatalf("the reset was overwritten: %+v", got)
+	}
+	if n := count(t, s, `SELECT count(*) FROM audit_log WHERE action='user.password.change'`); n != 0 {
+		t.Fatalf("%d password-change audit rows for a refused change (the transaction must roll back)", n)
+	}
+	// And the happy path with the right expected hash.
+	if err := s.SetPassword(ctx, u.ID, store.PasswordChange{Hash: "mine", Self: true, ExpectedHash: "reset-hash"}, t0, cliAudit); err != nil {
+		t.Fatal(err)
 	}
 }

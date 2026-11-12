@@ -200,6 +200,37 @@ func (q *Queries) SetUserPassword(ctx context.Context, arg SetUserPasswordParams
 	return result.RowsAffected()
 }
 
+const setUserPasswordIf = `-- name: SetUserPasswordIf :execrows
+UPDATE users SET password_hash = ?1, password_must_change = ?2,
+       password_changed_at = ?3, updated_at = ?3
+WHERE id = ?4 AND password_hash = ?5
+`
+
+type SetUserPasswordIfParams struct {
+	PasswordHash sql.NullString
+	MustChange   int64
+	Now          sql.NullInt64
+	ID           int64
+	ExpectedHash sql.NullString
+}
+
+// Compare-and-swap for a self-service change: only while the hash that was
+// verified as "current password" is still the stored one. 0 rows means a reset
+// or another change committed in between, and must not be overwritten.
+func (q *Queries) SetUserPasswordIf(ctx context.Context, arg SetUserPasswordIfParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, setUserPasswordIf,
+		arg.PasswordHash,
+		arg.MustChange,
+		arg.Now,
+		arg.ID,
+		arg.ExpectedHash,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const setUserRole = `-- name: SetUserRole :execrows
 UPDATE users SET role = ?1, updated_at = ?2 WHERE id = ?3
 `

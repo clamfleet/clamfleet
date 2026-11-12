@@ -151,16 +151,24 @@ func (s *Store) SetPassword(ctx context.Context, id int64, c store.PasswordChang
 		if err != nil {
 			return err
 		}
-		if _, err := q.SetUserPassword(ctx, sqlcdb.SetUserPasswordParams{
+		if c.ExpectedHash != "" {
+			n, err := q.SetUserPasswordIf(ctx, sqlcdb.SetUserPasswordIfParams{
+				PasswordHash: nullStr(c.Hash), MustChange: boolInt(c.MustChange), Now: nullInt(now), ID: id,
+				ExpectedHash: nullStr(c.ExpectedHash),
+			})
+			if err != nil {
+				return err
+			}
+			if n == 0 {
+				return store.ErrCredentialChanged // rolls the transaction back: nothing is written
+			}
+		} else if _, err := q.SetUserPassword(ctx, sqlcdb.SetUserPasswordParams{
 			PasswordHash: nullStr(c.Hash), MustChange: boolInt(c.MustChange), Now: nullInt(now), ID: id,
 		}); err != nil {
 			return err
 		}
 		if len(c.KeepSession) > 0 {
 			err = q.DeleteUserSessionsExcept(ctx, sqlcdb.DeleteUserSessionsExceptParams{UserID: id, KeepHash: c.KeepSession})
-			if err == nil {
-				err = q.RenewSessionCreated(ctx, sqlcdb.RenewSessionCreatedParams{Now: unix(now), TokenHash: c.KeepSession, UserID: id})
-			}
 		} else {
 			err = q.DeleteUserSessions(ctx, id)
 		}
@@ -176,13 +184,16 @@ func (s *Store) SetPassword(ctx context.Context, id int64, c store.PasswordChang
 }
 
 // RehashPassword implements store.UserStore.
-func (s *Store) RehashPassword(ctx context.Context, id int64, oldHash, newHash string, now time.Time) error {
-	return s.inTx(ctx, func(q *sqlcdb.Queries) error {
-		_, err := q.RehashUserPassword(ctx, sqlcdb.RehashUserPasswordParams{
+func (s *Store) RehashPassword(ctx context.Context, id int64, oldHash, newHash string, now time.Time) (bool, error) {
+	var n int64
+	err := s.inTx(ctx, func(q *sqlcdb.Queries) error {
+		var err error
+		n, err = q.RehashUserPassword(ctx, sqlcdb.RehashUserPasswordParams{
 			PasswordHash: nullStr(newHash), Now: unix(now), ID: id, ExpectedHash: nullStr(oldHash),
 		})
 		return err // 0 rows: the password changed meanwhile, which is not an error
 	})
+	return n == 1, err
 }
 
 // SetRole implements store.UserStore.
@@ -252,9 +263,14 @@ func (s *Store) RecordAudit(ctx context.Context, now time.Time, a store.Audit, a
 // CreateSession implements store.SessionStore.
 func (s *Store) CreateSession(ctx context.Context, ss store.Session) error {
 	return s.inTx(ctx, func(q *sqlcdb.Queries) error {
-		return q.CreateSession(ctx, sqlcdb.CreateSessionParams{
-			TokenHash: ss.TokenHash, UserID: ss.UserID, CsrfToken: ss.CSRF, Now: unix(ss.CreatedAt), ExpiresAt: unix(ss.ExpiresAt),
+		n, err := q.CreateSession(ctx, sqlcdb.CreateSessionParams{
+			TokenHash: ss.TokenHash, CsrfToken: ss.CSRF, Now: unix(ss.CreatedAt), ExpiresAt: unix(ss.ExpiresAt),
+			UserID: ss.UserID, ExpectedHash: nullStr(ss.PasswordHash),
 		})
+		if err == nil && n == 0 {
+			err = store.ErrCredentialChanged
+		}
+		return err
 	})
 }
 

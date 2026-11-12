@@ -34,6 +34,10 @@ var (
 	ErrHostExists = errors.New("host already exists")
 	// ErrUserExists: a user with that email already exists.
 	ErrUserExists = errors.New("user already exists")
+	// ErrCredentialChanged: the user's password changed or the user was disabled
+	// after the caller verified the credential. A login gets no session; a
+	// self-service password change is refused. Nothing was written.
+	ErrCredentialChanged = errors.New("credential changed")
 )
 
 // Actor kinds of an audit row: the admin CLI, or a signed-in console user.
@@ -331,6 +335,12 @@ type NewUser struct {
 type PasswordChange struct {
 	Hash       string
 	MustChange bool
+	// ExpectedHash, when set, makes the change a compare-and-swap: it applies only
+	// while the stored hash is still this one (the hash the caller verified as
+	// the current password). Otherwise ErrCredentialChanged and nothing is written.
+	// A self-service change must set it, so it can never overwrite an admin reset
+	// that committed in between. The CLI reset leaves it empty (unconditional).
+	ExpectedHash string
 	// Self is true when the user changes their own password (audit action
 	// user.password.change); false for an admin reset (user.password.reset).
 	Self bool
@@ -346,6 +356,10 @@ type Session struct {
 	CSRF      []byte
 	CreatedAt time.Time
 	ExpiresAt time.Time
+	// PasswordHash is the hash of the credential the login verified. CreateSession
+	// stores the session only if the user still has exactly this hash and is not
+	// disabled (ErrCredentialChanged otherwise).
+	PasswordHash string
 }
 
 // SessionPrincipal is a valid session joined with its user, read fresh on
@@ -378,7 +392,8 @@ type UserStore interface {
 	// while the stored hash is still oldHash (the one that was verified), so a
 	// reset or change that committed in between is never overwritten. A lost
 	// race is not an error (nil); the newer password simply stays.
-	RehashPassword(ctx context.Context, id int64, oldHash, newHash string, now time.Time) error
+	// applied reports whether the new hash was stored.
+	RehashPassword(ctx context.Context, id int64, oldHash, newHash string, now time.Time) (applied bool, err error)
 	// SetRole and SetDisabled (disable AND enable) delete the user's sessions in
 	// the same transaction. Enable matters too: a login that was verifying while
 	// the user was disabled must not turn into a live session on re-enable.
@@ -393,9 +408,10 @@ type UserStore interface {
 
 // SessionStore persists console sessions.
 type SessionStore interface {
+	// CreateSession is conditional on Session.PasswordHash, see there.
 	CreateSession(ctx context.Context, s Session) error
 	// SessionByTokenHash returns ErrNotFound when the session is missing,
-	// created before the user's last password change, absolutely expired (expires_at <= now), idle-expired (last seen at or
+	// absolutely expired (expires_at <= now), idle-expired (last seen at or
 	// before now-idle) or its user is disabled.
 	SessionByTokenHash(ctx context.Context, hash []byte, now time.Time, idle time.Duration) (SessionPrincipal, error)
 	// TouchSession records activity, at most once a minute per session.

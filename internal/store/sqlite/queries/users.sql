@@ -30,6 +30,14 @@ UPDATE users SET password_hash = sqlc.arg(password_hash), password_must_change =
        password_changed_at = sqlc.arg(now), updated_at = sqlc.arg(now)
 WHERE id = sqlc.arg(id);
 
+-- name: SetUserPasswordIf :execrows
+-- Compare-and-swap for a self-service change: only while the hash that was
+-- verified as "current password" is still the stored one. 0 rows means a reset
+-- or another change committed in between, and must not be overwritten.
+UPDATE users SET password_hash = sqlc.arg(password_hash), password_must_change = sqlc.arg(must_change),
+       password_changed_at = sqlc.arg(now), updated_at = sqlc.arg(now)
+WHERE id = sqlc.arg(id) AND password_hash = sqlc.arg(expected_hash);
+
 -- name: RehashUserPassword :execrows
 -- Parameter upgrade after a successful login: same password, so it is not a
 -- password change (password_changed_at, must_change and sessions stay).

@@ -21,33 +21,45 @@ func (q *Queries) CountSessions(ctx context.Context) (int64, error) {
 	return count, err
 }
 
-const createSession = `-- name: CreateSession :exec
+const createSession = `-- name: CreateSession :execrows
 
 
 INSERT INTO user_sessions (token_hash, user_id, csrf_token, created_at, last_seen_at, expires_at)
-VALUES (?1, ?2, ?3, ?4, ?4, ?5)
+SELECT ?1, u.id, ?2, ?3, ?3, ?4
+FROM users u
+WHERE u.id = ?5 AND u.password_hash = ?6 AND u.disabled_at IS NULL
 `
 
 type CreateSessionParams struct {
-	TokenHash []byte
-	UserID    int64
-	CsrfToken []byte
-	Now       int64
-	ExpiresAt int64
+	TokenHash    []byte
+	CsrfToken    []byte
+	Now          int64
+	ExpiresAt    int64
+	UserID       int64
+	ExpectedHash sql.NullString
 }
 
 // SPDX-License-Identifier: AGPL-3.0-only
 // SPDX-FileCopyrightText: The ClamFleet Authors
 // Web console sessions (Milestone 3). Only the SHA-256 of the cookie token is stored.
-func (q *Queries) CreateSession(ctx context.Context, arg CreateSessionParams) error {
-	_, err := q.db.ExecContext(ctx, createSession,
+// Conditional on the credential that was verified: the row is inserted only if
+// the user still has that password hash and is not disabled. A reset, a
+// password change or a disable that committed while the login was hashing
+// leaves 0 rows, and the login fails instead of producing a session behind it.
+// This does not depend on any clock (timestamps are whole seconds).
+func (q *Queries) CreateSession(ctx context.Context, arg CreateSessionParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, createSession,
 		arg.TokenHash,
-		arg.UserID,
 		arg.CsrfToken,
 		arg.Now,
 		arg.ExpiresAt,
+		arg.UserID,
+		arg.ExpectedHash,
 	)
-	return err
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const deleteExpiredSessions = `-- name: DeleteExpiredSessions :execrows
@@ -99,23 +111,6 @@ func (q *Queries) DeleteUserSessionsExcept(ctx context.Context, arg DeleteUserSe
 	return err
 }
 
-const renewSessionCreated = `-- name: RenewSessionCreated :exec
-UPDATE user_sessions SET created_at = ?1 WHERE token_hash = ?2 AND user_id = ?3
-`
-
-type RenewSessionCreatedParams struct {
-	Now       int64
-	TokenHash []byte
-	UserID    int64
-}
-
-// The session that survives a self-service password change is re-dated to the
-// change, so the rule above does not kill it.
-func (q *Queries) RenewSessionCreated(ctx context.Context, arg RenewSessionCreatedParams) error {
-	_, err := q.db.ExecContext(ctx, renewSessionCreated, arg.Now, arg.TokenHash, arg.UserID)
-	return err
-}
-
 const sessionPrincipalByTokenHash = `-- name: SessionPrincipalByTokenHash :one
 SELECT s.id, s.user_id, s.csrf_token, s.last_seen_at, u.email, u.display_name, u.role,
        u.password_must_change
@@ -124,10 +119,6 @@ WHERE s.token_hash = ?1
   AND s.expires_at > ?2
   AND s.last_seen_at > ?3
   AND u.disabled_at IS NULL
-  -- Rule: a session born before the user's last password change is dead. A login
-  -- stamps its session with the time it STARTED verifying; if a reset commits
-  -- while the hash runs, the session it then creates is older than the change.
-  AND s.created_at >= COALESCE(u.password_changed_at, 0)
 `
 
 type SessionPrincipalByTokenHashParams struct {
