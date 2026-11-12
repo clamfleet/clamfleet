@@ -1,0 +1,17 @@
+{
+  "schema": 1,
+  "host": "app01",
+  "agent_version": "0.1.0",
+  "tags": ["web", "prod"],
+  "ts": "2026-11-12T10:00:00Z",
+  "os": {"id": "debian", "version": "12"},
+  "clamd": {"up": true, "version": "1.4.1", "queue": 0, "error": null},
+  "sigs": {
+    "daily":    {"version": 27450, "built": "2026-11-12T07:21:00Z", "sigs": 2071234},
+    "main":     {"version": 62,    "built": "2021-09-16T19:32:00Z", "sigs": 6647427},
+    "bytecode": {"version": 335,   "built": "2024-04-01T08:00:00Z", "sigs": 86}
+  },
+  "freshclam": {"last_ok": "2026-11-12T08:00:00Z", "last_error": null, "last_error_msg": null},
+  "services": {"clamd": "active", "freshclam": "active", "clamonacc": "inactive"},
+  "last_scan": {"started": "2026-11-12T02:00:00Z", "finished": "2026-11-12T02:41:10Z", "exit": 0, "scanned": 120345, "infected": 0, "errors": 0}
+}

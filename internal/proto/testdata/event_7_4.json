@@ -1,0 +1,8 @@
+{
+  "schema": 1,
+  "host": "app01",
+  "ts": "2026-11-12T10:03:12Z",
+  "path": "/srv/upload/file.zip",
+  "signature": "Win.Test.EICAR_HDB-1",
+  "source": "clamd"
+}
