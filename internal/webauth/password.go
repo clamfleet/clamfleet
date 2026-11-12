@@ -45,7 +45,10 @@ const (
 
 	// Upper bounds when PARSING a stored hash. A tampered row must not be able
 	// to make the server allocate or compute without bound.
-	maxParseMemory  = 1 << 20 // 1 GiB in KiB
+	// 64 MiB: every OWASP argon2id profile is at most 46 MiB (m=47104), and up
+	// to MaxConcurrentHashes (4) verifications run at once, so a tampered hash
+	// can cost at most 256 MiB, not 4 GiB on a 512 MB server.
+	maxParseMemory  = 64 << 10 // KiB
 	maxParseTime    = 10
 	maxParseThreads = 16
 	maxParseBytes   = 64 // salt and key

@@ -808,6 +808,11 @@ func TestCredentialsDoNotCross(t *testing.T) {
 	}
 }
 
+// TestUIRouteTable probes every console route in server.Routes() by behaviour:
+// no session, htmx without a session, a viewer on admin routes (403, database
+// unchanged), a session without a CSRF token. It also enforces, by path, that
+// everything under /admin/ is class admin. The declared class of every route is
+// pinned by internal/api TestRouteTable; this test does not repeat that pin.
 func TestUIRouteTable(t *testing.T) {
 	e := newEnv(t)
 	e.addUser("view@example.com", "viewer", goodPW, false)
@@ -821,7 +826,6 @@ func TestUIRouteTable(t *testing.T) {
 	vtok := csrf(t, viewer.get("/"))
 	admin := e.browser()
 	admin.login("adm@example.com", goodPW)
-	atok := csrf(t, admin.get("/"))
 
 	counts := func() [4]int {
 		return [4]int{e.count(`SELECT count(*) FROM hosts`), e.count(`SELECT count(*) FROM audit_log`), e.count(`SELECT count(*) FROM users`), e.count(`SELECT count(*) FROM user_sessions`)}
@@ -889,7 +893,6 @@ func TestUIRouteTable(t *testing.T) {
 				if after := counts(); after != before {
 					t.Errorf("%s without a token changed the database: %v -> %v", name, before, after)
 				}
-				_ = atok
 			}
 		default:
 			t.Errorf("%s: unknown auth class %q", name, rt.Auth)

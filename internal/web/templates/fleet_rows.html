@@ -17,7 +17,7 @@
 {{else}}
 <table data-testid="fleet-table">
   <thead><tr><th>Host</th><th>State</th><th>Reasons</th><th>Tags</th><th>Last seen</th><th>clamd</th><th>Daily</th></tr></thead>
-  <tbody id="fleet-body">
+  <tbody>
   {{range .Rows}}
   <tr data-testid="fleet-row-{{.Name}}" data-state="{{.State}}">
     <td><a href="/hosts/{{.Name}}" data-testid="fleet-link-{{.Name}}">{{.Name}}</a></td>

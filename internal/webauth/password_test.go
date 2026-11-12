@@ -212,3 +212,17 @@ func TestVerifyDummyDerivesOnceAndNeverSucceeds(t *testing.T) {
 		t.Fatalf("%d derivations, want exactly 1", calls.Load())
 	}
 }
+
+func TestParseMemoryCapIs64MiB(t *testing.T) {
+	salt, key := "AAAAAAAAAAAAAAAAAAAAAA", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+	mk := func(m string) string { return "$argon2id$v=19$m=" + m + ",t=2,p=1$" + salt + "$" + key }
+	if _, _, _, _, _, err := decodePHC(mk("65536")); err != nil {
+		t.Fatalf("64 MiB (the cap) rejected: %v", err)
+	}
+	if _, _, _, _, _, err := decodePHC(mk("65537")); !errors.Is(err, ErrBadHash) {
+		t.Fatalf("above 64 MiB accepted: %v", err)
+	}
+	if _, _, _, _, _, err := decodePHC(mk("47104")); err != nil { // the largest OWASP profile
+		t.Fatalf("OWASP m=47104 rejected: %v", err)
+	}
+}
