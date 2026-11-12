@@ -109,7 +109,9 @@ func (t *Throttle) Begin(email string) (wait time.Duration, done func(Outcome)) 
 		e = &throttleEntry{}
 		t.m[k] = e
 	}
+	prevFails, prevLast, prevUntil := e.fails, e.last, e.until
 	t.fail(e, now)
+	myLast, myUntil := e.last, e.until
 	var once sync.Once
 	return 0, func(o Outcome) {
 		once.Do(func() {
@@ -119,12 +121,26 @@ func (t *Throttle) Begin(email string) (wait time.Duration, done func(Outcome)) 
 			case Succeeded:
 				delete(t.m, k)
 			case Aborted:
-				// Only if the entry is still ours: it may have been evicted or reset.
-				if cur := t.m[k]; cur == e && e.fails > 0 {
+				// Take the provisional failure back, as if the attempt never happened.
+				// Only while the entry is still ours; and only restore the delay and the
+				// last-failure time if no later attempt has moved them since, so an
+				// aborted attempt can neither lengthen the backoff nor erase another
+				// attempt's count.
+				cur := t.m[k]
+				if cur != e {
+					return
+				}
+				if e.fails > 0 {
 					e.fails--
-					if e.fails < throttleFreeFailures {
-						e.until = time.Time{}
-					}
+				}
+				if e.until.Equal(myUntil) {
+					e.until = prevUntil
+				}
+				if e.last.Equal(myLast) {
+					e.last = prevLast
+				}
+				if e.fails == 0 && prevFails == 0 {
+					delete(t.m, k) // an entry nobody has a failure on is no entry
 				}
 			}
 		})
@@ -175,28 +191,44 @@ func (t *Throttle) Success(email string) {
 	t.mu.Unlock()
 }
 
-// evict makes room for one new entry. It removes the entry that matters least:
-// an entry that is not currently throttled goes before one that is, and among
-// equals the one with the oldest activity (for throttled entries: the one whose
-// delay ends first). A spray of distinct emails therefore evicts its own
-// one-failure entries, not the backoff of the account it is trying to guess.
+// evict makes room for one new entry by removing the one that matters least.
+// Order of preference for the victim:
+//  1. an entry that is not throttled right now, before a throttled one;
+//  2. among those, the one with the fewest failures still inside the window
+//     (an account that is being guessed keeps its count, a one-shot typo or a
+//     spray entry goes first), then the one with the oldest activity;
+//  3. among throttled entries, the one whose delay ends first.
+//
+// A spray of distinct emails therefore evicts its own one-failure entries and
+// never the backoff, or the near-threshold count, of the account it is guessing.
 // Caller holds mu.
 func (t *Throttle) evict(now time.Time) {
+	type rank struct {
+		throttled bool
+		fails     int
+		when      time.Time
+	}
+	less := func(a, b rank) bool { // a is a better victim than b
+		switch {
+		case a.throttled != b.throttled:
+			return !a.throttled
+		case !a.throttled && a.fails != b.fails:
+			return a.fails < b.fails
+		}
+		return a.when.Before(b.when)
+	}
 	var victim string
-	var vThrottled bool
-	var vWhen time.Time
+	var best rank
 	first := true
 	for k, e := range t.m {
-		throttled := e.until.After(now)
-		when := e.last
-		if throttled {
-			when = e.until
+		r := rank{throttled: e.until.After(now), when: e.last}
+		if r.throttled {
+			r.when = e.until
+		} else if now.Sub(e.last) <= throttleWindow {
+			r.fails = e.fails
 		}
-		switch {
-		case first,
-			vThrottled && !throttled,
-			vThrottled == throttled && when.Before(vWhen):
-			victim, vThrottled, vWhen, first = k, throttled, when, false
+		if first || less(r, best) {
+			victim, best, first = k, r, false
 		}
 	}
 	delete(t.m, victim)

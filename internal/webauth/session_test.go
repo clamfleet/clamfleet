@@ -206,8 +206,8 @@ func TestThrottleAbortTakesTheProvisionalFailureBack(t *testing.T) {
 		done(Aborted)
 		done(Aborted) // once only: the second call must not subtract again
 	}
-	if th.m["a@example.com"].fails != 0 {
-		t.Fatalf("fails = %d", th.m["a@example.com"].fails)
+	if e, ok := th.m["a@example.com"]; ok {
+		t.Fatalf("aborted attempts left an entry: %+v", e)
 	}
 }
 
@@ -231,5 +231,71 @@ func TestThrottleSprayCannotFlushATargetsBackoff(t *testing.T) {
 	}
 	if w := th.Wait("target@example.com"); w == 0 {
 		t.Fatal("a spray of other emails flushed the target's backoff")
+	}
+}
+
+// A target that has been guessed 4 times must survive a spray of one-failure entries.
+func TestThrottleEvictionKeepsNearThresholdCountsAndExpiredDelays(t *testing.T) {
+	now := time.Date(2031, 1, 1, 12, 0, 0, 0, time.UTC)
+	th := NewThrottle(func() time.Time { return now })
+	for i := 0; i < 4; i++ {
+		th.Fail("near@example.com")
+	}
+	for i := 0; i < throttleFreeFailures; i++ {
+		th.Fail("expired@example.com")
+	}
+	now = now.Add(31 * time.Second) // the delay of "expired" has just run out; its count must remain
+	for i := 0; i < throttleMaxEntries*2; i++ {
+		now = now.Add(time.Millisecond)
+		_, done := th.Begin("spray" + time.Duration(i).String() + "@spray.example")
+		done(Failed)
+	}
+	if f := th.m["near@example.com"]; f == nil || f.fails != 4 {
+		t.Fatalf("the near-threshold target lost its count: %+v", f)
+	}
+	if f := th.m["expired@example.com"]; f == nil || f.fails != throttleFreeFailures {
+		t.Fatalf("the target whose delay just expired lost its count: %+v", f)
+	}
+	// One more failure on "expired" goes straight to the doubled delay.
+	if d := th.Fail("expired@example.com"); d != time.Minute {
+		t.Fatalf("delay %v, want 1m (count kept)", d)
+	}
+}
+
+// An aborted attempt leaves the backoff as it was: not longer, not shorter.
+func TestThrottleAbortRestoresTheBackoff(t *testing.T) {
+	now := time.Date(2031, 1, 1, 12, 0, 0, 0, time.UTC)
+	th := NewThrottle(func() time.Time { return now })
+	for i := 0; i < 4; i++ {
+		th.Fail("a@example.com")
+	}
+	last := th.m["a@example.com"].last
+	now = now.Add(5 * time.Second)
+	_, done := th.Begin("a@example.com") // the 5th: sets a 30 s delay provisionally
+	if th.Wait("a@example.com") == 0 {
+		t.Fatal("setup: no provisional delay")
+	}
+	done(Aborted)
+	e := th.m["a@example.com"]
+	if e.fails != 4 || !e.until.IsZero() || !e.last.Equal(last) {
+		t.Fatalf("after Aborted: fails=%d until=%v last=%v (want 4, zero, %v)", e.fails, e.until, e.last, last)
+	}
+	// An already throttled entry keeps its delay across an aborted attempt that was admitted after expiry.
+	th.Fail("b@example.com")
+	for i := 0; i < 4; i++ {
+		th.Fail("b@example.com")
+	}
+	until := th.m["b@example.com"].until
+	now = until.Add(time.Second)
+	_, d2 := th.Begin("b@example.com") // 6th failure: provisional 60 s
+	d2(Aborted)
+	if got := th.m["b@example.com"]; got.fails != 5 || !got.until.Equal(until) {
+		t.Fatalf("aborted attempt changed the delay: fails=%d until=%v want %v", got.fails, got.until, until)
+	}
+	// A brand new entry that is aborted leaves no entry behind.
+	_, d3 := th.Begin("c@example.com")
+	d3(Aborted)
+	if _, ok := th.m["c@example.com"]; ok {
+		t.Fatal("an aborted first attempt left an entry")
 	}
 }
