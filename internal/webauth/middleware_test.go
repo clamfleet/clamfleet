@@ -59,7 +59,7 @@ func newMgr(f *fakeSessions) *Manager {
 // signedIn registers a session with the given role and returns its cookie and principal.
 func signedIn(t *testing.T, f *fakeSessions, m *Manager, role string, mustChange bool) (*http.Cookie, Principal) {
 	t.Helper()
-	tok, err := m.Create(context.Background(), 7, "h")
+	tok, err := m.Create(context.Background(), 7, "h", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -250,11 +250,11 @@ func TestCrossOriginProtection(t *testing.T) {
 func TestCreateIssuesFreshTokenAndIgnoresRequestCookie(t *testing.T) {
 	f := &fakeSessions{byHash: map[string]store.SessionPrincipal{}}
 	m := newMgr(f)
-	a, err := m.Create(context.Background(), 1, "h")
+	a, err := m.Create(context.Background(), 1, "h", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	b, _ := m.Create(context.Background(), 1, "h")
+	b, _ := m.Create(context.Background(), 1, "h", 0)
 	if a == b || ParseToken(a) != nil {
 		t.Fatalf("tokens %q %q", a, b)
 	}

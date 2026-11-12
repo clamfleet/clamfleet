@@ -8,11 +8,14 @@
 -- the user still has that password hash and is not disabled. A reset, a
 -- password change or a disable that committed while the login was hashing
 -- leaves 0 rows, and the login fails instead of producing a session behind it.
+-- auth_version closes the one case the hash cannot see: a disable followed by an
+-- enable leaves the hash unchanged but bumps the version twice.
 -- This does not depend on any clock (timestamps are whole seconds).
 INSERT INTO user_sessions (token_hash, user_id, csrf_token, created_at, last_seen_at, expires_at)
 SELECT sqlc.arg(token_hash), u.id, sqlc.arg(csrf_token), sqlc.arg(now), sqlc.arg(now), sqlc.arg(expires_at)
 FROM users u
-WHERE u.id = sqlc.arg(user_id) AND u.password_hash = sqlc.arg(expected_hash) AND u.disabled_at IS NULL;
+WHERE u.id = sqlc.arg(user_id) AND u.password_hash = sqlc.arg(expected_hash) AND u.disabled_at IS NULL
+  AND u.auth_version = sqlc.arg(expected_version);
 
 -- name: SessionPrincipalByTokenHash :one
 -- One join, so a disabled user, a changed role or a deleted user takes effect

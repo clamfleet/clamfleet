@@ -57,14 +57,9 @@ The cookie is `__Host-clamfleet_session` with `HttpOnly`, `Secure`, `SameSite=La
 `Domain`; it has no expiry date of its own (the server enforces the limits). A fresh token is issued at
 every login.
 
-### Known limit: disable and enable within one login
-
-A session is only created if the user still has the password hash that the login verified and is not
-disabled, so a password reset, a password change or a disable that commits while a login is hashing
-leaves that login without a session. One window stays open: if an admin disables a user and enables
-them again while that user's login is hashing (a few tens of milliseconds), the hash is unchanged and
-the login succeeds. Closing it would need a per-user version counter (a schema change). Enabling a user
-ends the sessions that existed at that moment.
+A session is created only if nothing about the account changed while the password was being checked:
+a password reset or change, a disable, or a disable followed by an enable (a per-user `auth_version`
+counter catches the last one) leaves that login without a session.
 
 ## Protection against forged requests (CSRF)
 

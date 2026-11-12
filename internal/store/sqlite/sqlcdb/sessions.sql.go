@@ -28,15 +28,17 @@ INSERT INTO user_sessions (token_hash, user_id, csrf_token, created_at, last_see
 SELECT ?1, u.id, ?2, ?3, ?3, ?4
 FROM users u
 WHERE u.id = ?5 AND u.password_hash = ?6 AND u.disabled_at IS NULL
+  AND u.auth_version = ?7
 `
 
 type CreateSessionParams struct {
-	TokenHash    []byte
-	CsrfToken    []byte
-	Now          int64
-	ExpiresAt    int64
-	UserID       int64
-	ExpectedHash sql.NullString
+	TokenHash       []byte
+	CsrfToken       []byte
+	Now             int64
+	ExpiresAt       int64
+	UserID          int64
+	ExpectedHash    sql.NullString
+	ExpectedVersion int64
 }
 
 // SPDX-License-Identifier: AGPL-3.0-only
@@ -46,6 +48,8 @@ type CreateSessionParams struct {
 // the user still has that password hash and is not disabled. A reset, a
 // password change or a disable that committed while the login was hashing
 // leaves 0 rows, and the login fails instead of producing a session behind it.
+// auth_version closes the one case the hash cannot see: a disable followed by an
+// enable leaves the hash unchanged but bumps the version twice.
 // This does not depend on any clock (timestamps are whole seconds).
 func (q *Queries) CreateSession(ctx context.Context, arg CreateSessionParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, createSession,
@@ -55,6 +59,7 @@ func (q *Queries) CreateSession(ctx context.Context, arg CreateSessionParams) (i
 		arg.ExpiresAt,
 		arg.UserID,
 		arg.ExpectedHash,
+		arg.ExpectedVersion,
 	)
 	if err != nil {
 		return 0, err

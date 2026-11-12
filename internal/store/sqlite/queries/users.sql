@@ -12,22 +12,23 @@ RETURNING id;
 
 -- name: UserByEmail :one
 SELECT id, email, display_name, role, auth_source, password_hash, password_must_change,
-       password_changed_at, disabled_at, created_at, last_login_at
+       password_changed_at, disabled_at, created_at, last_login_at, auth_version
 FROM users WHERE email = sqlc.arg(email);
 
 -- name: UserByID :one
 SELECT id, email, display_name, role, auth_source, password_hash, password_must_change,
-       password_changed_at, disabled_at, created_at, last_login_at
+       password_changed_at, disabled_at, created_at, last_login_at, auth_version
 FROM users WHERE id = sqlc.arg(id);
 
 -- name: ListUsers :many
 SELECT id, email, display_name, role, auth_source, password_hash, password_must_change,
-       password_changed_at, disabled_at, created_at, last_login_at
+       password_changed_at, disabled_at, created_at, last_login_at, auth_version
 FROM users ORDER BY email;
 
 -- name: SetUserPassword :execrows
 UPDATE users SET password_hash = sqlc.arg(password_hash), password_must_change = sqlc.arg(must_change),
-       password_changed_at = sqlc.arg(now), updated_at = sqlc.arg(now)
+       password_changed_at = sqlc.arg(now), updated_at = sqlc.arg(now),
+       auth_version = auth_version + 1
 WHERE id = sqlc.arg(id);
 
 -- name: SetUserPasswordIf :execrows
@@ -35,7 +36,8 @@ WHERE id = sqlc.arg(id);
 -- verified as "current password" is still the stored one. 0 rows means a reset
 -- or another change committed in between, and must not be overwritten.
 UPDATE users SET password_hash = sqlc.arg(password_hash), password_must_change = sqlc.arg(must_change),
-       password_changed_at = sqlc.arg(now), updated_at = sqlc.arg(now)
+       password_changed_at = sqlc.arg(now), updated_at = sqlc.arg(now),
+       auth_version = auth_version + 1
 WHERE id = sqlc.arg(id) AND password_hash = sqlc.arg(expected_hash);
 
 -- name: RehashUserPassword :execrows
@@ -51,7 +53,12 @@ WHERE id = sqlc.arg(id) AND password_hash = sqlc.arg(expected_hash);
 UPDATE users SET role = sqlc.arg(role), updated_at = sqlc.arg(now) WHERE id = sqlc.arg(id);
 
 -- name: SetUserDisabled :execrows
-UPDATE users SET disabled_at = sqlc.arg(disabled_at), updated_at = sqlc.arg(now) WHERE id = sqlc.arg(id);
+-- Disable AND enable both bump auth_version: a login that read the user before a
+-- disable-then-enable has a stale version and gets no session, although the
+-- password hash is unchanged (closes the M3 "known limit").
+UPDATE users SET disabled_at = sqlc.arg(disabled_at), updated_at = sqlc.arg(now),
+       auth_version = auth_version + 1
+WHERE id = sqlc.arg(id);
 
 -- name: SetUserLastLogin :exec
 UPDATE users SET last_login_at = sqlc.arg(now) WHERE id = sqlc.arg(id);

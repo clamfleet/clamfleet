@@ -5,7 +5,9 @@
 //
 // Every change that affects who may sign in (password, role, disable) deletes
 // the user's sessions in the same transaction as the change and its audit
-// row, so there is no window in which the old privilege still works.
+// row, so there is no window in which the old privilege still works. Password
+// and disable/enable changes also bump users.auth_version, which is what
+// refuses a session to a login that was verifying while they happened.
 package sqlite
 
 import (
@@ -39,6 +41,7 @@ type userRow struct {
 	DisabledAt         sql.NullInt64
 	CreatedAt          int64
 	LastLoginAt        sql.NullInt64
+	AuthVersion        int64
 }
 
 func toUser(r userRow) store.User {
@@ -46,7 +49,7 @@ func toUser(r userRow) store.User {
 		ID: r.ID, Email: r.Email.String, DisplayName: r.DisplayName.String, Role: r.Role,
 		AuthSource: r.AuthSource, Disabled: r.DisabledAt.Valid, MustChange: r.PasswordMustChange != 0,
 		CreatedAt: time.Unix(r.CreatedAt, 0).UTC(), LastLoginAt: nullTime(r.LastLoginAt),
-		PasswordHash: r.PasswordHash.String,
+		PasswordHash: r.PasswordHash.String, AuthVersion: r.AuthVersion,
 	}
 }
 
@@ -265,7 +268,7 @@ func (s *Store) CreateSession(ctx context.Context, ss store.Session) error {
 	return s.inTx(ctx, func(q *sqlcdb.Queries) error {
 		n, err := q.CreateSession(ctx, sqlcdb.CreateSessionParams{
 			TokenHash: ss.TokenHash, CsrfToken: ss.CSRF, Now: unix(ss.CreatedAt), ExpiresAt: unix(ss.ExpiresAt),
-			UserID: ss.UserID, ExpectedHash: nullStr(ss.PasswordHash),
+			UserID: ss.UserID, ExpectedHash: nullStr(ss.PasswordHash), ExpectedVersion: ss.AuthVersion,
 		})
 		if err == nil && n == 0 {
 			err = store.ErrCredentialChanged

@@ -126,7 +126,7 @@ func (w *Web) loginSubmit(rw http.ResponseWriter, r *http.Request) {
 	// while the hash was running, the store refuses and nobody is signed in. That
 	// is not a wrong guess, so the attempt is Aborted (it does not count towards
 	// the backoff) and the user sees the generic failure: signing in again works.
-	token, err := w.Auth.Create(r.Context(), user.ID, user.PasswordHash)
+	token, err := w.Auth.Create(r.Context(), user.ID, user.PasswordHash, user.AuthVersion)
 	if errors.Is(err, store.ErrCredentialChanged) {
 		w.Log.Warn("login refused: the account changed while the password was being checked", "client_ip", ip)
 		if err := w.Store.RecordAudit(r.Context(), w.Now(), store.Audit{Kind: store.ActorUser, Actor: email},

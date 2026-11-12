@@ -1166,3 +1166,28 @@ func flipFirst(t string) string {
 	}
 	return c + t[1:]
 }
+
+// Closes the M3 known limit: a disable followed by an enable while the login is
+// hashing leaves the password hash unchanged, so only auth_version can refuse it.
+func TestLoginRacingDisableEnableGetsNoSession(t *testing.T) {
+	e := newEnv(t)
+	u := e.addUser("ann@example.com", "viewer", goodPW, false)
+	b, p := raceLogin(t, e, "ann@example.com", goodPW, func() {
+		for _, off := range []bool{true, false} {
+			if err := e.st.SetDisabled(context.Background(), u.ID, off, e.clock(), cliAudit); err != nil {
+				t.Error(err)
+			}
+		}
+	})
+	if p.status != 200 || !strings.Contains(p.body, "Invalid email or password.") || e.cookieFor(b) != nil {
+		t.Fatalf("a login that raced disable+enable must fail without a cookie: %d", p.status)
+	}
+	if g := b.get("/"); g.status != 303 {
+		t.Fatalf("a session exists for a login that raced disable+enable: %d", g.status)
+	}
+	if n := e.count(`SELECT count(*) FROM audit_log WHERE action='user.login.failed' AND detail LIKE '%credential changed%'`); n != 1 {
+		t.Fatalf("%d audit rows for the raced login", n)
+	}
+	// The user can sign in normally afterwards.
+	e.browser().login("ann@example.com", goodPW)
+}

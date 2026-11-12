@@ -35,7 +35,7 @@ var (
 	// ErrUserExists: a user with that email already exists.
 	ErrUserExists = errors.New("user already exists")
 	// ErrCredentialChanged: the user's password changed or the user was disabled
-	// after the caller verified the credential. A login gets no session; a
+	// (or disabled and enabled again) after the caller verified the credential. A login gets no session; a
 	// self-service password change is refused. Nothing was written.
 	ErrCredentialChanged = errors.New("credential changed")
 )
@@ -320,6 +320,10 @@ type User struct {
 	// PasswordHash is the PHC string; it is never serialised and empty for
 	// accounts without a local password.
 	PasswordHash string `json:"-"`
+	// AuthVersion counts the changes that must invalidate a login in flight
+	// (password set or reset, disable, enable). A login reads it with the user
+	// and the store creates a session only if it is unchanged. Internal.
+	AuthVersion int64 `json:"-"`
 }
 
 // NewUser is a user to create. PasswordHash is a PHC string.
@@ -360,6 +364,10 @@ type Session struct {
 	// stores the session only if the user still has exactly this hash and is not
 	// disabled (ErrCredentialChanged otherwise).
 	PasswordHash string
+	// AuthVersion is the user's auth_version the login read. The session is
+	// stored only if it is still current: a disable followed by an enable
+	// changes it twice while leaving the password hash alone.
+	AuthVersion int64
 }
 
 // SessionPrincipal is a valid session joined with its user, read fresh on
