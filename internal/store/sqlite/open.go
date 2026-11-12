@@ -60,6 +60,16 @@ type Store struct {
 	// go wrong. Always nil in production.
 	beforeHealthWrite func() error
 
+	// beforeAlertPlanWrite is a test hook: PlanAlerts calls it after the planner
+	// ran and before anything is written, to prove a failure leaves no delivery,
+	// no notify row, no log row and the flags still set. Always nil in production.
+	beforeAlertPlanWrite func() error
+
+	// betweenExpireWrites is a test hook: ExpireLeases calls it between failing a
+	// delivery and writing its 'failed' log row, to prove the two are one
+	// transaction. Always nil in production.
+	betweenExpireWrites func() error
+
 	// afterHostDelete is a test hook: DeleteHost calls it between the delete
 	// and the audit insert, to prove a failure there rolls both back.
 	afterHostDelete func() error

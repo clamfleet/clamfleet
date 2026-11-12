@@ -10,7 +10,12 @@
 package store
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"regexp"
+	"strings"
 	"time"
 )
 
@@ -165,3 +170,231 @@ const (
 	AlertLogTestSent    = "test_sent"
 	AlertLogTestFailed  = "test_failed"
 )
+
+var (
+	// ErrTargetExists: an alert target with that name exists.
+	ErrTargetExists = errors.New("alert target already exists")
+	// ErrLeaseLost: the delivery is no longer claimed by the caller (its lease
+	// expired and it was claimed again, or it was cancelled). Nothing about the
+	// delivery was written.
+	ErrLeaseLost = errors.New("delivery lease lost")
+)
+
+// Audit actions and target kind of alert target changes.
+const (
+	ActionAlertTargetAdd    = "alert_target.add"
+	ActionAlertTargetUpdate = "alert_target.update"
+	ActionAlertTargetDelete = "alert_target.delete"
+	ActionAlertTargetRotate = "alert_target.secret.rotate"
+	ActionAlertTargetTest   = "alert_target.test"
+
+	TargetAlertTarget = "alert_target"
+)
+
+// Rule: alert target names are lowercase, 1-64 characters of [a-z0-9._-],
+// starting with a letter or digit; "new" is reserved because it is a route
+// (GET /admin/alerts/new). The name is immutable: it is the audit target and the
+// URL of the target's page.
+var alertTargetNameRE = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
+
+// NormalizeAlertTargetName lowercases and validates a target name.
+func NormalizeAlertTargetName(name string) (string, error) {
+	n := strings.ToLower(strings.TrimSpace(name))
+	if !alertTargetNameRE.MatchString(n) || n == "new" {
+		return "", fmt.Errorf("invalid target name: use 1-64 characters of a-z, 0-9, '.', '_' or '-', starting with a letter or digit (\"new\" is reserved)")
+	}
+	return n, nil
+}
+
+// NewAlertTarget is a target to create.
+type NewAlertTarget struct {
+	Name             string
+	Type             string
+	Config           []byte
+	MinSeverity      string
+	TagFilter        []string
+	SendStateChanges bool
+	SendDetections   bool
+	Enabled          bool
+}
+
+// AlertTargetUpdate is the full desired non-secret state of a target.
+type AlertTargetUpdate struct {
+	Config           []byte
+	MinSeverity      string
+	TagFilter        []string
+	SendStateChanges bool
+	SendDetections   bool
+	Enabled          bool
+}
+
+// Cancelled reports what an update switched off.
+type Cancelled struct {
+	// Deliveries is how many pending deliveries became 'cancelled'.
+	Deliveries int
+}
+
+// AlertTargetSummary is a target with the last result recorded for it.
+type AlertTargetSummary struct {
+	AlertTarget
+	LastStatus string // "" when nothing was recorded yet
+	LastAt     *time.Time
+	LastCode   string
+}
+
+// ClaimedDelivery is a delivery a worker now owns until its lease ends.
+type ClaimedDelivery struct {
+	ID            int64
+	AlertID       string
+	Target        AlertTarget // with Sealed
+	HostID        int64
+	HostName      string
+	Recipient     string
+	StateChangeID *int64
+	EventID       *int64
+	Kind          string
+	Payload       []byte
+	Attempt       int    // 1-based number of THIS attempt
+	Token         []byte // the lease token FinishAttempt must present
+	LogID         int64  // the 'attempting' log row
+	ClaimedAt     time.Time
+}
+
+// AttemptResult is what a sender reports to the store.
+type AttemptResult struct {
+	// Status is AlertLogSent, AlertLogRetrying or AlertLogFailed (for a test
+	// send AlertLogTestSent or AlertLogTestFailed).
+	Status string
+	Code   string
+	Error  string // our own text, never a response body or a URL path
+	// Duration of the attempt.
+	Duration time.Duration
+	// RetryAt is when a retrying delivery is due again.
+	RetryAt time.Time
+}
+
+// TestSendRecord is the outcome of a test send to one recipient ("" for a webhook).
+type TestSendRecord struct {
+	Recipient string
+	Result    AttemptResult
+}
+
+// AlertLogFilter selects log rows, newest first.
+type AlertLogFilter struct {
+	TargetName string // "" = every target
+	Limit      int
+}
+
+// AlertLogEntry is a row of alert_log.
+type AlertLogEntry struct {
+	ID         int64
+	TS         time.Time
+	TargetName string
+	Recipient  string
+	Host       string
+	Attempt    int
+	Status     string
+	Code       string
+	Error      string
+	DurationMS int64
+}
+
+// SealedTargetSecret is a stored webhook secret, for the start-up check and key rotation.
+type SealedTargetSecret struct {
+	ID     int64
+	Name   string
+	Sealed []byte
+}
+
+// AlertReseal replaces one sealed target secret by another, only if it is still Old.
+type AlertReseal struct {
+	TargetID int64
+	Old      []byte
+	New      []byte
+}
+
+// UnroutedEvent is a detection that no target matched.
+type UnroutedEvent struct {
+	EventID int64
+	Host    string
+}
+
+// PlanResult is what PlanAlerts wrote.
+type PlanResult struct {
+	Deliveries []NewDelivery
+	Held       int
+	Unrouted   []UnroutedEvent
+	// Hosts maps host id to name, for the log lines of the caller.
+	Hosts map[int64]string
+}
+
+// AlertStore persists alert targets and the delivery queue.
+type AlertStore interface {
+	// CreateAlertTarget inserts the target and writes its audit row. seal is
+	// called inside the transaction with the new id (the AAD of the sealed
+	// secret) and may be nil for email. ErrTargetExists for a taken name.
+	CreateAlertTarget(ctx context.Context, t NewAlertTarget, seal func(id int64) ([]byte, error), now time.Time, a Audit) (AlertTarget, error)
+	// UpdateAlertTarget replaces the non-secret settings; seal, when not nil,
+	// replaces the secret (a changed webhook URL). In the SAME transaction it
+	// applies the switch-off rules: pending deliveries of a kind turned off (or
+	// all when disabled, or of a removed recipient) become 'cancelled' with a
+	// log row, and the notify state goes when state changes are turned off or
+	// the target is disabled. The audit detail names the changed fields only.
+	UpdateAlertTarget(ctx context.Context, name string, u AlertTargetUpdate, seal func(id int64) ([]byte, error), now time.Time, a Audit) (Cancelled, error)
+	// RotateAlertSecret replaces the sealed secret only (a new signing key) and
+	// audits alert_target.secret.rotate. ErrNotFound for an unknown target.
+	RotateAlertSecret(ctx context.Context, name string, seal func(id int64) ([]byte, error), now time.Time, a Audit) error
+	// DeleteAlertTarget cascades the target's deliveries and notify state; its
+	// log rows stay (target id NULL, name snapshot).
+	DeleteAlertTarget(ctx context.Context, name string, now time.Time, a Audit) error
+	// AlertTarget returns the target with its sealed secret (read pool).
+	AlertTarget(ctx context.Context, name string) (AlertTarget, error)
+	ListAlertTargets(ctx context.Context) ([]AlertTargetSummary, error)
+	// CountPendingAlerts counts the target's pending deliveries.
+	CountPendingAlerts(ctx context.Context, name string) (int, error)
+
+	// HasAlertWork is cheap (read pool): is anything flagged, any hold due, any
+	// delivery due or any lease expired? It keeps the 5 s loop from opening a
+	// write transaction for nothing.
+	HasAlertWork(ctx context.Context, now time.Time, cooldown time.Duration) (bool, error)
+	// PlanAlerts runs in ONE immediate write transaction: it reads the flagged
+	// state changes and events, the targets, the notify state and the due holds,
+	// calls plan (pure; it must not call the store), writes the deliveries, the
+	// notify-state upserts and the held/skipped log rows, and clears the flags.
+	// A failure anywhere leaves the flags set and nothing written.
+	PlanAlerts(ctx context.Context, now time.Time, cooldown time.Duration, plan func(AlertPlanInput) AlertPlanOutput) (PlanResult, error)
+	// ExpireLeases, one transaction, handles every claimed pending delivery
+	// whose lease ended (all=true: every claim, used at start, when every claim
+	// belongs to a dead process): its 'attempting' log row becomes
+	// 'interrupted' and the claim is released. At MaxAlertAttempts attempts the
+	// delivery becomes 'failed' with a 'failed' log row in the same transaction;
+	// otherwise it is due at once.
+	ExpireLeases(ctx context.Context, now time.Time, all bool) (expired, exhausted int, err error)
+	// ClaimDeliveries, one transaction, claims at most max due deliveries (the
+	// caller's idle workers, never more) and returns them. A delivery of a
+	// disabled target or of a kind switched off is not claimed, nor one with an
+	// older pending delivery for the same (target, host, recipient).
+	ClaimDeliveries(ctx context.Context, now time.Time, lease time.Duration, max int) ([]ClaimedDelivery, error)
+	// FinishAttempt records the outcome of a claimed attempt, conditional on the
+	// claim token. ErrLeaseLost: the delivery was not written (the attempt's log
+	// row still is, while it is 'attempting').
+	FinishAttempt(ctx context.Context, c ClaimedDelivery, r AttemptResult, now time.Time) error
+	// RecordTestSend writes a log row per recipient and the audit row
+	// alert_target.test. ErrNotFound for an unknown target.
+	RecordTestSend(ctx context.Context, targetName string, rs []TestSendRecord, now time.Time, a Audit) error
+
+	AlertLog(ctx context.Context, f AlertLogFilter) ([]AlertLogEntry, error)
+	// UnroutedDetections counts detections received since `since` that have no
+	// delivery at all.
+	UnroutedDetections(ctx context.Context, since time.Time) (int64, error)
+	// PruneAlertHistory deletes log rows older than before and FINISHED
+	// deliveries older than before, in batches. Pending deliveries are never pruned.
+	PruneAlertHistory(ctx context.Context, before time.Time, batch int) (int64, error)
+
+	// SealedAlertSecrets lists every stored webhook secret.
+	SealedAlertSecrets(ctx context.Context) ([]SealedTargetSecret, error)
+	// ResealAlertSecrets applies each replacement as a compare-and-swap on the
+	// old blob, in one transaction. It returns the applied count and the ids
+	// whose blob changed meanwhile.
+	ResealAlertSecrets(ctx context.Context, rs []AlertReseal, now time.Time, a Audit) (applied int, conflicts []int64, err error)
+}
