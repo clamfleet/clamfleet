@@ -45,13 +45,14 @@ type TLS struct {
 	ClientCA string `yaml:"client_ca"`
 }
 
-// DefaultConfig returns the defaults. db_path departs from spec 12 by
+// DefaultConfig returns the defaults: plaintext on loopback, the intended
+// deployment behind a reverse proxy (decision 7). Setting tls.cert and tls.key
+// turns on direct TLS. db_path departs from spec 12 by
 // decision: the server runs as its own user with its own state directory, so
 // it never shares an identity or directory with an agent on the same host.
 func DefaultConfig() Config {
 	return Config{
-		Listen: ":8443",
-		TLS:    TLS{Cert: "/etc/clamfleet/tls.crt", Key: "/etc/clamfleet/tls.key"},
+		Listen: "127.0.0.1:8443",
 		DBPath: "/var/lib/clamfleet-server/clamfleet.db",
 	}
 }

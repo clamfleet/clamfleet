@@ -47,9 +47,9 @@ func TestAgentEnvironmentIsIgnoredSilently(t *testing.T) {
 	}
 }
 
-func TestDefaultsAreTLSOnNeedsFiles(t *testing.T) {
+func TestDefaultsArePlaintextOnLoopback(t *testing.T) {
 	c := DefaultConfig()
-	if !c.TLSEnabled() || c.Listen != ":8443" || c.DBPath != "/var/lib/clamfleet-server/clamfleet.db" {
+	if c.TLSEnabled() || c.Listen != "127.0.0.1:8443" || c.DBPath != "/var/lib/clamfleet-server/clamfleet.db" {
 		t.Fatalf("%+v", c)
 	}
 	if err := c.Validate(); err != nil {

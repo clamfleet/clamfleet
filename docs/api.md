@@ -15,7 +15,7 @@ Agents initiate every connection. The server never connects to an agent.
 ## Transport and authentication
 
 - HTTPS, TLS 1.2 or later. The intended deployment is the server on loopback behind a reverse proxy
-  that terminates TLS; the server can also terminate TLS itself (`tls.cert`, `tls.key`).
+  that terminates TLS; the server can also terminate TLS itself (`tls.cert`, `tls.key`). The default is plaintext on `127.0.0.1:8443`; plaintext on any other address is refused.
 - Every `/v1/*` request carries an agent token: `Authorization: Bearer cfa_...`.
   - A token is `cfa_` followed by 43 base64url characters (no padding): 256 random bits, 47
     characters in all. `cfa_` marks it as an agent credential.

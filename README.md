@@ -113,9 +113,9 @@ install -m 644 deploy/server.yaml.example /etc/clamfleet/server.yaml
 
 | YAML key | Environment variable | Default |
 |---|---|---|
-| `listen` | `CLAMFLEET_SERVER_LISTEN` | `:8443` |
-| `tls.cert` | `CLAMFLEET_SERVER_TLS_CERT` | `/etc/clamfleet/tls.crt` |
-| `tls.key` | `CLAMFLEET_SERVER_TLS_KEY` | `/etc/clamfleet/tls.key` |
+| `listen` | `CLAMFLEET_SERVER_LISTEN` | `127.0.0.1:8443` |
+| `tls.cert` | `CLAMFLEET_SERVER_TLS_CERT` | empty (plaintext, loopback only) |
+| `tls.key` | `CLAMFLEET_SERVER_TLS_KEY` | empty |
 | `tls.client_ca` | `CLAMFLEET_SERVER_TLS_CLIENT_CA` | empty (mTLS off) |
 | `db_path` | `CLAMFLEET_SERVER_DB_PATH` | `/var/lib/clamfleet-server/clamfleet.db` |
 
@@ -123,9 +123,9 @@ The config file path is `--config`, else `CLAMFLEET_SERVER_CONFIG`, else `/etc/c
 The file is read strictly: an unknown key is an error, so a copy of the spec's example with keys of
 later milestones (`retention`, `smtp`) fails until those milestones add them.
 
-- **Behind a reverse proxy:** set `listen: 127.0.0.1:8443` and `tls.cert: ""`, `tls.key: ""`. The logged
+- **Behind a reverse proxy:** this is the default (`listen: 127.0.0.1:8443`, no TLS); a non-loopback `listen` without TLS is refused. The logged
   client address is then the proxy's: `X-Forwarded-For` is deliberately not trusted.
-- **Direct TLS:** set `tls.cert` and `tls.key` (both). The certificate is loaded at start; after a
+- **Direct TLS:** set `tls.cert` and `tls.key` (both), and `listen` as needed (for example `:8443`). The certificate is loaded at start; after a
   renewal, restart the server.
 - **Mutual TLS (optional):** set `tls.client_ca` to a PEM bundle. Every agent must then present a
   certificate signed by it, or the handshake fails. The agent token is still required. It needs direct

@@ -25,6 +25,7 @@ All notable changes are listed here. The format follows Keep a Changelog; versio
 - `freshclam.source` in the report (`journal`, `log`, `journal+log`, `mtime`, or null). Additive, schema stays 1.
 
 ### Changed
+- The server defaults to plaintext on `127.0.0.1:8443` (reverse-proxy deployment); `tls.cert` and `tls.key` enable direct TLS.
 - The server's state directory defaults to `/var/lib/clamfleet-server/` and it runs as its own user
   `clamfleet-server`, not the agent's `clamfleet` (HANDOVER section 12 says `/var/lib/clamfleet/`).
 - `make check` also runs `sqlc diff`; `make build` builds both binaries.
