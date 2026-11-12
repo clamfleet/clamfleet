@@ -18,6 +18,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"net/netip"
 	"time"
 
 	"github.com/clamfleet/clamfleet/internal/agentauth"
@@ -59,6 +60,9 @@ type Deps struct {
 	// Now is the injected clock for all server-side times.
 	Now func() time.Time
 	Log *slog.Logger
+	// TrustedProxies are the reverse proxies whose X-Forwarded-For is believed
+	// for the logged client IP (see api.ClientIP); parse with ParseTrustedProxies.
+	TrustedProxies []netip.Prefix
 }
 
 // NewHandler builds the complete HTTP handler.
@@ -93,7 +97,7 @@ func NewHandler(d Deps) http.Handler {
 			panic("server: unknown auth class for " + key)
 		}
 	}
-	return api.RequestLog(d.Log, d.Now)(mux)
+	return api.RequestLog(d.Log, d.Now, d.TrustedProxies)(mux)
 }
 
 // storeLookup adapts the store to agentauth.Lookup, translating "no such

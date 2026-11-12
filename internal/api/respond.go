@@ -22,8 +22,9 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
-	"net"
 	"net/http"
+	"net/netip"
+	"strings"
 	"sync"
 	"time"
 )
@@ -74,25 +75,63 @@ func (s *statusWriter) WriteHeader(code int) {
 
 func (s *statusWriter) Unwrap() http.ResponseWriter { return s.ResponseWriter }
 
-// clientIP is the TCP peer address without the port. X-Forwarded-For is
-// deliberately not trusted: behind a reverse proxy the logged address is the
-// proxy's, and honouring a client-supplied header would let anyone forge it.
-func clientIP(r *http.Request) string {
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
+// ClientIP returns the address to LOG as the client of r. It is for logging
+// only and must never feed an authentication or authorisation decision: it
+// can be wrong (a misconfigured proxy) and, when the peer is not a trusted
+// proxy, it is just the TCP peer.
+//
+// Rule (decision 12): if the TCP peer (RemoteAddr) is in trusted, walk
+// X-Forwarded-For (all header lines, combined) from right to left and take
+// the first address that is not itself a trusted proxy. Taking the rightmost
+// untrusted entry means a fake address a client prepends to the header is
+// never chosen: only entries appended by our own proxies are believed. If
+// there is none, or an entry does not parse, fall back to the peer. If the
+// peer is not trusted the header is ignored entirely, so anyone connecting
+// directly cannot forge the logged address.
+func ClientIP(r *http.Request, trusted []netip.Prefix) string {
+	ap, err := netip.ParseAddrPort(r.RemoteAddr)
 	if err != nil {
 		return r.RemoteAddr
 	}
-	return host
+	peer := ap.Addr().Unmap()
+	if !inPrefixes(peer, trusted) {
+		return peer.String()
+	}
+	var parts []string
+	for _, v := range r.Header.Values("X-Forwarded-For") {
+		parts = append(parts, strings.Split(v, ",")...)
+	}
+	for i := len(parts) - 1; i >= 0; i-- {
+		a, err := netip.ParseAddr(strings.TrimSpace(parts[i]))
+		if err != nil {
+			return peer.String()
+		}
+		a = a.Unmap()
+		if !inPrefixes(a, trusted) {
+			return a.String()
+		}
+	}
+	return peer.String()
+}
+
+func inPrefixes(a netip.Addr, prefixes []netip.Prefix) bool {
+	for _, p := range prefixes {
+		if p.Contains(a) {
+			return true
+		}
+	}
+	return false
 }
 
 // RequestLog logs every request once, after it is served: 2xx at info (the client IP of every accepted report must be
 // on record at the default level; /healthz 2xx stays at debug so a proxy health probe does not flood the log), 4xx at
 // warn, 5xx at error. Fields: method, path, status, host (the authenticated
 // host name, if any), duration and the client IP, always (decision 10: what an
-// operator does with source addresses is their business; they are not hidden).
+// operator does with source addresses is their business; they are not hidden),
+// resolved by ClientIP (trusted_proxies, decision 12).
 // It never logs the Authorization header, the query string or the body.
 // now is the injected clock, so durations are testable.
-func RequestLog(log *slog.Logger, now func() time.Time) func(http.Handler) http.Handler {
+func RequestLog(log *slog.Logger, now func() time.Time, trustedProxies []netip.Prefix) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			start := now()
@@ -122,7 +161,7 @@ func RequestLog(log *slog.Logger, now func() time.Time) func(http.Handler) http.
 				slog.Int("status", status),
 				slog.String("host", host),
 				slog.Duration("duration", now().Sub(start)),
-				slog.String("client_ip", clientIP(r)),
+				slog.String("client_ip", ClientIP(r, trustedProxies)),
 			)
 		})
 	}

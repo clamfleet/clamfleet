@@ -86,5 +86,8 @@ No authentication. `200 {"status":"ok"}` when the database answers within two se
 The server logs one line per request: method, path, status, the authenticated host name (empty for
 a rejected request), duration and the client IP address (always, decision of the maintainers).
 Successful requests are logged at info level (the default), except `GET /healthz`, which is logged at debug; 4xx at warn, 5xx at error. The `Authorization`
-header, the query string and the body are never logged. Behind a reverse proxy the client address
-is the proxy's: `X-Forwarded-For` is deliberately not trusted.
+header, the query string and the body are never logged. The client address is the TCP peer, unless
+the peer is listed in the server's `trusted_proxies`: then `X-Forwarded-For` (all header lines combined) is
+read from right to left and the first address that is not itself a trusted proxy is logged, falling back to
+the peer if there is none or an entry does not parse. From any other peer the header is ignored. The client
+IP is for logging only and is never used for authentication.

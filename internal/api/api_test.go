@@ -16,6 +16,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
@@ -53,7 +54,10 @@ type env struct {
 func newEnv(t *testing.T) *env { return newEnvLevel(t, slog.LevelDebug) }
 
 // newEnvLevel is newEnv with the log handler at a given level (the server default is info).
-func newEnvLevel(t *testing.T, level slog.Level) *env {
+func newEnvLevel(t *testing.T, level slog.Level) *env { return newEnvOpts(t, level, nil) }
+
+// newEnvOpts also sets the trusted proxies.
+func newEnvOpts(t *testing.T, level slog.Level, trusted []netip.Prefix) *env {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "api.db")
 	ctx := context.Background()
@@ -66,7 +70,7 @@ func newEnvLevel(t *testing.T, level slog.Level) *env {
 	}
 	logs := &syncBuf{}
 	log := slog.New(slog.NewJSONHandler(logs, &slog.HandlerOptions{Level: level}))
-	h := server.NewHandler(server.Deps{Store: st, Now: func() time.Time { return now }, Log: log})
+	h := server.NewHandler(server.Deps{Store: st, Now: func() time.Time { return now }, Log: log, TrustedProxies: trusted})
 	e := &env{t: t, srv: httptest.NewServer(h), st: st, dbPath: path, logs: logs}
 	t.Cleanup(func() { e.srv.Close(); st.Close() })
 	return e
@@ -646,5 +650,59 @@ func TestTokenNotInDatabaseBytes(t *testing.T) {
 	}
 	if !bytes.Contains(all, agentauth.Hash(tok)) {
 		t.Fatal("the token hash is not in the database file (the test would be vacuous)")
+	}
+}
+
+// Client IP for the logs (decision 12): the peer here is always 127.0.0.1
+// (httptest on loopback); X-Forwarded-For is believed only when that peer is a
+// trusted proxy, and then only its rightmost untrusted entry.
+func TestClientIPInRequestLog(t *testing.T) {
+	pfx := func(s ...string) []netip.Prefix {
+		var out []netip.Prefix
+		for _, e := range s {
+			out = append(out, netip.MustParsePrefix(e))
+		}
+		return out
+	}
+	cases := []struct {
+		name    string
+		trusted []netip.Prefix
+		xff     []string // one header line each
+		want    string
+	}{
+		{"untrusted peer, forged XFF ignored", nil, []string{"6.6.6.6"}, "127.0.0.1"},
+		{"peer not in a non-empty list, forged XFF ignored", pfx("10.0.0.0/8"), []string{"6.6.6.6"}, "127.0.0.1"},
+		{"trusted peer, real client", pfx("127.0.0.0/8"), []string{"203.0.113.7"}, "203.0.113.7"},
+		{"trusted peer, no XFF", pfx("127.0.0.1/32"), nil, "127.0.0.1"},
+		{"client-prepended fake entry is not chosen", pfx("127.0.0.0/8"), []string{"6.6.6.6, 203.0.113.7"}, "203.0.113.7"},
+		{"trusted proxy chain", pfx("127.0.0.0/8", "10.0.0.0/8"), []string{"203.0.113.7, 10.0.0.9"}, "203.0.113.7"},
+		{"fake entry before a proxy chain", pfx("127.0.0.0/8", "10.0.0.0/8"), []string{"6.6.6.6, 203.0.113.7, 10.0.0.9"}, "203.0.113.7"},
+		{"multiple XFF header lines are combined", pfx("127.0.0.0/8", "10.0.0.0/8"), []string{"6.6.6.6", "203.0.113.7, 10.0.0.9"}, "203.0.113.7"},
+		{"IPv6 client", pfx("127.0.0.0/8"), []string{"2001:db8::1"}, "2001:db8::1"},
+		{"garbage falls back to the peer", pfx("127.0.0.0/8"), []string{"garbage"}, "127.0.0.1"},
+		{"garbage at the rightmost untrusted position", pfx("127.0.0.0/8"), []string{"203.0.113.7, garbage"}, "127.0.0.1"},
+		{"only trusted entries fall back to the peer", pfx("127.0.0.0/8", "10.0.0.0/8"), []string{"10.0.0.9"}, "127.0.0.1"},
+		{"empty header", pfx("127.0.0.0/8"), []string{""}, "127.0.0.1"},
+	}
+	for _, c := range cases {
+		e := newEnvOpts(t, slog.LevelDebug, c.trusted)
+		req, _ := http.NewRequest("POST", e.srv.URL+"/v1/report", nil)
+		for _, v := range c.xff {
+			req.Header.Add("X-Forwarded-For", v)
+		}
+		resp, err := e.srv.Client().Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		var got any
+		for _, m := range logLines(e) {
+			if m["msg"] == "request" {
+				got = m["client_ip"]
+			}
+		}
+		if got != c.want {
+			t.Errorf("%s: client_ip = %v, want %s", c.name, got, c.want)
+		}
 	}
 }

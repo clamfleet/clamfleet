@@ -12,7 +12,9 @@ package server
 
 import (
 	"fmt"
+	"net/netip"
 	"path/filepath"
+	"strings"
 
 	"github.com/clamfleet/clamfleet/internal/config"
 )
@@ -32,6 +34,10 @@ type Config struct {
 	Listen string `yaml:"listen"`
 	TLS    TLS    `yaml:"tls"`
 	DBPath string `yaml:"db_path"`
+	// TrustedProxies lists IPs or CIDRs of reverse proxies. Only when the TCP
+	// peer is one of them is X-Forwarded-For used for the logged client IP.
+	// Empty by default: the header is then ignored.
+	TrustedProxies []string `yaml:"trusted_proxies"`
 }
 
 // TLS configures direct TLS. The intended deployment is plaintext on loopback
@@ -52,8 +58,9 @@ type TLS struct {
 // it never shares an identity or directory with an agent on the same host.
 func DefaultConfig() Config {
 	return Config{
-		Listen: "127.0.0.1:8443",
-		DBPath: "/var/lib/clamfleet-server/clamfleet.db",
+		Listen:         "127.0.0.1:8443",
+		DBPath:         "/var/lib/clamfleet-server/clamfleet.db",
+		TrustedProxies: []string{},
 	}
 }
 
@@ -85,6 +92,9 @@ func (c Config) Validate() error {
 	if !c.TLSEnabled() && !config.IsLoopbackAddr(c.Listen) {
 		return fmt.Errorf("listen %q is not a loopback address and tls is off: plaintext is only allowed on loopback behind a reverse proxy; set tls.cert and tls.key, or listen on 127.0.0.1", c.Listen)
 	}
+	if _, err := ParseTrustedProxies(c.TrustedProxies); err != nil {
+		return err
+	}
 	if c.Listen == "" {
 		return fmt.Errorf("listen must not be empty")
 	}
@@ -99,4 +109,32 @@ func (c Config) Validate() error {
 		}
 	}
 	return nil
+}
+
+// ParseTrustedProxies turns IP or CIDR strings ("10.0.0.5", "10.0.0.0/8",
+// "::1") into prefixes; a bare IP is a single-address prefix. An invalid entry
+// is an error (Validate calls this, so the server refuses to start): a typo
+// must not silently leave the real proxy untrusted.
+func ParseTrustedProxies(list []string) ([]netip.Prefix, error) {
+	out := make([]netip.Prefix, 0, len(list))
+	for _, e := range list {
+		e = strings.TrimSpace(e)
+		var p netip.Prefix
+		var err error
+		if strings.Contains(e, "/") {
+			p, err = netip.ParsePrefix(e)
+			p = p.Masked()
+		} else {
+			var a netip.Addr
+			if a, err = netip.ParseAddr(e); err == nil {
+				a = a.Unmap()
+				p = netip.PrefixFrom(a, a.BitLen())
+			}
+		}
+		if err != nil {
+			return nil, fmt.Errorf("trusted_proxies: %q is not an IP address or CIDR", e)
+		}
+		out = append(out, p)
+	}
+	return out, nil
 }

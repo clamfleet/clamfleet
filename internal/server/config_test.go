@@ -25,7 +25,7 @@ func TestEnvNamesMatchDocumentedTable(t *testing.T) {
 	c := DefaultConfig()
 	want := []string{
 		"CLAMFLEET_SERVER_DB_PATH", "CLAMFLEET_SERVER_LISTEN", "CLAMFLEET_SERVER_TLS_CERT",
-		"CLAMFLEET_SERVER_TLS_CLIENT_CA", "CLAMFLEET_SERVER_TLS_KEY",
+		"CLAMFLEET_SERVER_TLS_CLIENT_CA", "CLAMFLEET_SERVER_TLS_KEY", "CLAMFLEET_SERVER_TRUSTED_PROXIES",
 	}
 	if got := config.EnvNames(&c, EnvPrefix); !reflect.DeepEqual(got, want) {
 		t.Fatalf("got  %v\nwant %v", got, want)
@@ -132,5 +132,33 @@ func TestExampleConfigsLoadAndValidate(t *testing.T) {
 		if err := c.Validate(); err != nil {
 			t.Fatalf("%s: %v", f, err)
 		}
+	}
+}
+
+func TestTrustedProxies(t *testing.T) {
+	good := []string{"10.0.0.5", "10.0.0.0/8", "::1", "fd00::/8", " 192.168.1.1 ", "::ffff:10.1.2.3"}
+	ps, err := ParseTrustedProxies(good)
+	if err != nil || len(ps) != len(good) {
+		t.Fatalf("%v %v", ps, err)
+	}
+	if ps[0].String() != "10.0.0.5/32" || ps[5].String() != "10.1.2.3/32" {
+		t.Fatalf("%v", ps)
+	}
+	for _, bad := range []string{"nope", "10.0.0.0/33", "10.0.0.256", "10.0.0.0/", "1.2.3.4/x", ""} {
+		c := DefaultConfig()
+		c.TrustedProxies = []string{"127.0.0.1", bad}
+		if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "trusted_proxies") {
+			t.Errorf("%q: err = %v", bad, err)
+		}
+	}
+	if len(DefaultConfig().TrustedProxies) != 0 {
+		t.Fatal("trusted_proxies must default to empty")
+	}
+	// Environment override: comma separated, like every list key of the loader.
+	o := noEnv()
+	o.LookupEnv = func(k string) (string, bool) { return "10.0.0.0/8, 127.0.0.1", k == "CLAMFLEET_SERVER_TRUSTED_PROXIES" }
+	c, _, err := LoadConfig("", false, o)
+	if err != nil || len(c.TrustedProxies) != 2 || c.Validate() != nil {
+		t.Fatalf("%+v %v", c.TrustedProxies, err)
 	}
 }

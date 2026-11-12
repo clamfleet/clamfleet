@@ -13,4 +13,8 @@ tls:
   key: ""
   client_ca: ""   # optional mTLS: require agent client certificates signed by this CA
                   # (needs direct TLS; the agent token is still required)
+# Reverse proxies (IPs or CIDRs) whose X-Forwarded-For is believed for the logged client IP.
+# The proxy must set/append the header (nginx: proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;).
+# Empty: the logged address is the TCP peer. Logging only, never authentication.
+trusted_proxies: []
 db_path: /var/lib/clamfleet-server/clamfleet.db   # local disk only: SQLite WAL does not work on network filesystems

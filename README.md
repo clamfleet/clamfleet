@@ -118,13 +118,21 @@ install -m 644 deploy/server.yaml.example /etc/clamfleet/server.yaml
 | `tls.key` | `CLAMFLEET_SERVER_TLS_KEY` | empty |
 | `tls.client_ca` | `CLAMFLEET_SERVER_TLS_CLIENT_CA` | empty (mTLS off) |
 | `db_path` | `CLAMFLEET_SERVER_DB_PATH` | `/var/lib/clamfleet-server/clamfleet.db` |
+| `trusted_proxies` | `CLAMFLEET_SERVER_TRUSTED_PROXIES` | empty |
 
 The config file path is `--config`, else `CLAMFLEET_SERVER_CONFIG`, else `/etc/clamfleet/server.yaml`.
 The file is read strictly: an unknown key is an error, so a copy of the spec's example with keys of
 later milestones (`retention`, `smtp`) fails until those milestones add them.
 
-- **Behind a reverse proxy:** this is the default (`listen: 127.0.0.1:8443`, no TLS); a non-loopback `listen` without TLS is refused. The logged
-  client address is then the proxy's: `X-Forwarded-For` is deliberately not trusted.
+- **Behind a reverse proxy:** this is the default (`listen: 127.0.0.1:8443`, no TLS); a non-loopback `listen` without TLS is refused. Without
+  further setup the logged client address is the proxy's. To log the real client, list your proxies in
+  `trusted_proxies` (IPs or CIDRs, for example `[127.0.0.1]`; env `CLAMFLEET_SERVER_TRUSTED_PROXIES`,
+  comma separated) and make the proxy **set or append `X-Forwarded-For`**, for example in nginx
+  `proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;`. The server then reads the header only when the
+  direct peer is a trusted proxy, right to left, and logs the first address that is not itself a trusted
+  proxy, so an address a client prepends to the header is never chosen. Otherwise (or if the header is
+  missing or unparsable) it logs the peer address, and the header is ignored. The client IP is for logs only;
+  it is never used for authentication. An invalid entry stops the server at start.
 - **Direct TLS:** set `tls.cert` and `tls.key` (both), and `listen` as needed (for example `:8443`). The certificate is loaded at start; after a
   renewal, restart the server.
 - **Mutual TLS (optional):** set `tls.client_ca` to a PEM bundle. Every agent must then present a
