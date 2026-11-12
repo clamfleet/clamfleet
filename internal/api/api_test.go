@@ -544,6 +544,11 @@ func TestRouteTable(t *testing.T) {
 		{Method: "POST", Path: "/admin/hosts/{name}/delete", Auth: server.AuthAdmin},
 		{Method: "GET", Path: "/account", Auth: server.AuthUser},
 		{Method: "POST", Path: "/account/password", Auth: server.AuthUser},
+		{Method: "GET", Path: "/account/totp", Auth: server.AuthUser},
+		{Method: "POST", Path: "/account/totp/setup", Auth: server.AuthUser},
+		{Method: "POST", Path: "/account/totp/confirm", Auth: server.AuthUser},
+		{Method: "POST", Path: "/account/totp/recovery-codes", Auth: server.AuthUser},
+		{Method: "POST", Path: "/account/totp/disable", Auth: server.AuthUser},
 	}
 	// The declared table must match the hardcoded list exactly, so a route that
 	// is added to server.Routes() (even an open one the probe below would not

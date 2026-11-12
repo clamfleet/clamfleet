@@ -108,8 +108,12 @@ type Principal struct {
 	Name       string
 	Role       string
 	MustChange bool // the password must be changed before anything else
-	TokenHash  []byte
-	csrf       []byte
+	// AuthSource is the identity source ("local"); TOTPEnabled is whether the user
+	// has an authenticator. Both are read from the database on every request.
+	AuthSource  string
+	TOTPEnabled bool
+	TokenHash   []byte
+	csrf        []byte
 }
 
 // IsAdmin reports whether the user has the admin role.

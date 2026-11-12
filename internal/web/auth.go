@@ -252,11 +252,28 @@ func (w *Web) logout(rw http.ResponseWriter, r *http.Request) {
 	http.Redirect(rw, r, "/login", http.StatusSeeOther)
 }
 
-type accountBody struct{ MustChange bool }
+type accountBody struct {
+	MustChange bool
+	// TOTPLocal is false for users whose second factor is their identity provider's: no card.
+	TOTPLocal   bool
+	TOTPEnabled bool
+	CodesLeft   int
+}
+
+// accountBodyFor fills the account page's data for p.
+func (w *Web) accountBodyFor(r *http.Request, p webauth.Principal) accountBody {
+	b := accountBody{MustChange: p.MustChange, TOTPLocal: p.AuthSource == store.AuthLocal, TOTPEnabled: p.TOTPEnabled}
+	if p.TOTPEnabled {
+		if n, err := w.Store.RecoveryCodesLeft(r.Context(), p.UserID); err == nil {
+			b.CodesLeft = n
+		}
+	}
+	return b
+}
 
 func (w *Web) accountPage(rw http.ResponseWriter, r *http.Request) {
 	p, _ := webauth.FromContext(r.Context())
-	v := w.newView(r, "Account", "account", accountBody{MustChange: p.MustChange})
+	v := w.newView(r, "Account", "account", w.accountBodyFor(r, p))
 	if r.URL.Query().Get("changed") == "1" {
 		v.Notice = "Password changed."
 	}
@@ -270,7 +287,7 @@ func (w *Web) accountPage(rw http.ResponseWriter, r *http.Request) {
 func (w *Web) accountPassword(rw http.ResponseWriter, r *http.Request) {
 	p, _ := webauth.FromContext(r.Context())
 	fail := func(status int, msg string) {
-		v := w.newView(r, "Account", "account", accountBody{MustChange: p.MustChange})
+		v := w.newView(r, "Account", "account", w.accountBodyFor(r, p))
 		v.Error = msg
 		w.render(rw, status, "account", v)
 	}

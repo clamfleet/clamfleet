@@ -1,0 +1,50 @@
+{{/* SPDX-License-Identifier: AGPL-3.0-only */}}
+{{/* SPDX-FileCopyrightText: The ClamFleet Authors */}}
+{{/* account_totp.html: status and forms of the user's two-factor sign-in. Body: web.totpPageBody. Every form asks for the current password. */}}
+{{define "content"}}
+<h1>Two-factor sign-in</h1>
+<div class="card" data-testid="totp-page">
+  {{if not .Body.Local}}
+    <p data-testid="totp-external">Two-factor sign-in for this account is managed by your identity provider.</p>
+  {{else}}
+    {{if .Body.Enabled}}
+      <p data-testid="totp-status">Two-factor sign-in is <strong>on</strong>. Recovery codes left: <strong data-testid="totp-codes-left">{{.Body.CodesLeft}}</strong>.</p>
+    {{else}}
+      <p data-testid="totp-status">Two-factor sign-in is <strong>off</strong>.</p>
+      {{if .Body.Required}}<p data-testid="totp-required-notice">This server requires two-factor sign-in. Set it up now to continue.</p>{{end}}
+    {{end}}
+    {{if not .Body.Available}}
+      <p data-testid="totp-unavailable">Two-factor sign-in is not available on this server: it has no secret key file. Ask an administrator.</p>
+    {{else}}
+      <h2>{{if .Body.Enabled}}Replace the authenticator{{else}}Set up an authenticator app{{end}}</h2>
+      <p>You need an authenticator app (any app that supports time-based one-time passwords). To confirm, enter your current password; the next page shows the key to add.</p>
+      <form method="post" action="/account/totp/setup" data-testid="totp-setup-form">
+        <input type="hidden" name="csrf_token" value="{{.CSRF}}">
+        <label for="setup_password">Current password</label>
+        <input type="password" id="setup_password" name="current_password" autocomplete="current-password" required data-testid="totp-setup-password">
+        <p><button type="submit" class="primary" data-testid="totp-setup-submit">{{if .Body.Enabled}}Replace{{else}}Set up{{end}}</button></p>
+      </form>
+    {{end}}
+    {{if .Body.Enabled}}
+      <h2>New recovery codes</h2>
+      <p>Replaces all your recovery codes; the old ones stop working.</p>
+      <form method="post" action="/account/totp/recovery-codes" data-testid="totp-recovery-form">
+        <input type="hidden" name="csrf_token" value="{{.CSRF}}">
+        <label for="recovery_password">Current password</label>
+        <input type="password" id="recovery_password" name="current_password" autocomplete="current-password" required data-testid="totp-recovery-password">
+        <p><button type="submit" data-testid="totp-recovery-submit">Get new recovery codes</button></p>
+      </form>
+      {{if not .Body.Required}}
+      <h2>Turn off</h2>
+      <form method="post" action="/account/totp/disable" data-testid="totp-disable-form">
+        <input type="hidden" name="csrf_token" value="{{.CSRF}}">
+        <label for="disable_password">Current password</label>
+        <input type="password" id="disable_password" name="current_password" autocomplete="current-password" required data-testid="totp-disable-password">
+        <p><button type="submit" data-testid="totp-disable-submit">Turn off two-factor sign-in</button></p>
+      </form>
+      {{end}}
+    {{end}}
+  {{end}}
+  <p><a href="/account" data-testid="totp-back">Back to the account page</a></p>
+</div>
+{{end}}

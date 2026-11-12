@@ -298,3 +298,68 @@ func TestTouchOnlyWhenTheLastOneIsOld(t *testing.T) {
 		}
 	}
 }
+
+// signedInAs is signedIn with the fields the TOTP gate reads.
+func signedInAs(t *testing.T, f *fakeSessions, m *Manager, source string, mustChange, totp bool) *http.Cookie {
+	t.Helper()
+	c, _ := signedIn(t, f, m, "viewer", mustChange)
+	h := string(HashToken(c.Value))
+	sp := f.byHash[h]
+	sp.AuthSource, sp.TOTPEnabled = source, totp
+	f.byHash[h] = sp
+	return c
+}
+
+// Rule: with totp_required a local user without TOTP reaches only the enrolment
+// pages and logout; the MustChange gate comes first; external users and users
+// with TOTP are untouched; the gate is off when the setting is.
+func TestTOTPEnrolmentGate(t *testing.T) {
+	allowed := []string{"/account/totp", "/account/totp/setup", "/account/totp/confirm", "/logout"}
+	blocked := []string{"/", "/fleet/rows", "/hosts/web01", "/admin/hosts", "/account", "/account/password", "/account/totp/disable", "/account/totp/recovery-codes", "/account/totp/", "/account/totp/setup/x"}
+	f := &fakeSessions{byHash: map[string]store.SessionPrincipal{}}
+	m := newMgr(f)
+	m.TOTPRequired = true
+	h := m.RequireUser(ok200)
+
+	c := signedInAs(t, f, m, "local", false, false)
+	for _, path := range allowed {
+		if w := do(h, "GET", path, c, nil, ""); w.Code != 200 {
+			t.Errorf("GET %s: %d, want 200 (it must stay reachable or the user is locked out of enrolling)", path, w.Code)
+		}
+	}
+	for _, path := range blocked {
+		w := do(h, "GET", path, c, nil, "")
+		if w.Code != 303 || w.Header().Get("Location") != "/account/totp" {
+			t.Errorf("GET %s: %d %q, want 303 to /account/totp", path, w.Code, w.Header().Get("Location"))
+		}
+		hx := do(h, "GET", path, c, map[string]string{"HX-Request": "true"}, "")
+		if hx.Code != 403 || hx.Header().Get("HX-Redirect") != "/account/totp" {
+			t.Errorf("htmx %s: %d %q", path, hx.Code, hx.Header().Get("HX-Redirect"))
+		}
+		if post := do(h, "POST", path, c, nil, "a=b"); post.Code != 403 {
+			t.Errorf("POST %s: %d, want 403", path, post.Code)
+		}
+	}
+	// Not gated: users with TOTP, external users, and everyone when the setting is off.
+	if w := do(h, "GET", "/", signedInAs(t, f, m, "local", false, true), nil, ""); w.Code != 200 {
+		t.Errorf("a user with TOTP: %d", w.Code)
+	}
+	if w := do(h, "GET", "/", signedInAs(t, f, m, "ldap", false, false), nil, ""); w.Code != 200 {
+		t.Errorf("an external user is gated: %d", w.Code)
+	}
+	off := newMgr(f)
+	if w := do(off.RequireUser(ok200), "GET", "/", signedInAs(t, f, off, "local", false, false), nil, ""); w.Code != 200 {
+		t.Errorf("the gate is on although totp_required is off: %d", w.Code)
+	}
+	// MustChange first: the password page, not the enrolment page, until it is changed.
+	mc := signedInAs(t, f, m, "local", true, false)
+	if w := do(h, "GET", "/", mc, nil, ""); w.Code != 303 || w.Header().Get("Location") != "/account" {
+		t.Errorf("must-change + required: %d %q, want 303 to /account", w.Code, w.Header().Get("Location"))
+	}
+	if w := do(h, "GET", "/account/totp", mc, nil, ""); w.Code != 303 || w.Header().Get("Location") != "/account" {
+		t.Errorf("enrolment page before the password change: %d %q", w.Code, w.Header().Get("Location"))
+	}
+	if w := do(h, "GET", "/account", mc, nil, ""); w.Code != 200 {
+		t.Errorf("the password page must stay reachable: %d", w.Code)
+	}
+}

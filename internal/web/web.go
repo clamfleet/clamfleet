@@ -76,6 +76,9 @@ type Deps struct {
 	ClientIP func(r *http.Request) string
 	// LocalEnabled is auth.local.enabled: with false the login form refuses.
 	LocalEnabled bool
+	// TOTPRequired is auth.local.totp_required: it changes the wording of the TOTP
+	// pages and forbids turning TOTP off (the gate itself is in webauth.Manager).
+	TOTPRequired bool
 	// Version is shown in the footer.
 	Version string
 }
@@ -97,7 +100,7 @@ func New(d Deps) *Web {
 		// actions builds the data of the shared host_actions template.
 		"actions": func(name string, hasToken bool, csrf string) hostAction { return hostAction{name, hasToken, csrf} },
 	}
-	for _, p := range []string{"login", "login_totp", "fleet", "host", "admin_hosts", "token_once", "account", "error"} {
+	for _, p := range []string{"login", "login_totp", "fleet", "host", "admin_hosts", "token_once", "account", "account_totp", "totp_setup", "recovery_codes", "error"} {
 		t := template.New(p).Funcs(funcs)
 		files := []string{"templates/layout.html", "templates/" + p + ".html"}
 		if p == "fleet" {
@@ -133,6 +136,11 @@ func (w *Web) Handlers() map[string]http.HandlerFunc {
 		"POST /admin/hosts/{name}/delete":       w.adminDelete,
 		"GET /account":                          w.accountPage,
 		"POST /account/password":                w.accountPassword,
+		"GET /account/totp":                     w.totpPage,
+		"POST /account/totp/setup":              w.totpSetup,
+		"POST /account/totp/confirm":            w.totpConfirm,
+		"POST /account/totp/recovery-codes":     w.totpRecoveryCodes,
+		"POST /account/totp/disable":            w.totpDisable,
 	}
 }
 

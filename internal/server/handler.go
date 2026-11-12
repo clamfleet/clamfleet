@@ -81,6 +81,13 @@ func Routes() []Route {
 		{"POST", "/admin/hosts/{name}/delete", AuthAdmin},
 		{"GET", "/account", AuthUser},
 		{"POST", "/account/password", AuthUser},
+		// TOTP self-service. Every change asks the current password again (also the
+		// forced first enrolment). RequireUser lets these through while a user must enrol.
+		{"GET", "/account/totp", AuthUser},
+		{"POST", "/account/totp/setup", AuthUser},
+		{"POST", "/account/totp/confirm", AuthUser},
+		{"POST", "/account/totp/recovery-codes", AuthUser},
+		{"POST", "/account/totp/disable", AuthUser},
 	}
 }
 
@@ -142,12 +149,12 @@ func NewHandler(d Deps) http.Handler {
 
 	sessions := &webauth.Manager{
 		Store: d.Store, Now: d.Now, MaxAge: d.Console.SessionMaxAge, Idle: d.Console.SessionIdle,
-		Secure: d.Console.CookieSecure, Log: d.Log,
+		Secure: d.Console.CookieSecure, Log: d.Log, TOTPRequired: d.Console.Local.TOTPRequired,
 	}
 	console := web.New(web.Deps{
 		Store: d.Store, Auth: sessions, Hasher: d.Hasher, Throttle: webauth.NewThrottle(d.Now), TOTPThrottle: webauth.NewThrottle(d.Now), Keys: d.Keys, Now: d.Now, Log: d.Log,
 		ClientIP:     func(r *http.Request) string { return api.ClientIP(r, d.TrustedProxies) },
-		LocalEnabled: d.Console.Local.Enabled, Version: d.Version,
+		LocalEnabled: d.Console.Local.Enabled, TOTPRequired: d.Console.Local.TOTPRequired, Version: d.Version,
 	})
 
 	handlers := map[string]http.HandlerFunc{

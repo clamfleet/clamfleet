@@ -1,6 +1,6 @@
 {{/* SPDX-License-Identifier: AGPL-3.0-only */}}
 {{/* SPDX-FileCopyrightText: The ClamFleet Authors */}}
-{{/* account.html: change the signed-in user's own password. Body: struct{MustChange bool}. */}}
+{{/* account.html: change the signed-in user's own password and the two-factor card. Body: web.accountBody. */}}
 {{define "content"}}
 <h1>Account</h1>
 <div class="card" data-testid="account-page">
@@ -19,4 +19,11 @@
     <p><button type="submit" class="primary" data-testid="account-submit">Change password</button></p>
   </form>
 </div>
+{{if .Body.TOTPLocal}}
+<div class="card" data-testid="account-totp-card">
+  <h2>Two-factor sign-in</h2>
+  <p data-testid="account-totp-status">{{if .Body.TOTPEnabled}}On. Recovery codes left: {{.Body.CodesLeft}}.{{else}}Off.{{end}}</p>
+  <p><a href="/account/totp" data-testid="account-totp-link">{{if .Body.TOTPEnabled}}Manage two-factor sign-in{{else}}Set up two-factor sign-in{{end}}</a></p>
+</div>
+{{end}}
 {{end}}

@@ -1,0 +1,16 @@
+{{/* SPDX-License-Identifier: AGPL-3.0-only */}}
+{{/* SPDX-FileCopyrightText: The ClamFleet Authors */}}
+{{/*
+  recovery_codes.html: shows new recovery codes exactly once. Body: web.recoveryBody.
+  Never cached. The codes are stored only as hashes: closing this page loses them,
+  and the remedy is to get new ones.
+*/}}
+{{define "content"}}
+<h1>Recovery codes</h1>
+<div class="card" data-testid="recovery-codes-page">
+  <p class="notice"><strong>Shown once.</strong> Store these like a password. Each code works once, if you lose your authenticator.</p>
+  <pre class="token" data-testid="recovery-codes">{{range .Body.Codes}}{{.}}
+{{end}}</pre>
+  <p><a href="/" data-testid="recovery-continue">Continue</a></p>
+</div>
+{{end}}
