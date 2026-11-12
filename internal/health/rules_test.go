@@ -260,6 +260,24 @@ func TestIntervalSelection(t *testing.T) {
 	}
 }
 
+func TestAgentTextHasNoControlCharacters(t *testing.T) {
+	in := input(healthy())
+	in.Report.Clamd.Up = false
+	in.Report.Clamd.Error = ptr("bad\x1b[2Jthing\nnext")
+	msg := Evaluate(in, DefaultThresholds()).Reasons[0].Msg
+	if strings.ContainsAny(msg, "\x1b\n") {
+		t.Fatalf("control characters survived: %q", msg)
+	}
+	in.Report.Clamd.Error = nil
+	in.Report.Clamd.Up = true
+	in.Report.Services.Freshclam = "evil\x07"
+	for _, r := range Evaluate(in, DefaultThresholds()).Reasons {
+		if strings.ContainsRune(r.Msg, 7) {
+			t.Fatalf("control character in %q", r.Msg)
+		}
+	}
+}
+
 func TestClamdErrorTextIsIncludedButBounded(t *testing.T) {
 	in := input(healthy())
 	in.Report.Clamd.Up = false

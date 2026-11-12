@@ -15,7 +15,9 @@ package health
 import (
 	"fmt"
 	"sort"
+	"strings"
 	"time"
+	"unicode"
 
 	"github.com/clamfleet/clamfleet/internal/proto"
 )
@@ -253,8 +255,17 @@ func latest(a, b time.Time) time.Time {
 	return b
 }
 
-// truncate shortens agent-supplied text to at most n bytes on a rune boundary.
+// truncate cleans agent-supplied text for a reason and shortens it to at most
+// n bytes on a rune boundary. Control characters (an ESC sequence in
+// clamd.error) become spaces: the CLI prints reasons to a terminal, and the
+// agent is not a trusted author.
 func truncate(s string, n int) string {
+	s = strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return ' '
+		}
+		return r
+	}, s)
 	if len(s) <= n {
 		return s
 	}
