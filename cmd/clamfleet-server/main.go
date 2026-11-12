@@ -40,6 +40,7 @@ import (
 	"github.com/clamfleet/clamfleet/internal/store"
 	"github.com/clamfleet/clamfleet/internal/store/sqlite"
 	"github.com/clamfleet/clamfleet/internal/version"
+	"github.com/clamfleet/clamfleet/internal/webauth"
 )
 
 const (
@@ -193,18 +194,28 @@ func (a *app) serve(ctx context.Context, args []string) int {
 		log.Error("invalid configuration", "error", err.Error())
 		return exitError
 	}
+	if !cfg.Auth.CookieSecure {
+		log.Warn("auth.cookie_secure is false: the session cookie is sent without the Secure flag and the __Host- prefix; use this only for plain-HTTP development")
+	}
 	loopCtx, stopLoop := context.WithCancel(ctx)
 	tick := time.NewTicker(cfg.Health.EvalInterval)
-	loopDone := make(chan struct{})
+	cleanTick := time.NewTicker(time.Hour)
+	loopDone := make(chan struct{}, 2)
 	go func() {
-		defer close(loopDone)
+		defer func() { loopDone <- struct{}{} }()
 		ev.Run(loopCtx, tick.C)
 	}()
+	go func() {
+		defer func() { loopDone <- struct{}{} }()
+		webauth.RunCleanup(loopCtx, st, a.now, cfg.Auth.SessionIdle, log, cleanTick.C)
+	}()
 	err = server.Serve(ctx, cfg, h, log)
-	// Wait for the loop before the deferred st.Close(): an evaluation cut off by
+	// Wait for the loops before the deferred st.Close(): an evaluation cut off by
 	// a closing database would log a spurious error at every shutdown.
 	stopLoop()
 	tick.Stop()
+	cleanTick.Stop()
+	<-loopDone
 	<-loopDone
 	if err != nil {
 		log.Error("server stopped", "error", err.Error())
