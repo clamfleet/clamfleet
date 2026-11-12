@@ -511,40 +511,59 @@ func TestStoreDownGives503(t *testing.T) {
 	}
 }
 
-// The expected table is written out by hand: a new route has to be added
-// here on purpose, and a /v1 route registered without auth fails the probe.
+// The expected routes are written out by hand and probed against NewHandler
+// only (not against server.Routes(), which could be wrong in step with the
+// handler): a route registered outside this list, or with the wrong auth
+// class, fails here.
 func TestRouteTable(t *testing.T) {
-	want := []server.Route{
-		{Method: "POST", Path: "/v1/report", Auth: server.AuthAgent},
-		{Method: "POST", Path: "/v1/event", Auth: server.AuthAgent},
-		{Method: "GET", Path: "/healthz", Auth: server.AuthNone},
-	}
-	got := server.Routes()
-	if len(got) != len(want) {
-		t.Fatalf("routes %v, want %v", got, want)
-	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Fatalf("route %d: %v, want %v", i, got[i], want[i])
-		}
+	expected := []struct {
+		method, path string
+		agentAuth    bool
+	}{
+		{"POST", "/v1/report", true},
+		{"POST", "/v1/event", true},
+		{"GET", "/healthz", false},
 	}
 	e := newEnv(t)
-	for _, rt := range got {
-		r := e.do(rt.Method, rt.Path, "", golden(t))
-		switch rt.Auth {
-		case server.AuthAgent:
-			if r.status != 401 {
-				t.Errorf("%s %s: status %d without a token, want 401", rt.Method, rt.Path, r.status)
+	for _, rt := range expected {
+		r := e.do(rt.method, rt.path, "", golden(t))
+		if rt.agentAuth && r.status != 401 {
+			t.Errorf("%s %s: status %d without a token, want 401", rt.method, rt.path, r.status)
+		}
+		if !rt.agentAuth && r.status != 200 {
+			t.Errorf("%s %s: status %d, want 200", rt.method, rt.path, r.status)
+		}
+		if rt.agentAuth {
+			// A valid token must get through the same route.
+			tok := e.host("probe" + strings.NewReplacer("/", "-", ".", "-").Replace(rt.path))
+			body := golden(t)
+			if strings.HasSuffix(rt.path, "/event") {
+				body = event(t, nil)
 			}
-		case server.AuthNone:
-			if r.status != 200 {
-				t.Errorf("%s %s: %d", rt.Method, rt.Path, r.status)
+			if r := e.do(rt.method, rt.path, tok, body); r.status != 202 {
+				t.Errorf("%s %s: status %d with a valid token, want 202", rt.method, rt.path, r.status)
 			}
 		}
 	}
-	for _, rt := range got {
-		if strings.HasPrefix(rt.Path, "/v1/") && rt.Auth != server.AuthAgent {
-			t.Errorf("%s is under /v1 but not agent-authenticated", rt.Path)
+	// Nothing else is mounted: every other method on a listed path, and
+	// plausible future paths, must not answer with anything but 404/405 (a
+	// 401 would mean an unlisted authenticated route exists, a 2xx an open one).
+	listed := map[string]bool{}
+	for _, rt := range expected {
+		listed[rt.method+" "+rt.path] = true
+	}
+	paths := []string{"/", "/metrics", "/v1", "/v1/", "/v1/tasks", "/v1/hosts", "/v1/events", "/v1/reports", "/api/v1/report", "/admin", "/login"}
+	for _, rt := range expected {
+		paths = append(paths, rt.path)
+	}
+	for _, p := range paths {
+		for _, m := range []string{"GET", "POST", "PUT", "PATCH", "DELETE"} {
+			if listed[m+" "+p] {
+				continue
+			}
+			if r := e.do(m, p, "", nil); r.status != 404 && r.status != 405 {
+				t.Errorf("%s %s: status %d, want 404 or 405 (an unlisted route is mounted)", m, p, r.status)
+			}
 		}
 	}
 }
