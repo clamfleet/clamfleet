@@ -60,8 +60,8 @@ server as a transient systemd unit `clamfleet-server-e2e` with `--uid=clamfleet-
 `127.0.0.1:8443` **inside the container**: nothing listens on a non-loopback address. The agent runs
 as `clamfleet` with `SSL_CERT_FILE=/etc/clamfleet/ca.pem` (the documented way to trust a private CA);
 the token is `/etc/clamfleet/token`, `root:clamfleet`, 0640. Admin commands run as the server user
-(`runuser -u clamfleet-server`), never as root: a root-run command would leave root-owned SQLite
-`-wal`/`-shm` files that the running server cannot open. The snapshot reset removes the users, the
+(`runuser -u clamfleet-server`), never as root, as the documented production flow does
+(`sudo -u clamfleet-server`): least privilege, and `SUDO_USER` gives the audit log the human's name. The snapshot reset removes the users, the
 files and the transient units, so nothing needs cleaning up. The server scenarios take about 12 s
 each, the agent service-loop scenario about 22 s.
 

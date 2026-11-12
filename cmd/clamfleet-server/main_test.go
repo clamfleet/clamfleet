@@ -267,6 +267,28 @@ func TestInvalidConfigIsRefused(t *testing.T) {
 	}
 }
 
+func TestCheckCanCreate(t *testing.T) {
+	dir := t.TempDir()
+	missing := filepath.Join(dir, "new.db")
+	if err := checkCanCreate(missing, os.Geteuid()); err != nil {
+		t.Fatalf("owner of the directory: %v", err)
+	}
+	err := checkCanCreate(missing, os.Geteuid()+1)
+	if err == nil || !strings.Contains(err.Error(), "refusing to create") {
+		t.Fatalf("a user that does not own the directory must be refused, got %v", err)
+	}
+	// An existing database is never refused (and not touched).
+	existing := filepath.Join(dir, "old.db")
+	os.WriteFile(existing, nil, 0o600)
+	if err := checkCanCreate(existing, os.Geteuid()+1); err != nil {
+		t.Fatal(err)
+	}
+	// A missing directory is Open's error to report.
+	if err := checkCanCreate(filepath.Join(dir, "no", "x.db"), os.Geteuid()+1); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestOwnerMismatch(t *testing.T) {
 	f := filepath.Join(t.TempDir(), "x")
 	if err := os.WriteFile(f, nil, 0o600); err != nil {

@@ -33,8 +33,8 @@ const (
 	agentUnit  = "clamfleet-agent-e2e"
 	hostName   = "e2e-host"
 	// operator is the name the audit log should record. Admin commands run as
-	// the server user (a root-run command would leave root-owned SQLite files
-	// the server cannot open); SUDO_USER, which the CLI prefers for the audit
+	// the server user (least privilege, as in production: sudo -u
+	// clamfleet-server); SUDO_USER, which the CLI prefers for the audit
 	// actor, stands in for the human who typed `sudo -u clamfleet-server ...`.
 	operator = "e2e-operator"
 )

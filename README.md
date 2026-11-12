@@ -153,8 +153,9 @@ per request: method, path, status, host name, duration and the client IP address
 `--log-level warn` hides the accepted-request lines; `debug` adds health checks.
 
 **4. Register a host and give the agent its token.** Run the admin commands as the server user, so
-SQLite files stay owned by it (a command run as root works but warns, and can leave files the
-server cannot open):
+audit rows name the person (`SUDO_USER`) and the commands run with least privilege (a host command
+run as root works but warns). `migrate` and `serve` refuse to create a missing database file as a
+user that does not own its directory: a root-created `clamfleet.db` could not be opened by the server user.
 
 ```
 sudo -u clamfleet-server clamfleet-server host add web01      # prints the token once, and nothing else

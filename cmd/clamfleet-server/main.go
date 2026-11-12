@@ -27,6 +27,7 @@ import (
 	"os"
 	"os/signal"
 	"os/user"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"text/tabwriter"
@@ -157,7 +158,11 @@ func (a *app) serve(ctx context.Context, args []string) int {
 		log.Error("invalid configuration", "error", err.Error())
 		return exitError
 	}
-	st, err := sqlite.Open(ctx, cfg.DBPath)
+	err = checkCanCreate(cfg.DBPath, os.Geteuid())
+	var st *sqlite.Store
+	if err == nil {
+		st, err = sqlite.Open(ctx, cfg.DBPath)
+	}
 	if err == nil {
 		defer st.Close()
 		err = st.Migrate(ctx)
@@ -185,7 +190,11 @@ func (a *app) migrate(ctx context.Context, args []string) int {
 		log.Error("invalid configuration", "error", err.Error())
 		return exitError
 	}
-	st, err := sqlite.Open(ctx, cfg.DBPath)
+	err = checkCanCreate(cfg.DBPath, os.Geteuid())
+	var st *sqlite.Store
+	if err == nil {
+		st, err = sqlite.Open(ctx, cfg.DBPath)
+	}
 	if err == nil {
 		defer st.Close()
 		err = st.Migrate(ctx)
@@ -211,11 +220,12 @@ func (a *app) openExisting(ctx context.Context, log *slog.Logger, cfg server.Con
 		return nil, err
 	}
 	if owner, bad := ownerMismatch(fi, os.Geteuid()); bad {
-		// Typical mistake: `sudo clamfleet-server host add ...` against a database
-		// owned by the server user. SQLite then creates its -wal/-shm files
-		// owned by root with mode 0600, and the running server can no longer
-		// open them. Warn loudly; do not refuse (root may know what it does).
-		log.Warn("database is owned by another user: run admin commands as the server user (sudo -u clamfleet-server clamfleet-server ...), or SQLite may create root-owned files the server cannot open",
+		// Not a file-ownership hazard for an existing database: SQLite's unix VFS
+		// chowns -wal/-shm to the database owner when running as root. The reasons
+		// to run as the server user are audit attribution (SUDO_USER) and least
+		// privilege. The real ownership hazard is creating the database as the
+		// wrong user (see checkCanCreate). Warn; do not refuse.
+		log.Warn("database is owned by another user: run admin commands as the server user (sudo -u clamfleet-server clamfleet-server ...) for correct audit attribution and least privilege",
 			"owner_uid", owner, "running_as_uid", os.Geteuid())
 	}
 	st, err := sqlite.Open(ctx, cfg.DBPath)
@@ -227,6 +237,25 @@ func (a *app) openExisting(ctx context.Context, log *slog.Logger, cfg server.Con
 		return nil, err
 	}
 	return st, nil
+}
+
+// checkCanCreate refuses to create a missing database file when the effective
+// user does not own the parent directory. The state directory belongs to the
+// server user; `sudo clamfleet-server migrate` (or serve) as root on a fresh
+// install would create clamfleet.db as root:root and the server user could
+// never open it. An existing database is left alone.
+func checkCanCreate(path string, euid int) error {
+	if _, err := os.Stat(path); err == nil {
+		return nil
+	}
+	fi, err := os.Stat(filepath.Dir(path))
+	if err != nil {
+		return nil // Open reports the missing directory with its own message
+	}
+	if owner, bad := ownerMismatch(fi, euid); bad {
+		return fmt.Errorf("refusing to create the database %s as uid %d: its directory is owned by uid %d, and a file created by another user cannot be opened by the server user; run this as the directory owner (sudo -u clamfleet-server clamfleet-server ...)", path, euid, owner)
+	}
+	return nil
 }
 
 // ownerMismatch reports whether the file's owner differs from euid, and the owner.

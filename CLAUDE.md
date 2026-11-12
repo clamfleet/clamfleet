@@ -33,4 +33,4 @@ Central management for ClamAV on Linux fleets. Spec: `docs/HANDOVER.md`. Current
 - No org-specific hostnames in fixtures; scrub them to `mirror.example`.
 - The agent never imports `internal/store`, `internal/server` or the SQLite and goose modules (a test pins it).
 - Agent credentials live only in `internal/agentauth` and `hosts.token_hash`; web-console users (later) get their own package and tables. Routes are registered only in `server.NewHandler` (table `server.Routes`).
-- Admin commands of `clamfleet-server` run as the server user (`sudo -u clamfleet-server`), not as root: SQLite would create root-owned `-wal`/`-shm` files the server cannot open.
+- Admin commands of `clamfleet-server` run as the server user (`sudo -u clamfleet-server`), not as root, for audit attribution and least privilege. Creating the database as root (`sudo clamfleet-server migrate` on a fresh install) leaves a root-owned file the server user cannot open, so `migrate` and `serve` refuse to create it when the effective user does not own its directory.
