@@ -32,6 +32,7 @@ import (
 var (
 	cftExec  []string // command prefix that runs a command in the container
 	binary   string   // the static agent binary, built once
+	srvBin   string   // the static server binary, built once
 	repoRoot string
 )
 
@@ -58,11 +59,12 @@ func testMain(m *testing.M) int {
 	}
 	defer os.RemoveAll(dir)
 	binary = filepath.Join(dir, "clamfleet-agent")
-	build := exec.Command("go", "build", "-trimpath", "-o", binary, "github.com/clamfleet/clamfleet/cmd/clamfleet-agent")
-	build.Env = append(os.Environ(), "CGO_ENABLED=0")
-	if o, err := build.CombinedOutput(); err != nil {
-		fmt.Fprintf(os.Stderr, "e2e: build failed: %v\n%s", err, o)
-		return 1
+	srvBin = filepath.Join(dir, "clamfleet-server")
+	for out, pkg := range map[string]string{binary: "cmd/clamfleet-agent", srvBin: "cmd/clamfleet-server"} {
+		if err := build(out, pkg); err != nil {
+			fmt.Fprintln(os.Stderr, "e2e:", err)
+			return 1
+		}
 	}
 	code := m.Run()
 	// Leave the container as found, even when tests failed half way.
@@ -71,6 +73,17 @@ func testMain(m *testing.M) int {
 		code = 1
 	}
 	return code
+}
+
+// build compiles one of our commands as a static binary (CGO_ENABLED=0: the
+// container's libc is not the build machine's).
+func build(out, pkg string) error {
+	cmd := exec.Command("go", "build", "-trimpath", "-o", out, "github.com/clamfleet/clamfleet/"+pkg)
+	cmd.Env = append(os.Environ(), "CGO_ENABLED=0")
+	if o, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("build %s: %w\n%s", pkg, err, o)
+	}
+	return nil
 }
 
 // script runs one of deploy/test/*.sh (they read CFT_EXEC themselves).
@@ -125,20 +138,26 @@ func fresh(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	data, err := os.ReadFile(binary)
+	pushBinary(t, binary, "clamfleet-agent")
+	waitClamd(t)
+}
+
+// pushBinary installs a built binary as /usr/local/bin/<name> in the container.
+func pushBinary(t *testing.T, path, name string) {
+	t.Helper()
+	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	var tarball bytes.Buffer
-	if err := writeTar(&tarball, "clamfleet-agent", data); err != nil {
+	if err := writeTar(&tarball, name, data); err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	if _, e, code := ct(ctx, tarball.Bytes(), "tar", "-xf", "-", "-C", "/usr/local/bin", "--no-same-owner"); code != 0 {
-		t.Fatalf("pushing the binary: exit %d: %s", code, e)
+		t.Fatalf("pushing %s: exit %d: %s", name, code, e)
 	}
-	waitClamd(t)
 }
 
 // waitClamd blocks until clamd can really scan. reset.sh's "clamdscan --ping"

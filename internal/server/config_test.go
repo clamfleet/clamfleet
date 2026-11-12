@@ -121,12 +121,16 @@ func TestUnknownKeyIsAnError(t *testing.T) {
 	}
 }
 
-func TestExampleConfigLoadsAndValidates(t *testing.T) {
-	c, _, err := LoadConfig(filepath.Join("..", "..", "deploy", "server.yaml.example"), true, noEnv())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := c.Validate(); err != nil {
-		t.Fatal(err)
+// The shipped configs must stay loadable under strict decoding, or the first
+// user (or the e2e suite) to use one gets an error.
+func TestExampleConfigsLoadAndValidate(t *testing.T) {
+	for _, f := range []string{"server.yaml.example", "test/server.yaml"} {
+		c, _, err := LoadConfig(filepath.Join("..", "..", "deploy", f), true, noEnv())
+		if err != nil {
+			t.Fatalf("%s: %v", f, err)
+		}
+		if err := c.Validate(); err != nil {
+			t.Fatalf("%s: %v", f, err)
+		}
 	}
 }

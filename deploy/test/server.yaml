@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# SPDX-FileCopyrightText: The ClamFleet Authors
+# Server config for the clamfleet-test container (Debian 13). Installed to
+# /etc/clamfleet/server.yaml by prepare-server.sh. Loopback only: nothing in
+# the test container listens on another address.
+listen: 127.0.0.1:8443
+tls:
+  cert: /etc/clamfleet/tls.crt
+  key: /etc/clamfleet/tls.key
+db_path: /var/lib/clamfleet-server/clamfleet.db
