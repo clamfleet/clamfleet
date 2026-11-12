@@ -119,6 +119,41 @@ func (s *Store) EvaluateHosts(ctx context.Context, now time.Time, ids []int64, e
 	return out, nil
 }
 
+// ListFleet implements store.HealthStore.
+func (s *Store) ListFleet(ctx context.Context) ([]store.FleetRow, error) {
+	q := sqlcdb.New(s.r)
+	rows, err := q.ListFleet(ctx)
+	if err != nil {
+		return nil, err
+	}
+	tagRows, err := q.ListAllHostTags(ctx)
+	if err != nil {
+		return nil, err
+	}
+	// One query for all tags, grouped here: no N+1.
+	tags := map[int64][]string{}
+	for _, t := range tagRows {
+		tags[t.HostID] = append(tags[t.HostID], t.Tag)
+	}
+	out := make([]store.FleetRow, 0, len(rows))
+	for _, r := range rows {
+		fr := store.FleetRow{
+			ID: r.ID, Name: r.Name, Tags: tags[r.ID], State: nullString(r.State), StateReason: rawJSON(r.StateReason),
+			StateSince: nullTime(r.StateSince), LastSeen: nullTime(r.LastSeen), ClamdVersion: r.ClamdVersion.String,
+			DailyBuilt: nullTime(r.DailyBuilt),
+		}
+		if r.DailyVersion.Valid {
+			v := int(r.DailyVersion.Int64)
+			fr.DailyVersion = &v
+		}
+		if fr.Tags == nil {
+			fr.Tags = []string{}
+		}
+		out = append(out, fr)
+	}
+	return out, nil
+}
+
 // healthRows reads the inputs of ids (all hosts with a token when nil). An id
 // that is unknown or revoked is skipped: the host may have been revoked or
 // deleted between a report and its evaluation.

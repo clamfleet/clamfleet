@@ -218,8 +218,29 @@ type Transition struct {
 	Reasons json.RawMessage
 }
 
+// FleetRow is one line of the fleet overview.
+type FleetRow struct {
+	ID   int64
+	Name string
+	Tags []string
+	// State is nil while the host is pending (never evaluated).
+	State        *string
+	StateReason  json.RawMessage // JSON array of reasons; nil while pending
+	StateSince   *time.Time
+	LastSeen     *time.Time
+	ClamdVersion string
+	// DailyVersion and DailyBuilt are nil when the host has no daily database
+	// (or has not reported).
+	DailyVersion *int
+	DailyBuilt   *time.Time
+}
+
 // HealthStore persists host health (Milestone 3).
 type HealthStore interface {
+	// ListFleet returns the hosts that have a token (revoked hosts are left out),
+	// ordered by name, with their tags: the overview page. Read pool.
+	ListFleet(ctx context.Context) ([]FleetRow, error)
+
 	// EvaluateHosts runs in ONE immediate write transaction: it reads the
 	// inputs of the given hosts (nil = every host with a token) and the fleet's
 	// newest daily version, calls eval for each, and writes the result.
