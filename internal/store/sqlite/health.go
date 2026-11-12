@@ -60,12 +60,14 @@ func (s *Store) EvaluateHosts(ctx context.Context, now time.Time, ids []int64, e
 			}
 			if r.lastReport.Valid {
 				var rep proto.Report
-				// NOTE: assumption. The stored text is our own canonical encoding, so a
-				// decode failure means a corrupt row. The host is then evaluated as if
-				// it had no report (it can still go STALE) instead of blocking the
-				// evaluation of every other host.
+				// The stored text is our own canonical encoding, so a decode failure
+				// means a corrupt row. The row is skipped (Report nil) instead of
+				// failing the pass, which would block every other host; the flag lets
+				// the evaluator say so and keep judging staleness from last_seen.
 				if json.Unmarshal([]byte(r.lastReport.String), &rep) == nil {
 					in.Report = &rep
+				} else {
+					in.ReportUnreadable = true
 				}
 			}
 			todo = append(todo, decided{r, eval(in)})

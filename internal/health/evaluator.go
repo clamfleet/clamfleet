@@ -62,9 +62,12 @@ func (e *Evaluator) run(ctx context.Context, ids []int64) error {
 	defer e.mu.Unlock()
 	now := e.Now()
 	trs, err := e.Store.EvaluateHosts(ctx, now, ids, func(in store.HealthInput) store.HealthOutcome {
+		if in.ReportUnreadable {
+			e.Log.Warn("stored report of a host cannot be decoded; judging it from last_seen only", "host_id", in.HostID, "host", in.Name)
+		}
 		res := Evaluate(Input{
 			Now: now, StartedAt: e.StartedAt, CreatedAt: in.CreatedAt, LastSeen: in.LastSeen,
-			Report: in.Report, FleetNewestDaily: in.FleetNewestDaily,
+			Report: in.Report, ReportUnreadable: in.ReportUnreadable, FleetNewestDaily: in.FleetNewestDaily,
 		}, e.Thresholds)
 		rs := res.Reasons
 		if rs == nil {

@@ -171,6 +171,10 @@ type HealthInput struct {
 	LastSeen *time.Time
 	// Report is the newest stored report, nil before the first one.
 	Report *proto.Report
+	// ReportUnreadable is true when the host has a stored last_report that
+	// could not be decoded (corruption). Report is nil then, but the host did
+	// report: LastSeen is set.
+	ReportUnreadable bool
 	// FleetNewestDaily is the highest daily version among hosts with a token, 0 if none.
 	FleetNewestDaily int
 }

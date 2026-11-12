@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"errors"
 	"log/slog"
 	"path/filepath"
@@ -33,16 +34,18 @@ func (c *clock) Now() time.Time  { c.mu.Lock(); defer c.mu.Unlock(); return c.t 
 func (c *clock) Set(t time.Time) { c.mu.Lock(); c.t = t; c.mu.Unlock() }
 
 type env struct {
-	t   *testing.T
-	st  *sqlite.Store
-	clk *clock
-	log *bytes.Buffer
-	ev  *Evaluator
+	path string
+	t    *testing.T
+	st   *sqlite.Store
+	clk  *clock
+	log  *bytes.Buffer
+	ev   *Evaluator
 }
 
 func newEnv(t *testing.T) *env {
 	t.Helper()
-	st, err := sqlite.Open(context.Background(), filepath.Join(t.TempDir(), "t.db"))
+	path := filepath.Join(t.TempDir(), "t.db")
+	st, err := sqlite.Open(context.Background(), path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -50,7 +53,7 @@ func newEnv(t *testing.T) *env {
 	if err := st.Migrate(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	e := &env{t: t, st: st, clk: &clock{t: now}, log: &bytes.Buffer{}}
+	e := &env{path: path, t: t, st: st, clk: &clock{t: now}, log: &bytes.Buffer{}}
 	e.ev = New(st, e.clk.Now, DefaultThresholds(), slog.New(slog.NewTextHandler(e.log, nil)))
 	e.ev.StartedAt = now.Add(-100 * 24 * time.Hour) // a long-running server unless a test says otherwise
 	return e
@@ -373,5 +376,47 @@ func TestRunEvaluatesAtStartAndOnEveryTickAndStopsOnCancel(t *testing.T) {
 		if ids != nil {
 			t.Fatalf("the loop must evaluate all hosts, got %v", ids)
 		}
+	}
+}
+
+// A corrupt last_report must not make a reporting host look "never reported"
+// (measured from registration) nor fail the pass for the other hosts.
+func TestEvaluatorCorruptReportIsJudgedFromLastSeen(t *testing.T) {
+	e := newEnv(t)
+	bad, good := e.addHost("bad01"), e.addHost("good01")
+	e.report(bad, nil)
+	e.report(good, nil)
+	raw, err := sql.Open("sqlite", e.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer raw.Close()
+	if _, err := raw.Exec(`UPDATE hosts SET last_report='{not json' WHERE name='bad01'`); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.ev.All(context.Background()); err != nil {
+		t.Fatalf("one corrupt row must not fail the pass: %v", err)
+	}
+	d := e.show("bad01")
+	if *d.State != StateWarn || !strings.Contains(string(d.StateReason), RuleReportUnreadable) {
+		t.Fatalf("%s %s", *d.State, d.StateReason)
+	}
+	if g := e.show("good01"); *g.State != StateOK {
+		t.Fatalf("the healthy host was not evaluated: %s", *g.State)
+	}
+	if !strings.Contains(e.log.String(), "bad01") || !strings.Contains(e.log.String(), "cannot be decoded") {
+		t.Fatalf("no warning naming the host:\n%s", e.log)
+	}
+	// Long after registration but 1 minute after its last report: still not STALE.
+	e.clk.Set(now.Add(time.Minute))
+	e.ev.All(context.Background())
+	if d := e.show("bad01"); strings.Contains(string(d.StateReason), RuleNeverReported) || *d.State == StateStale {
+		t.Fatalf("a reporting host was judged never_reported/STALE: %s", d.StateReason)
+	}
+	// Silent past the window: STALE with the stale reason.
+	e.clk.Set(now.Add(15*time.Minute + time.Second))
+	e.ev.All(context.Background())
+	if d := e.show("bad01"); *d.State != StateStale || !strings.Contains(string(d.StateReason), `"stale"`) {
+		t.Fatalf("%s %s", *d.State, d.StateReason)
 	}
 }

@@ -295,3 +295,30 @@ func TestClamdErrorTextIsIncludedButBounded(t *testing.T) {
 		t.Fatal("truncation cut a rune in half")
 	}
 }
+
+// A host that reports but whose stored report is corrupt is judged from
+// last_seen, with its own reason; it is not "never reported".
+func TestUnreadableReport(t *testing.T) {
+	th := DefaultThresholds() // window 15 m
+	mk := func(silent time.Duration) Input {
+		seen := now.Add(-silent)
+		return Input{Now: now, StartedAt: now.Add(-100 * 24 * time.Hour), CreatedAt: now.Add(-200 * 24 * time.Hour),
+			LastSeen: &seen, ReportUnreadable: true}
+	}
+	got := Evaluate(mk(time.Minute), th)
+	if got.State != StateWarn || !reflect.DeepEqual(rules(got), []string{RuleReportUnreadable}) {
+		t.Fatalf("reporting host: %+v", got)
+	}
+	if got := Evaluate(mk(15*time.Minute), th); got.State != StateWarn {
+		t.Fatalf("at the window: %+v", got)
+	}
+	got = Evaluate(mk(15*time.Minute+time.Second), th)
+	if got.State != StateStale || !reflect.DeepEqual(rules(got), []string{RuleStale, RuleReportUnreadable}) {
+		t.Fatalf("silent host: %+v", got)
+	}
+	// Without last_seen the flag changes nothing: a host that never reported.
+	nr := Input{Now: now, StartedAt: now.Add(-time.Hour), CreatedAt: now.Add(-time.Hour), ReportUnreadable: true}
+	if got := Evaluate(nr, th); !reflect.DeepEqual(rules(got), []string{RuleNeverReported}) {
+		t.Fatalf("%+v", got)
+	}
+}

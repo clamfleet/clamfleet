@@ -38,17 +38,18 @@ const (
 // Reason codes. They are a stable public vocabulary: alert templates (M4) and
 // the UI key on them, so never rename one.
 const (
-	RuleStale           = "stale"
-	RuleNeverReported   = "never_reported"
-	RuleClamdDown       = "clamd_down"
-	RuleDailyMissing    = "daily_missing"
-	RuleDailyOldCrit    = "daily_old_crit"
-	RuleDailyOld        = "daily_old"
-	RuleFreshclamFailed = "freshclam_failed"
-	RuleFreshclamOff    = "freshclam_inactive"
-	RuleDailyBehind     = "daily_behind"
-	RuleScanFailed      = "scan_failed"
-	RuleScanMissed      = "scan_missed"
+	RuleStale            = "stale"
+	RuleNeverReported    = "never_reported"
+	RuleReportUnreadable = "report_unreadable"
+	RuleClamdDown        = "clamd_down"
+	RuleDailyMissing     = "daily_missing"
+	RuleDailyOldCrit     = "daily_old_crit"
+	RuleDailyOld         = "daily_old"
+	RuleFreshclamFailed  = "freshclam_failed"
+	RuleFreshclamOff     = "freshclam_inactive"
+	RuleDailyBehind      = "daily_behind"
+	RuleScanFailed       = "scan_failed"
+	RuleScanMissed       = "scan_missed"
 )
 
 const (
@@ -96,6 +97,9 @@ type Input struct {
 	LastSeen *time.Time
 	// Report is the newest report, nil before the first one.
 	Report *proto.Report
+	// ReportUnreadable: a report is stored but could not be decoded (Report is
+	// nil). The host did report, so it is judged from LastSeen, not as new.
+	ReportUnreadable bool
 	// FleetNewestDaily is the highest daily version among hosts with a token
 	// (0 if none): the yardstick of daily_behind.
 	FleetNewestDaily int
@@ -165,6 +169,21 @@ func Evaluate(in Input, th Thresholds) Result {
 	}
 
 	window := time.Duration(th.StaleFactor) * Interval(in, th)
+	if in.Report == nil && in.ReportUnreadable && in.LastSeen != nil {
+		// The host reports but its stored report is corrupt. Calling it
+		// never_reported (measured from registration) would be false: judge
+		// staleness from last_seen like any host, and say what is wrong.
+		add(RuleReportUnreadable, StateWarn, "the stored report of this host cannot be read; its other rules are not evaluated")
+		if age := in.Now.Sub(latest(*in.LastSeen, in.StartedAt)); age > window {
+			add(RuleStale, StateStale, "no report for %s (limit %s)", age.Truncate(time.Second), window)
+		}
+		state := StateWarn
+		if len(rs) > 1 {
+			state = StateStale
+			rs[0], rs[1] = rs[1], rs[0] // STALE first, as everywhere
+		}
+		return Result{State: state, Reasons: rs}
+	}
 	if in.Report == nil {
 		// Never reported. Pending until the window has passed since the later of
 		// registration and server start; then STALE, so a host whose agent was
