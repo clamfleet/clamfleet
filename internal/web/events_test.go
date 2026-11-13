@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/clamfleet/clamfleet/internal/health"
 	"github.com/clamfleet/clamfleet/internal/proto"
 	"github.com/clamfleet/clamfleet/internal/server"
 	"github.com/clamfleet/clamfleet/internal/store"
@@ -455,4 +456,96 @@ func TestAlertTargetBurstField(t *testing.T) {
 		t.Fatal("the edit form does not show the burst")
 	}
 	_ = time.Second
+}
+
+// An outage longer than the STALE window, then the agent comes back: the newest
+// heartbeat (live) recovers the host, and six replayed ones, with evaluator ticks
+// between them, change nothing: exactly two transitions in total after the
+// outage (OK to STALE, STALE to OK), last_seen stays where the newest report put
+// it, and the replays are kept as history. One replay carries clamd down, which
+// would turn the host CRIT if it were evaluated; one repeats another's timestamp.
+func TestReplayDoesNotMoveState(t *testing.T) {
+	ctx := context.Background()
+	e := newReportEnv(t)
+	tok := registerHost(t, e, "web01")
+	ev := health.New(e.st, e.clock, server.DefaultConfig().Health.Thresholds(), e.log)
+
+	postReport(t, e, tok, nil) // live, ts = now - 10 s
+	d := hostDetail(t, e)
+	if d.State == nil || *d.State != "OK" || len(d.StateChanges) != 1 {
+		t.Fatalf("baseline: %+v", d.StateChanges)
+	}
+
+	e.advance(20 * time.Minute) // longer than 3 x the 300 s interval
+	if err := ev.All(ctx); err != nil {
+		t.Fatal(err)
+	}
+	d = hostDetail(t, e)
+	if d.State == nil || *d.State != "STALE" || len(d.StateChanges) != 2 {
+		t.Fatalf("after the outage: state %v, %d changes", d.State, len(d.StateChanges))
+	}
+	reportsBefore := d.ReportCount
+
+	// The agent is back: its newest heartbeat is live.
+	postReport(t, e, tok, nil)
+	d = hostDetail(t, e)
+	if d.State == nil || *d.State != "OK" || len(d.StateChanges) != 3 {
+		t.Fatalf("recovery on the newest report: state %v, %d changes", d.State, len(d.StateChanges))
+	}
+	lastSeen := *d.LastSeen
+	lastReport := string(d.LastReport)
+	agentVersion := d.AgentVersion
+
+	// Six replays, oldest ts anywhere in the outage, with evaluator ticks between.
+	replay := func(ago time.Duration, down bool) {
+		t.Helper()
+		e.advance(time.Second)
+		postReport(t, e, tok, func(m map[string]any) {
+			m["replay"] = true
+			m["ts"] = e.clock().Add(-ago).UTC().Format(time.RFC3339)
+			m["agent_version"] = "replayed"
+			if down {
+				setClamdDown(m)
+			}
+		})
+		if err := ev.All(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	replay(18*time.Minute, false)
+	replay(15*time.Minute, true) // clamd down: CRIT if evaluated
+	replay(12*time.Minute, false)
+	replay(9*time.Minute, false)
+	replay(6*time.Minute, false)
+	replay(3*time.Minute, false)
+	replay(3*time.Minute+time.Second, false) // not a duplicate: one second apart
+	// A duplicate of an existing replay (same ts): stored once.
+	e.advance(0)
+	postReport(t, e, tok, func(m map[string]any) {
+		m["replay"] = true
+		m["ts"] = e.clock().Add(-(3*time.Minute + time.Second) - time.Second).UTC().Format(time.RFC3339)
+	})
+
+	d = hostDetail(t, e)
+	if len(d.StateChanges) != 3 || d.State == nil || *d.State != "OK" {
+		t.Fatalf("a replay moved state: %d changes, state %v", len(d.StateChanges), d.State)
+	}
+	if !d.LastSeen.Equal(lastSeen) {
+		t.Fatalf("last_seen moved from %v to %v during the replay", lastSeen, d.LastSeen)
+	}
+	if string(d.LastReport) != lastReport || d.AgentVersion != agentVersion {
+		t.Fatal("the newest report changed during the replay")
+	}
+	if want := reportsBefore + 1 + 7; d.ReportCount != int64(want) {
+		t.Fatalf("report_count %d, want %d (the newest and seven distinct replays)", d.ReportCount, want)
+	}
+}
+
+func hostDetail(t *testing.T, e *env) store.HostDetail {
+	t.Helper()
+	d, err := e.st.HostByName(context.Background(), "web01")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return d
 }
