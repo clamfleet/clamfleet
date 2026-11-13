@@ -83,6 +83,16 @@ commands:
                                               (after key generate --add); exit 1 when incomplete: run it again
   key check                                   open every stored secret; exit 0 only when all open with the ACTIVE key
                                               (run it before deleting an old key line)
+  alert list [--json]                         list alert targets
+  alert log [--target NAME] [--limit N] [--json]
+                                              recent alert deliveries and attempts
+  alert add-webhook NAME (--url-stdin | --url-file PATH) [--min-severity S] [--tags a,b] [--no-state-changes] [--no-detections]
+                                              add a webhook target; the URL is read from stdin or a protected file, NEVER
+                                              an argument; prints the signing key (whsec_...) once
+  alert add-email NAME --to a@x,b@y [--min-severity S] [--tags a,b] [--no-state-changes] [--no-detections]
+                                              add an email target (needs smtp.host)
+  alert test NAME                             send a test message; exit 1 when it fails
+  alert delete NAME --yes                     delete the target and its pending alerts
   version                                     print the version
 
 Host and user commands and migrate take --config FILE too (default: $CLAMFLEET_SERVER_CONFIG or ` + server.DefaultConfigPath + `).
@@ -109,6 +119,8 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return a.user(ctx, args[1:])
 	case "key":
 		return a.key(ctx, args[1:])
+	case "alert":
+		return a.alert(ctx, args[1:])
 	case "-h", "--help", "help":
 		fmt.Fprint(stdout, usage)
 		return exitOK
