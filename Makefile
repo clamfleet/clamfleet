@@ -9,7 +9,7 @@ BIN := bin
 VERSION ?= 0.0.0-dev
 LDFLAGS := -s -w -X github.com/clamfleet/clamfleet/internal/version.Version=$(VERSION)
 
-.PHONY: build vet staticcheck test scripts-test sqlc-check generate check e2e e2e-web fixtures webfixture web-fixture
+.PHONY: build vet staticcheck test scripts-test sqlc-check generate check e2e e2e-apparmor e2e-web fixtures webfixture web-fixture
 
 # Both binaries are static (CGO_ENABLED=0: the server uses pure-Go SQLite).
 build:
@@ -19,10 +19,12 @@ build:
 vet:
 	$(GO) vet ./...
 	$(GO) vet -tags e2e ./...
+	$(GO) vet -tags "e2e e2e_apparmor" ./...
 
 staticcheck:
 	staticcheck ./...
 	staticcheck -tags e2e ./...
+	staticcheck -tags "e2e e2e_apparmor" ./...
 
 test:
 	$(GO) test ./...
@@ -47,11 +49,22 @@ check: vet staticcheck sqlc-check test scripts-test
 # infrastructure that does not belong in a public repository. Set them in the
 # environment or in the gitignored local.mk (see local.mk.example).
 -include local.mk
-export CFT_EXEC INCUS_HOST
+# The AppArmor VM (milestone 5, decision 7): CFA_EXEC is the command prefix that runs a command
+# in the VM, CFA_HOST the ssh target of the Incus host that holds it. Also no defaults.
+export CFT_EXEC INCUS_HOST CFA_EXEC CFA_HOST
 
 e2e:
 	@test -n "$(CFT_EXEC)" -a -n "$(INCUS_HOST)" || { echo "e2e: set CFT_EXEC and INCUS_HOST (environment or local.mk, see local.mk.example)" >&2; exit 1; }
 	$(GO) test -tags e2e -count=1 -timeout 20m -v ./e2e/
+
+# AppArmor enforcing, in the throwaway Debian 13 VM (docs/testing.md "The AppArmor VM"). Part of the
+# milestone 5 acceptance; `make e2e` does not run it because it needs the VM. Without CFA_EXEC and
+# CFA_HOST it FAILS (it never skips). The same suite code runs against the VM: the environment points
+# CFT_EXEC and INCUS_HOST at it, CT/SNAP make deploy/test/reset.sh restore the VM's `clean` snapshot.
+e2e-apparmor:
+	@test -n "$(CFA_EXEC)" -a -n "$(CFA_HOST)" || { echo "e2e-apparmor: set CFA_EXEC and CFA_HOST (environment or local.mk, see local.mk.example and docs/testing.md)" >&2; exit 1; }
+	CFT_EXEC="$(CFA_EXEC)" INCUS_HOST="$(CFA_HOST)" CT=clamfleet-aa SNAP=clean READY_FILE=/var/lib/clamav/freshclam.dat \
+		$(GO) test -tags "e2e e2e_apparmor" -count=1 -timeout 30m -v -run 'TestAppArmor|TestClamdOnlyExecsTheAgent' ./e2e/
 
 fixtures:
 	./deploy/test/capture-fixtures.sh

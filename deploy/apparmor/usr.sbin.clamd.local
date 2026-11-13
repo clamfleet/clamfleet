@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# SPDX-FileCopyrightText: The ClamFleet Authors
+#
+# Append these lines to /etc/apparmor.d/local/usr.sbin.clamd (Debian's clamd
+# profile includes that file), then reload clamd's profile:
+#   apparmor_parser -r /etc/apparmor.d/usr.sbin.clamd
+#
+# They let clamd run `VirusEvent /usr/bin/clamfleet-agent event`: clamd starts
+# /bin/sh (dash on Debian 13; AppArmor sees the resolved path), which inherits
+# clamd's profile, and the shell's exec of the agent moves into the dedicated profile
+# clamfleet-agent-event (deploy/apparmor/clamfleet-agent-event). Nothing else in clamd's
+# profile changes, and nothing else may be executed.
+
+/usr/bin/dash mrix,
+/usr/bin/clamfleet-agent Px -> clamfleet-agent-event,

@@ -167,7 +167,12 @@ func pushBinary(t *testing.T, path, name string) {
 // A scan needs the loaded engine, so it is the real readiness signal.
 func waitClamd(t *testing.T) {
 	t.Helper()
-	sh(t, "for _ in $(seq 1 90); do clamdscan --no-summary /etc/hostname >/dev/null 2>&1 && exit 0; sleep 1; done; echo clamd never became ready >&2; exit 1")
+	// READY_FILE: under AppArmor (the VM) clamd may not read /etc/hostname; see reset.sh.
+	ready := os.Getenv("READY_FILE")
+	if ready == "" {
+		ready = "/etc/hostname"
+	}
+	sh(t, "for _ in $(seq 1 90); do clamdscan --no-summary "+ready+" >/dev/null 2>&1 && exit 0; sleep 1; done; echo clamd never became ready >&2; exit 1")
 }
 
 // collect runs "clamfleet-agent collect --dry-run" as the unprivileged user
