@@ -241,6 +241,16 @@ func (s *Store) RecordReport(ctx context.Context, r store.ReportRecord) (store.R
 			return err
 		}
 		res.Stored = n == 1
+		// Rule: a replayed heartbeat (the agent's backlog after an outage) is
+		// history only. It never touches last_seen, last_report, the tags or the
+		// fleet columns, whatever its ts and whatever order it arrives in: it
+		// must not make a dead host look alive, nor put hours-old content in
+		// front of the evaluator. This holds even when the newest report never
+		// arrived (it was quarantined on the agent), which an ordering rule
+		// alone cannot guarantee.
+		if r.Report.Replay {
+			return nil
+		}
 		if err := q.TouchHostSeen(ctx, sqlcdb.TouchHostSeenParams{Now: nullInt(r.ReceivedAt), ID: r.HostID}); err != nil {
 			return err
 		}
