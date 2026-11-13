@@ -292,6 +292,7 @@ type AlertLogEntry struct {
 	TargetName string
 	Recipient  string
 	Host       string
+	Kind       string // "state change", "detection" or "test"
 	Attempt    int
 	Status     string
 	Code       string

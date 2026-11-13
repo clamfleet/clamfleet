@@ -1,0 +1,21 @@
+{{/* SPDX-License-Identifier: AGPL-3.0-only */}}
+{{/* SPDX-FileCopyrightText: The ClamFleet Authors */}}
+{{/* alert_log.html: the delivery log table, shared by the Alerts page and a target's page. Data: []web.logRowView. */}}
+{{define "alert_log"}}
+{{if .}}
+<table data-testid="alert-log-table">
+  <thead><tr><th>Time</th><th>Target</th><th>Recipient</th><th>Host</th><th>Kind</th><th>Attempt</th><th>Status</th><th>Code</th><th>Detail</th></tr></thead>
+  <tbody>
+  {{range .}}
+  <tr data-testid="alert-log-row">
+    <td class="num"><span title="{{.WhenAbs}}">{{.When}}</span></td>
+    <td>{{.Target}}</td><td>{{.Recipient}}</td><td>{{.Host}}</td><td>{{.Kind}}</td><td class="num">{{.Attempt}}</td>
+    <td>{{.Status}}</td><td>{{.Code}}</td><td>{{.Error}}{{if .Duration}} <span class="hint">{{.Duration}}</span>{{end}}</td>
+  </tr>
+  {{end}}
+  </tbody>
+</table>
+{{else}}
+<p data-testid="alert-log-empty">Nothing has been sent yet.</p>
+{{end}}
+{{end}}

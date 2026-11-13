@@ -81,6 +81,8 @@ type Deps struct {
 	TOTPRequired bool
 	// Version is shown in the footer.
 	Version string
+	// Alerts configures the alert pages (zero value: strict policy, no email, no test send).
+	Alerts AlertDeps
 }
 
 // Web holds the handlers.
@@ -97,14 +99,18 @@ func New(d Deps) *Web {
 	w := &Web{Deps: d, pages: map[string]*template.Template{}}
 	funcs := template.FuncMap{
 		"lower": strings.ToLower,
+		"list":  func(items ...string) []string { return items },
 		// actions builds the data of the shared host_actions template.
 		"actions": func(name string, hasToken bool, csrf string) hostAction { return hostAction{name, hasToken, csrf} },
 	}
-	for _, p := range []string{"login", "login_totp", "fleet", "host", "admin_hosts", "token_once", "account", "account_totp", "totp_setup", "recovery_codes", "error"} {
+	for _, p := range []string{"login", "login_totp", "fleet", "host", "admin_hosts", "token_once", "account", "account_totp", "totp_setup", "recovery_codes", "admin_alerts", "alert_target", "secret_once", "alert_test_result", "error"} {
 		t := template.New(p).Funcs(funcs)
 		files := []string{"templates/layout.html", "templates/" + p + ".html"}
 		if p == "fleet" {
 			files = append(files, "templates/fleet_rows.html")
+		}
+		if p == "admin_alerts" || p == "alert_target" {
+			files = append(files, "templates/alert_log.html")
 		}
 		if p == "host" || p == "admin_hosts" {
 			files = append(files, "templates/host_actions.html")
@@ -120,27 +126,35 @@ func New(d Deps) *Web {
 // Handlers returns the handlers by "METHOD /path" key, as server.Routes() names them.
 func (w *Web) Handlers() map[string]http.HandlerFunc {
 	return map[string]http.HandlerFunc{
-		"GET /static/{file}":                    w.static,
-		"GET /login":                            w.loginPage,
-		"POST /login":                           w.loginSubmit,
-		"GET /login/totp":                       w.loginTOTPPage,
-		"POST /login/totp":                      w.loginTOTPSubmit,
-		"POST /logout":                          w.logout,
-		"GET /{$}":                              w.fleet,
-		"GET /fleet/rows":                       w.fleetRows,
-		"GET /hosts/{name}":                     w.host,
-		"GET /admin/hosts":                      w.adminHosts,
-		"POST /admin/hosts":                     w.adminRegister,
-		"POST /admin/hosts/{name}/rotate-token": w.adminRotate,
-		"POST /admin/hosts/{name}/revoke-token": w.adminRevoke,
-		"POST /admin/hosts/{name}/delete":       w.adminDelete,
-		"GET /account":                          w.accountPage,
-		"POST /account/password":                w.accountPassword,
-		"GET /account/totp":                     w.totpPage,
-		"POST /account/totp/setup":              w.totpSetup,
-		"POST /account/totp/confirm":            w.totpConfirm,
-		"POST /account/totp/recovery-codes":     w.totpRecoveryCodes,
-		"POST /account/totp/disable":            w.totpDisable,
+		"GET /static/{file}":                      w.static,
+		"GET /login":                              w.loginPage,
+		"POST /login":                             w.loginSubmit,
+		"GET /login/totp":                         w.loginTOTPPage,
+		"POST /login/totp":                        w.loginTOTPSubmit,
+		"POST /logout":                            w.logout,
+		"GET /{$}":                                w.fleet,
+		"GET /fleet/rows":                         w.fleetRows,
+		"GET /hosts/{name}":                       w.host,
+		"GET /admin/hosts":                        w.adminHosts,
+		"POST /admin/hosts":                       w.adminRegister,
+		"POST /admin/hosts/{name}/rotate-token":   w.adminRotate,
+		"POST /admin/hosts/{name}/revoke-token":   w.adminRevoke,
+		"POST /admin/hosts/{name}/delete":         w.adminDelete,
+		"GET /account":                            w.accountPage,
+		"POST /account/password":                  w.accountPassword,
+		"GET /account/totp":                       w.totpPage,
+		"POST /account/totp/setup":                w.totpSetup,
+		"POST /account/totp/confirm":              w.totpConfirm,
+		"POST /account/totp/recovery-codes":       w.totpRecoveryCodes,
+		"POST /account/totp/disable":              w.totpDisable,
+		"GET /admin/alerts":                       w.alertsPage,
+		"GET /admin/alerts/new":                   w.newTargetPage,
+		"POST /admin/alerts":                      w.createTarget,
+		"GET /admin/alerts/{name}":                w.editTargetPage,
+		"POST /admin/alerts/{name}":               w.updateTarget,
+		"POST /admin/alerts/{name}/test":          w.testSend,
+		"POST /admin/alerts/{name}/rotate-secret": w.rotateSecret,
+		"POST /admin/alerts/{name}/delete":        w.deleteTarget,
 	}
 }
 
@@ -192,6 +206,12 @@ func (w *Web) render(rw http.ResponseWriter, status int, page string, v *view) {
 
 // renderPartial executes one named template without the layout (htmx fragments).
 func (w *Web) renderPartial(rw http.ResponseWriter, page, name string, body any) {
+	w.renderPartialStatus(rw, http.StatusOK, page, name, body)
+}
+
+// renderPartialStatus is renderPartial with a status (a fragment that explains a
+// refusal, such as the rate-limited test send, travels with its 4xx).
+func (w *Web) renderPartialStatus(rw http.ResponseWriter, status int, page, name string, body any) {
 	var buf bytes.Buffer
 	if err := w.pages[page].ExecuteTemplate(&buf, name, body); err != nil {
 		w.Log.Error("render fragment", "page", page, "error", err.Error())
@@ -200,6 +220,7 @@ func (w *Web) renderPartial(rw http.ResponseWriter, page, name string, body any)
 	}
 	rw.Header().Set("Content-Type", "text/html; charset=utf-8")
 	rw.Header().Set("Cache-Control", "no-store")
+	rw.WriteHeader(status)
 	_, _ = rw.Write(buf.Bytes())
 }
 

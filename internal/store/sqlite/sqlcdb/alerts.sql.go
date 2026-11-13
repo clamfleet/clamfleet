@@ -707,7 +707,8 @@ func (q *Queries) InterruptAttemptLog(ctx context.Context, arg InterruptAttemptL
 
 const listAlertLog = `-- name: ListAlertLog :many
 
-SELECT l.id, l.ts, l.target_id, l.target_name, l.delivery_id, l.recipient, l.host_name, l.attempt, l.status, l.code, l.error, l.duration_ms
+SELECT l.id, l.ts, l.target_id, l.target_name, l.delivery_id, l.recipient, l.host_name, l.attempt, l.status, l.code, l.error, l.duration_ms,
+       CAST(CASE WHEN l.event_id IS NOT NULL THEN 'detection' WHEN l.state_change_id IS NOT NULL THEN 'state change' ELSE 'test' END AS TEXT) AS kind
 FROM alert_log l
 WHERE (CAST(?1 AS TEXT) = '' OR l.target_name = CAST(?1 AS TEXT))
 ORDER BY l.id DESC LIMIT ?2
@@ -731,9 +732,11 @@ type ListAlertLogRow struct {
 	Code       sql.NullString
 	Error      sql.NullString
 	DurationMs sql.NullInt64
+	Kind       string
 }
 
 // ------------------------------------------------------------------ reading
+// kind is derived: a detection row has an event, a state-change row a state change, a test send neither.
 func (q *Queries) ListAlertLog(ctx context.Context, arg ListAlertLogParams) ([]ListAlertLogRow, error) {
 	rows, err := q.db.QueryContext(ctx, listAlertLog, arg.TargetName, arg.MaxRows)
 	if err != nil {
@@ -756,6 +759,7 @@ func (q *Queries) ListAlertLog(ctx context.Context, arg ListAlertLogParams) ([]L
 			&i.Code,
 			&i.Error,
 			&i.DurationMs,
+			&i.Kind,
 		); err != nil {
 			return nil, err
 		}

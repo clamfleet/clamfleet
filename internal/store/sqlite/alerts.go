@@ -734,7 +734,7 @@ func (s *Store) AlertLog(ctx context.Context, f store.AlertLogFilter) ([]store.A
 	out := make([]store.AlertLogEntry, 0, len(rows))
 	for _, r := range rows {
 		out = append(out, store.AlertLogEntry{
-			ID: r.ID, TS: time.Unix(r.Ts, 0).UTC(), TargetName: r.TargetName, Recipient: r.Recipient.String, Host: r.HostName.String,
+			ID: r.ID, TS: time.Unix(r.Ts, 0).UTC(), TargetName: r.TargetName, Recipient: r.Recipient.String, Host: r.HostName.String, Kind: r.Kind,
 			Attempt: int(r.Attempt.Int64), Status: r.Status, Code: r.Code.String, Error: r.Error.String, DurationMS: r.DurationMs.Int64,
 		})
 	}

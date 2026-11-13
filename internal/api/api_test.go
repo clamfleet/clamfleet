@@ -549,6 +549,14 @@ func TestRouteTable(t *testing.T) {
 		{Method: "POST", Path: "/account/totp/confirm", Auth: server.AuthUser},
 		{Method: "POST", Path: "/account/totp/recovery-codes", Auth: server.AuthUser},
 		{Method: "POST", Path: "/account/totp/disable", Auth: server.AuthUser},
+		{Method: "GET", Path: "/admin/alerts", Auth: server.AuthAdmin},
+		{Method: "GET", Path: "/admin/alerts/new", Auth: server.AuthAdmin},
+		{Method: "POST", Path: "/admin/alerts", Auth: server.AuthAdmin},
+		{Method: "GET", Path: "/admin/alerts/{name}", Auth: server.AuthAdmin},
+		{Method: "POST", Path: "/admin/alerts/{name}", Auth: server.AuthAdmin},
+		{Method: "POST", Path: "/admin/alerts/{name}/test", Auth: server.AuthAdmin},
+		{Method: "POST", Path: "/admin/alerts/{name}/rotate-secret", Auth: server.AuthAdmin},
+		{Method: "POST", Path: "/admin/alerts/{name}/delete", Auth: server.AuthAdmin},
 	}
 	// The declared table must match the hardcoded list exactly, so a route that
 	// is added to server.Routes() (even an open one the probe below would not
@@ -606,6 +614,15 @@ func TestRouteTable(t *testing.T) {
 	listed := map[string]bool{}
 	for _, rt := range expected {
 		listed[rt.Method+" "+concrete.Replace(rt.Path)] = true
+	}
+	// "new" is a reserved alert target name because GET /admin/alerts/new is a
+	// literal route next to the {name} wildcard; every other method on that path
+	// reaches the wildcard routes (and gets the admin class like them, then a 404
+	// for the target "new" that cannot exist).
+	for _, rt := range expected {
+		if strings.HasPrefix(rt.Path, "/admin/alerts/{name}") && !strings.Contains(strings.TrimPrefix(rt.Path, "/admin/alerts/{name}"), "/") {
+			listed[rt.Method+" /admin/alerts/new"] = true
+		}
 	}
 	paths := []string{"/", "/metrics", "/v1", "/v1/", "/v1/tasks", "/v1/hosts", "/v1/events", "/v1/reports", "/api/v1/report", "/admin", "/login", "/fleet", "/hosts", "/users", "/static/"}
 	for _, rt := range expected {

@@ -186,7 +186,9 @@ UPDATE alert_deliveries SET status = 'failed', claim_token = NULL, next_attempt_
 -- ------------------------------------------------------------------ reading
 
 -- name: ListAlertLog :many
-SELECT l.id, l.ts, l.target_id, l.target_name, l.delivery_id, l.recipient, l.host_name, l.attempt, l.status, l.code, l.error, l.duration_ms
+-- kind is derived: a detection row has an event, a state-change row a state change, a test send neither.
+SELECT l.id, l.ts, l.target_id, l.target_name, l.delivery_id, l.recipient, l.host_name, l.attempt, l.status, l.code, l.error, l.duration_ms,
+       CAST(CASE WHEN l.event_id IS NOT NULL THEN 'detection' WHEN l.state_change_id IS NOT NULL THEN 'state change' ELSE 'test' END AS TEXT) AS kind
 FROM alert_log l
 WHERE (CAST(sqlc.arg(target_name) AS TEXT) = '' OR l.target_name = CAST(sqlc.arg(target_name) AS TEXT))
 ORDER BY l.id DESC LIMIT sqlc.arg(max_rows);
