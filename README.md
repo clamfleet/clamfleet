@@ -46,6 +46,12 @@ found anything.
   with the roles `viewer` and `admin` (managed with `clamfleet-server user ...`), cookie sessions with
   CSRF protection, a live fleet overview, a page per host with its state history, and host administration
   for admins (register, rotate, revoke, delete). It is server-rendered, with htmx vendored (no CDN).
+- **Alerts** (see [docs/alerts.md](docs/alerts.md)): email and webhook targets that get an alert when a host
+  changes state (recovery included) or a detection arrives. Per-target minimum severity and tag filter, a
+  cooldown that coalesces flapping, a durable queue with retries (5 attempts over about 81 minutes), every
+  attempt in an alert log, signed webhooks (Standard Webhooks), and a network policy for webhook
+  destinations. Managed by admins in the console or with `clamfleet-server alert ...`. Delivery is at least
+  once: receivers deduplicate on the alert id.
 
 A data source that cannot be read does not fail the report. It appears as `null`, and a warning goes
 to stderr.
@@ -128,7 +134,7 @@ readable by others, or the server refuses to start; keep it out of your database
 | `tls.key` | `CLAMFLEET_SERVER_TLS_KEY` | empty |
 | `tls.client_ca` | `CLAMFLEET_SERVER_TLS_CLIENT_CA` | empty (mTLS off) |
 | `db_path` | `CLAMFLEET_SERVER_DB_PATH` | `/var/lib/clamfleet-server/clamfleet.db` |
-| `secret_key_file` | `CLAMFLEET_SERVER_SECRET_KEY_FILE` | `/etc/clamfleet/server-secret.key` (protects TOTP secrets; see below) |
+| `secret_key_file` | `CLAMFLEET_SERVER_SECRET_KEY_FILE` | `/etc/clamfleet/server-secret.key` (protects TOTP secrets and webhook alert targets; see below) |
 | `trusted_proxies` | `CLAMFLEET_SERVER_TRUSTED_PROXIES` | empty |
 | `health.stale_factor` | `CLAMFLEET_SERVER_HEALTH_STALE_FACTOR` | `3` (at least 2) |
 | `health.default_interval` | `CLAMFLEET_SERVER_HEALTH_DEFAULT_INTERVAL` | `5m` (10s to 24h; for agents that do not report their interval) |
@@ -141,6 +147,17 @@ readable by others, or the server refuses to start; keep it out of your database
 | `auth.session_max_age` | `CLAMFLEET_SERVER_AUTH_SESSION_MAX_AGE` | `12h` (5m to 720h) |
 | `auth.session_idle` | `CLAMFLEET_SERVER_AUTH_SESSION_IDLE` | `1h` (at least 1m; not above the max age) |
 | `auth.cookie_secure` | `CLAMFLEET_SERVER_AUTH_COOKIE_SECURE` | `true`; `false` only for plain-HTTP development (drops `Secure` and the `__Host-` prefix, logs a warning) |
+| `public_url` | `CLAMFLEET_SERVER_PUBLIC_URL` | empty (links in alerts are null) |
+| `alert.cooldown` | `CLAMFLEET_SERVER_ALERT_COOLDOWN` | `15m` (0 to 24h; 0 = no holds) |
+| `alert.webhook.timeout` | `CLAMFLEET_SERVER_ALERT_WEBHOOK_TIMEOUT` | `10s` (1s to 30s per attempt) |
+| `alert.webhook.allow_private` / `alert.webhook.allow_loopback` | `CLAMFLEET_SERVER_ALERT_WEBHOOK_ALLOW_PRIVATE` / `..._ALLOW_LOOPBACK` | `true` / `false` |
+| `alert.webhook.deny_networks` | `CLAMFLEET_SERVER_ALERT_WEBHOOK_DENY_NETWORKS` | empty (extra CIDRs that are never allowed) |
+| `alert.webhook.ca_file` | `CLAMFLEET_SERVER_ALERT_WEBHOOK_CA_FILE` | empty (extra CA bundle, PEM) |
+| `smtp.host` | `CLAMFLEET_SERVER_SMTP_HOST` | empty (email is off) |
+| `smtp.port` / `smtp.tls` | `CLAMFLEET_SERVER_SMTP_PORT` / `..._TLS` | `587` / `starttls` (`tls` for implicit TLS; `none` only for a loopback or private relay) |
+| `smtp.from` | `CLAMFLEET_SERVER_SMTP_FROM` | empty (required when `smtp.host` is set) |
+| `smtp.username` / `smtp.password_file` | `CLAMFLEET_SERVER_SMTP_USERNAME` / `..._PASSWORD_FILE` | empty (the password is only ever read from the file) |
+| `smtp.helo` / `smtp.ca_file` / `smtp.timeout` | `CLAMFLEET_SERVER_SMTP_HELO` / `..._CA_FILE` / `..._TIMEOUT` | empty / empty / `30s` (5s to 120s) |
 
 The config file path is `--config`, else `CLAMFLEET_SERVER_CONFIG`, else `/etc/clamfleet/server.yaml`.
 The file is read strictly: an unknown key is an error, so a copy of the spec's example with keys of
@@ -267,7 +284,7 @@ Milestones follow [docs/HANDOVER.md](docs/HANDOVER.md). Milestones 1 to 3 are bu
 | 1 | Shared payload structs, agent collectors, `collect --dry-run` | Built. Tested on Debian 13 only. |
 | 2 | Server ingest API, SQLite schema, migrations, token authentication, `run` | Built. Tested on Debian 13 only. |
 | 3 | Health evaluator, state history, web console with local accounts | Built. Tested on Debian 13 only. |
-| 4 | Email and webhook alerting | Planned |
+| 4 | Email and webhook alerting | Built. Tested on Debian 13 only. |
 | 5 | Detection events, spool, events page, acknowledgement | Planned |
 | 6 | Packaging (.deb and .rpm), LDAP and OIDC login, `/metrics`, retention job, backup command | Planned |
 

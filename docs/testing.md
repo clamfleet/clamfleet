@@ -31,6 +31,18 @@ against it (with `SSL_CERT_FILE` pointing at the test CA), so nothing is injecte
 The API tests (`internal/api`) go through the real router and a real SQLite store in a temp
 directory; every test uses an injected clock far from the real date. Everything binds loopback only.
 
+Alerting (Milestone 4) is tested at four levels. `internal/alert` has table tests of the pure planner and the
+retry schedule, golden files for the payload, and sender tests against real local servers: a loopback
+`httptest` receiver with a scripted resolver and dialer (every address the sender is asked to connect to is
+recorded, and the tests assert none is forbidden), and `internal/testsmtp`, a scriptable fake SMTP server
+(STARTTLS with `internal/testtls`, implicit TLS, AUTH PLAIN and LOGIN, per-recipient replies, a connection
+dropped at the end of DATA with or without a reply, a stalled session; `Update` changes the script while it
+runs). The dispatcher tests use the real SQLite store, an injected clock and `RunOnce`, and abandon and reopen
+the store to prove restart behaviour. `internal/web/alerts_test.go` goes through the real router with a
+loopback webhook receiver and the SMTP fake. `cmd/clamfleet-server` tests run the real binaries (serve
+refusals, an alert delivered after the real agent reports a down clamd, the CLI's refusal to take a URL as an
+argument, key rotation and `key check`). Everything binds loopback only.
+
 ## End-to-end tests (`make e2e`)
 
 They run the real static agent binary inside a ClamAV container as the unprivileged
@@ -88,6 +100,20 @@ one of them fails in a way that does not look like the cause:
 - STALE is measured on the server clock only (`last_seen` against the transition time), so the
   assertion does not depend on the clock of the test host.
 
+The alert scenarios (`e2e/alert_e2e_test.go`, spec 14 acceptance for M4) additionally build and push
+`hack/alertsink`, a loopback receiver (a webhook on `127.0.0.1:9100` and plaintext SMTP on `127.0.0.1:2525`)
+that appends one JSON line per request or message to `/run/alertsink/sink.jsonl`, and run as a transient unit
+`clamfleet-alertsink-e2e` as the server user. `deploy/test/server.yaml` carries the matching `alert:` and
+`smtp:` blocks (`alert.cooldown: 0s` because the cooldown is proven with an injected clock; `smtp.tls: none`
+because the relay is on loopback). The server fixture creates the secret key file before `serve` starts
+(`key generate`, `root:clamfleet-server 0640`), because webhook targets seal their URL with it.
+`TestAlertClamdStoppedAndRecovered` creates a webhook target (URL through `--url-stdin`) and an email target
+with the CLI, expects the baseline NULL to WARN alert, stops clamd and expects exactly one WARN to CRIT on each
+(the webhook verified with the key the CLI printed), restarts clamd and expects exactly one recovery on each,
+nothing redelivered, and a `sent` row per delivery in `alert log --json`. `TestAlertTargetDownIsRecorded`
+points a target at a closed loopback port and expects `retrying` rows with `connection refused` while ingest
+keeps working.
+
 Unknown JSON fields and body limits are not repeated here: they are tested through the real router
 and listener at functional level, and the container may not have curl.
 
@@ -143,6 +169,7 @@ host tokens. Passwords and tokens are random per run, so read them from the file
 | `stale01` | OK at start (report interval 10 s), STALE about 35 s later |
 | `pending01` | registered, never reported: state `pending` |
 | `xss01` | WARN, with HTML in a tag, the reported host name and the freshclam error: it must render inert |
+| `alerts01` | OK, tag `alerts`: the only host the seeded alert target takes (see "Alerts in the fixture") |
 
 **Making a TOTP code.** The server under test runs on the real clock, so a code is made from `secret_base32`
 for the real time: RFC 6238 (HMAC-SHA1 over the 8-byte big-endian counter `floor(unix / 30)`, dynamic
@@ -176,6 +203,56 @@ Stable selectors (`data-testid`): `login-form`, `login-email`, `login-password`,
 per line), `recovery-continue`. The CSRF token is in `<meta name="csrf-token">`.
 Rotate, revoke and delete forms are inside `<details>` elements: click the `*-open-*` summary first.
 `make check` starts the fixture once and signs in with it (`hack/webfixture`'s own test).
+
+### Alerts in the fixture
+
+The fixture starts the server with `alert.cooldown: 0s` (no holds: every transition is alerted at once),
+`alert.webhook.allow_loopback: true` and `public_url` set to the fixture URL; email is **off** (`smtp.host`
+empty), so the Alerts page shows its "email is not configured" banner and an email target cannot be created.
+It also runs a **webhook receiver on 127.0.0.1** that records requests, and creates one target through the real
+CLI. `fixture.json` has an `alerts` object:
+
+| Key | Content |
+|---|---|
+| `receiver_url` | `http://127.0.0.1:PORT`, plaintext on purpose: a target with this URL shows the "unencrypted" badge and warning |
+| `requests_url` | `GET` returns the recorded requests as JSON (oldest first): `{ts, method, path, header, body}`; `DELETE` clears them. The headers hold `Webhook-Id`, `Webhook-Timestamp` and `Webhook-Signature` |
+| `status_url` | `POST ?code=503` makes the receiver answer 503 from now on, `?code=0` resets to 204 |
+| `seeded_target`, `hook_url`, `signing_key` | a webhook target named `seeded-hook` for `hook_url` (`receiver_url/hook/seeded`), signed with `signing_key` (`whsec_...`; the HMAC key is the base64-decoded part) |
+| `host` | `alerts01`: the seeded target has the tag filter `alerts`, so only this host's transitions reach the receiver |
+
+Flows a spec can drive (all as `admin`, who is signed in with the usual login form):
+
+- **Add a target.** `/admin/alerts` -> `alert-add-webhook` -> fill `alert-name` and `alert-url` (a receiver
+  URL, for example `receiver_url + "/hook/spec"`; the field is never filled back in) -> `alert-submit`. The
+  next page (`secret-page`) shows the key once in `secret-value` and has `Cache-Control: no-store`; its
+  `secret-done` link goes to the target page. Reloading `/admin/alerts` or the target page never shows the key
+  or the URL path (`alert-destination-<name>` shows `http://127.0.0.1:PORT/...`).
+- **Send test.** `alert-test-<name>` on the list is an htmx button: the answer replaces the content of
+  `alert-test-result-<name>` without a page load, with the text `Delivered: HTTP 204 in N ms` (inside
+  `test-result-text-<name>`, class `ok` or `fail`). The receiver then holds one request with `"kind":"test"`.
+  A second test within 10 s answers 429 with a message in the same place. After `POST status_url?code=404` the
+  text reads `HTTP 404: ...` (class `fail`, permanent), after `503` the same with 503. No inline script runs:
+  watch for console and CSP errors.
+- **Delivery.** `POST /v1/report` for `alerts01` with its token (`hosts.alerts01.token`) and `clamd.up=false`
+  (a `ts` strictly newer than the seeding report, one second resolution): within about 5 s `requests_url`
+  holds one `state_change` to CRIT with `url` = `public_url/hosts/alerts01`, and the target's page
+  (`/admin/alerts/seeded-hook`) lists a `sent` row in the table `alert-log-table` (rows `alert-log-row`).
+- **Viewer.** The viewer has no `nav-alerts` and gets 403 on `/admin/alerts`.
+
+Selectors added for the Alerts pages: `nav-alerts` (admins only); on `/admin/alerts`: `admin-alerts-page`,
+`alert-add-webhook`, `alert-add-email`, `alerts-table`, `alerts-empty`, `alert-row-<name>`,
+`alert-destination-<name>`, `alert-unencrypted-<name>`, `alert-disabled-<name>`, `alert-last-<name>`,
+`alert-edit-<name>`, `alert-test-<name>`, `alert-test-result-<name>`, `alert-log-table`, `alert-log-row`,
+`alert-log-empty` and the banners `alert-banner-email-off`, `alert-banner-no-public-url`,
+`alert-banner-unrouted`, `alert-banner-unreadable-<name>`; on the form pages (`/admin/alerts/new?type=webhook|email`
+and `/admin/alerts/<name>`): `alert-form-page`, `alert-form`, `alert-name`, `alert-url`, `alert-url-hint`,
+`alert-url-current`, `alert-unencrypted-badge`, `alert-to`, `alert-min-severity`, `alert-tags`,
+`alert-state-changes`, `alert-detections`, `alert-enabled`, `alert-switchoff-hint`, `alert-pending`,
+`alert-submit`, `alert-form-email-off`, `alert-form-smtp-plain`, `alert-form-unreadable`; on the target page:
+`alert-actions`, `alert-test-submit` (a plain form, answers with a redirect and a notice), `alert-rotate-open`,
+`alert-rotate-submit`, `alert-delete-open`, `alert-delete-confirm`, `alert-delete-submit`; on the key page:
+`secret-page`, `secret-notice`, `secret-value`, `secret-done`. Rotate and delete are inside `<details>`
+elements: click the `*-open` summary first.
 
 ## Re-recording fixtures (`make fixtures`)
 
