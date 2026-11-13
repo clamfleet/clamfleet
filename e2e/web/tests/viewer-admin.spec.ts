@@ -52,6 +52,32 @@ test('a viewer gets no admin controls and a 403 on every admin route', async ({ 
   await expect(page.getByTestId('fleet-row-viewer-made-host')).toHaveCount(0);
 });
 
+// Milestone 5: a viewer sees every detection (paths included) and the menu item, but gets no
+// acknowledgement markup, and the route itself refuses (admin class) with a valid session and token.
+test('a viewer sees detections but cannot acknowledge them', async ({ page }) => {
+  const fx = fixture();
+  await login(page, fx.viewer);
+  await expect(page.getByTestId('nav-events')).toBeVisible();
+  await page.getByTestId('nav-events').click();
+  await expect(page.getByTestId('events-page')).toBeVisible();
+  await expect(page.getByTestId('events-table')).toBeVisible();
+  // The second crit01 detection: events.spec.ts acknowledges the first one (specs share one server).
+  const id = fx.events.ids_by_host['crit01'][1];
+  await expect(page.getByTestId(`event-row-${id}`)).toBeVisible();
+  await expect(page.locator('[data-testid^="event-ack-"]')).toHaveCount(0);
+  await expect(page.locator('[data-testid^="events-bulk-"]')).toHaveCount(0);
+
+  const csrf = await page.locator('meta[name="csrf-token"]').getAttribute('content');
+  expect(csrf).toBeTruthy();
+  const res = await page.request.post(`/events/${id}/ack`, { headers: { 'X-CSRF-Token': csrf! } });
+  expect(res.status()).toBe(403);
+  const bulk = await page.request.post('/events/ack', { headers: { 'X-CSRF-Token': csrf! }, form: { upto: '999', expected: '1' } });
+  expect(bulk.status()).toBe(403);
+  // Still open.
+  await page.reload();
+  await expect(page.getByTestId(`event-row-${id}`)).toHaveAttribute('data-ack', 'false');
+});
+
 test('an admin sees the admin controls', async ({ page }) => {
   const fx = fixture();
   await login(page, fx.admin);

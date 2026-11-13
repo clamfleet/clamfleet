@@ -27,6 +27,13 @@ export interface FixtureInfo {
     signing_key: string;
     host: string;
   };
+  // The seeded detections (docs/testing.md "Detections in the fixture").
+  events: {
+    open_count: number;
+    ids_by_host: Record<string, number[]>;
+    acked_ids: number[];
+    acked_by: string;
+  };
 }
 
 export interface Recorded { ts: string; method: string; path: string; header: Record<string, string[]>; body: string }
