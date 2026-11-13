@@ -201,7 +201,9 @@ cookie loses `Secure` and the `__Host-` prefix, and the server logs a warning at
 
 ## Privacy
 
-`users` holds email addresses and `audit_log` holds the emails typed at login plus client IP
+Detection events hold file paths, which can name a person's files: they are shown to every signed-in user,
+escaped, and never appear in a URL, a log line or an audit row; `retention.events_days` deletes them
+(see [detections.md](detections.md#retention-and-privacy)). `users` holds email addresses and `audit_log` holds the emails typed at login plus client IP
 addresses. With two-factor sign-in, `users` also holds each user's encrypted TOTP secret, the last
 accepted time step and a failure counter, and the database holds the SHA-256 of each recovery code. All of
 it stays in your database: no QR-code service, no CDN, no other third party is involved. Deleting a user is not available; the audit rows keep the
@@ -216,7 +218,8 @@ or with the target) and the payloads sent to the receivers you choose; see [aler
 | `/login` | everyone | sign in |
 | `/login/totp` | everyone, with a pending login | the second step: a code from the authenticator app or a recovery code |
 | `/` | signed in | fleet: state counts, filters by tag and state, one row per host, worst state first |
-| `/hosts/NAME` | signed in | state and reasons, newest report, state history; admins also see audit rows and actions |
+| `/hosts/NAME` | signed in | state and reasons, newest report, a Detections card, state history; admins also see audit rows and actions |
+| `/events` | signed in | detections: filters by host, signature and state (Open by default), 50 per page by keyset, open counts in the menu; **admins** acknowledge one detection or all matching "as of this id" (see [detections.md](detections.md)). File paths are shown to every signed-in user, with invisible and direction-changing characters as visible escapes |
 | `/account` | signed in | change your password; a card for two-factor sign-in |
 | `/account/totp` | signed in | set up, replace or turn off the authenticator; new recovery codes (each asks for your password) |
 | `/admin/hosts` | admin | all hosts including revoked ones; register, rotate, revoke, delete (type the name to confirm) |

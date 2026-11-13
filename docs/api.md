@@ -63,6 +63,15 @@ Notes:
   for the STALE rule (no report for 3 times the interval), clamped to 10 seconds to 24 hours, and
   falls back to its own `health.default_interval` when it is null or missing (older agents). It was
   added after the spec example, compatibly: the schema stays 1.
+- `clamd.virus_event` (`"clamfleet"`, `"other"`, `"none"` or `null`) says whether `clamd.conf` runs the agent's
+  `event` command (`null`: unknown, for example an older agent or an unreadable `clamd.conf`). The server raises
+  the WARN reason `virusevent_missing` only for `"none"`. Added in milestone 5; compatible, schema 1.
+- `replay` (boolean, always present) is `true` for a heartbeat the agent sends from its backlog after an
+  outage, that is, any report that was not the newest one it held at send time. **The server stores a replayed
+  report as history only**: it never changes `last_seen`, `first_seen`, the host's newest report, its tags or its
+  state, and it is not evaluated, whatever its `ts` and in whatever order it arrives. A report without the key
+  is a live one. Added in milestone 5; compatible, schema 1 (an older server ignores it and falls back to its
+  ordering rule, which is why the upgrade order is server first).
 - `ts` has one-second resolution; the server stores at most one report per host and `ts`.
 - The server never rejects a report for clock skew. A `ts` more than five minutes ahead of the
   server clock is logged.
@@ -74,11 +83,22 @@ Notes:
 Body: a `proto.Event` (spec 7.4), at most 64 KiB. `path` 1 to 4096 bytes (no NUL), `signature` 1 to
 256, `source` 1 to 32, `ts` required.
 
-Status codes as for `/v1/report`. A duplicate event (same host, `ts`, `path` and `signature`) is
-also a 202. An event does not count as a report: it does not move `last_seen`.
+Status codes as for `/v1/report`. A duplicate event is also a 202. An event does not count as a report: it
+does not move `last_seen`. The agent side (the `event` command and the spool) is described in
+[detections.md](detections.md).
 
-The agent side of events (the `event` command and the spool) arrives with Milestone 5; the endpoint
-exists now.
+- `id` (32 lowercase hex characters, or `null`) is the agent's **idempotency key**: the agent gives each
+  detection one and sends it again unchanged on a retry. With an `id`, the server tells a retry (an `id` it has
+  taken: nothing changes) from a **second, genuine detection** that collides with an earlier one on (host, `ts`,
+  `path`, `signature`): that one is merged into the existing row's `occurrences` counter ("x2" on the page), is
+  never lost, and raises no second alert. Without an `id` (other clients) the natural key alone deduplicates, as
+  before. Any other `id` is a 400. Added in milestone 5; compatible, schema 1.
+- **The path convention** (a convention of the producer; the type does not change). The agent sends `path` so
+  two different file names never become one string: a backslash as two backslashes, every byte that is not part of
+  valid UTF-8 as `\xNN` (lowercase hex), everything else as is, and a path longer than 4096 bytes after that is
+  cut on a rune boundary to at most 4093 bytes plus `...`. `stream` (clamd's stream scan) and `fd[N]` pass
+  through. A client that sends raw backslashes is shown as it sent them; nothing breaks.
+- Error texts never include the path or the signature: they would end up in a log.
 
 ### `GET /healthz`
 

@@ -31,8 +31,10 @@ found anything.
   - host name, OS release, agent version and configured tags
   - the last scan summary, if a summary file exists (the scan command itself is planned)
 - `clamfleet-agent run` sends a report now and then every `interval` (default 5 minutes);
-  `run --once` sends one and exits 0 on success, 1 otherwise. There is no spool yet: a failed send is
-  logged and the next interval tries again.
+  `run --once` sends one and exits 0 on success, 1 otherwise. The service writes every heartbeat to a **spool**
+  on disk and sends from there, so a server outage loses nothing within the spool's limits.
+- `clamfleet-agent event` is the command for clamd's `VirusEvent` (see [docs/detections.md](docs/detections.md)):
+  it writes one detection to the spool, never touching the network or the token; the service sends it.
 - `clamfleet-agent version`
 - Configuration from a YAML file, with `CLAMFLEET_AGENT_*` environment overrides.
 - `clamfleet-server serve` runs the ingest API (`POST /v1/report`, `POST /v1/event`, `GET /healthz`,
@@ -52,6 +54,13 @@ found anything.
   attempt in an alert log, signed webhooks (Standard Webhooks), and a network policy for webhook
   destinations. Managed by admins in the console or with `clamfleet-server alert ...`. Delivery is at least
   once: receivers deduplicate on the alert id.
+- **Detections** (see [docs/detections.md](docs/detections.md)): clamd's `VirusEvent` runs the agent's `event`
+  command, which spools the detection durably (no-replace publish, fsync, a hard cap on disk use) even when the
+  server is down; the agent validates it and sends it, fresh detections ahead of an old backlog. The
+  **Detections** page lists them (filters, keyset paging, hostile file names shown as visible escapes), admins
+  acknowledge one or "all matching as of this id", and the fleet, host and menu show open counts. A burst of
+  detections from one host becomes a few alerts plus one summary. Retention is `retention.events_days`. A dedicated
+  AppArmor profile for the event command is in `deploy/apparmor/`.
 
 A data source that cannot be read does not fail the report. It appears as `null`, and a warning goes
 to stderr.
@@ -244,12 +253,41 @@ so a rotated token needs no restart. If the server certificate comes from a priv
 works too). For mutual TLS, add `tls: {client_cert: ..., client_key: ...}` to the agent config
 (`CLAMFLEET_AGENT_TLS_CLIENT_CERT`, `CLAMFLEET_AGENT_TLS_CLIENT_KEY`).
 
+**5. Detections (clamd's `VirusEvent`).** Create the spool (`clamfleet:clamav`, so clamd's user can add events
+and the agent owns the rest), add one line to `clamd.conf`, restart clamd, and check with an EICAR file; the full
+set-up, the AppArmor files for Debian and the 30 second conditions are in [docs/detections.md](docs/detections.md):
+
+```
+install -d -o clamfleet -g clamav -m 750 /var/lib/clamfleet
+install -d -o clamfleet -g clamav -m 2750 /var/lib/clamfleet/spool
+echo 'VirusEvent /usr/bin/clamfleet-agent event' >> /etc/clamav/clamd.conf   # RHEL family: /etc/clamd.d/scan.conf
+systemctl restart clamav-daemon
+```
+
+The agent's spool keys go in `/etc/clamfleet/agent.yaml` (clamd's user reads it; no secret in it), **not** in the
+environment:
+
+| YAML key | Default | Meaning |
+|---|---|---|
+| `spool.dir` | `/var/lib/clamfleet/spool` | the spool directory |
+| `spool.max_mb` | `50` (1 to 10240) | hard cap on the real disk use of everything under it; heartbeats are evicted first, events never |
+| `spool.max_event_days` | `365` (30 to 3650) | a spooled event older than this is deleted, not sent |
+
+**Upgrade order: server first, then the agents.** Upgrading from milestone 4 changes some behaviour: existing
+alert targets get burst summaries (`detection_burst` 10), existing events show as open, a new WARN rule
+(`virusevent_missing`) appears on hosts without a `VirusEvent` line (switch it off with
+`health.require_virus_event: false`), replayed heartbeats no longer update `last_seen`, and one dispatcher worker is
+reserved for state alerts. The migration (`00005`) is additive: stop the server and copy the database first; an older
+binary refuses the database.
+
 Things to know:
 - Report timestamps (`first_seen`, `last_seen`) use the **server's** clock. A host whose clock is more
   than five minutes ahead is logged, never rejected.
-- Event paths can contain personal data (for example `/home/<user>/...`) and request logs contain client
-  IP addresses. Both stay on your server; plan their retention yourself, since configurable retention
-  arrives with a later milestone.
+- Event paths can contain personal data (for example `/home/<user>/...`); they are deleted
+  `retention.events_days` (default 365) after they arrive, and never appear in logs, audit rows or URLs
+  (see [docs/detections.md](docs/detections.md#retention-and-privacy)). Request logs contain client IP
+  addresses and stay on your server; their retention arrives with a later milestone. **Backups keep paths
+  beyond retention**: give them a matching retention.
 - Tags are reported by the agent and are not authenticated.
 
 ## Design principles
@@ -279,7 +317,7 @@ Things to know:
 
 ## Roadmap
 
-Milestones follow [docs/HANDOVER.md](docs/HANDOVER.md). Milestones 1 to 3 are built, with TOTP two-factor sign-in for local accounts.
+Milestones follow [docs/HANDOVER.md](docs/HANDOVER.md). Milestones 1 to 5 are built, with TOTP two-factor sign-in for local accounts.
 
 | # | Deliverable | Status |
 |---|---|---|
@@ -287,7 +325,7 @@ Milestones follow [docs/HANDOVER.md](docs/HANDOVER.md). Milestones 1 to 3 are bu
 | 2 | Server ingest API, SQLite schema, migrations, token authentication, `run` | Built. Tested on Debian 13 only. |
 | 3 | Health evaluator, state history, web console with local accounts | Built. Tested on Debian 13 only. |
 | 4 | Email and webhook alerting | Built. Tested on Debian 13 only. |
-| 5 | Detection events, spool, events page, acknowledgement | Planned |
+| 5 | Detection events, spool, events page, acknowledgement | Built. Tested on Debian 13 (container, and a VM with AppArmor enforcing); RHEL 9 and SELinux in milestone 6. |
 | 6 | Packaging (.deb and .rpm), LDAP and OIDC login, `/metrics`, retention job, backup command | Planned |
 
 Built: local accounts with email and password and the roles `viewer` and `admin`, and TOTP two-factor
