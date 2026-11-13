@@ -26,12 +26,10 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"net/mail"
 	"net/url"
 	"strconv"
 	"strings"
 	"time"
-	"unicode"
 
 	"github.com/clamfleet/clamfleet/internal/alert"
 	"github.com/clamfleet/clamfleet/internal/secrets"
@@ -53,9 +51,6 @@ type AlertDeps struct {
 }
 
 const (
-	maxRecipients = 20
-	maxFilterTags = 20
-	maxTagLen     = 64
 	// unroutedWindow is how far back the "matched no target" banner looks.
 	unroutedWindow = 7 * 24 * time.Hour
 )
@@ -275,52 +270,6 @@ func readTargetForm(r *http.Request) targetInput {
 	}
 }
 
-// parseRecipients splits on commas, semicolons and whitespace and keeps the bare
-// address of each. At most 20, at least one, no duplicates (case-insensitive).
-func parseRecipients(raw string) ([]string, error) {
-	var out []string
-	seen := map[string]bool{}
-	for _, f := range strings.FieldsFunc(raw, func(r rune) bool { return r == ',' || r == ';' || unicode.IsSpace(r) }) {
-		a, err := mail.ParseAddress(f)
-		if err != nil || a.Address == "" || strings.ContainsAny(a.Address, "\r\n") {
-			return nil, errors.New("one of the recipients is not a valid email address")
-		}
-		k := strings.ToLower(a.Address)
-		if seen[k] {
-			continue
-		}
-		seen[k] = true
-		out = append(out, a.Address)
-	}
-	switch {
-	case len(out) == 0:
-		return nil, errors.New("give at least one recipient")
-	case len(out) > maxRecipients:
-		return nil, fmt.Errorf("at most %d recipients per target", maxRecipients)
-	}
-	return out, nil
-}
-
-func parseTags(raw string) ([]string, error) {
-	var out []string
-	seen := map[string]bool{}
-	for _, t := range strings.FieldsFunc(raw, func(r rune) bool { return r == ',' || r == '\n' || r == '\r' }) {
-		t = strings.TrimSpace(t)
-		if t == "" || seen[t] {
-			continue
-		}
-		if len(t) > maxTagLen || strings.IndexFunc(t, unicode.IsControl) >= 0 {
-			return nil, fmt.Errorf("each tag must be 1-%d characters without control characters", maxTagLen)
-		}
-		seen[t] = true
-		out = append(out, t)
-	}
-	if len(out) > maxFilterTags {
-		return nil, fmt.Errorf("at most %d tags in a filter", maxFilterTags)
-	}
-	return out, nil
-}
-
 func (f targetInput) view(create bool, typ string) targetFormView {
 	return targetFormView{Create: create, Name: f.name, Type: typ, To: f.to, MinSeverity: f.minSev, Tags: f.tags,
 		State: f.state, Detections: f.detections, Enabled: f.enabled}
@@ -369,7 +318,7 @@ func (w *Web) createTarget(rw http.ResponseWriter, r *http.Request) {
 		w.formFail(rw, r, http.StatusBadRequest, v, "Choose a minimum severity.")
 		return
 	}
-	tags, err := parseTags(in.tags)
+	tags, err := alert.ParseTags(in.tags)
 	if err != nil {
 		w.formFail(rw, r, http.StatusBadRequest, v, err.Error())
 		return
@@ -385,7 +334,7 @@ func (w *Web) createTarget(rw http.ResponseWriter, r *http.Request) {
 			w.formFail(rw, r, http.StatusBadRequest, v, "Email is not configured: an administrator sets smtp.host (and smtp.from) in the server configuration first.")
 			return
 		}
-		to, err := parseRecipients(in.to)
+		to, err := alert.ParseRecipients(in.to)
 		if err != nil {
 			w.formFail(rw, r, http.StatusBadRequest, v, err.Error())
 			return
@@ -503,7 +452,7 @@ func (w *Web) updateTarget(rw http.ResponseWriter, r *http.Request) {
 		fail(http.StatusBadRequest, "Choose a minimum severity.")
 		return
 	}
-	tags, err := parseTags(in.tags)
+	tags, err := alert.ParseTags(in.tags)
 	if err != nil {
 		fail(http.StatusBadRequest, err.Error())
 		return
@@ -514,7 +463,7 @@ func (w *Web) updateTarget(rw http.ResponseWriter, r *http.Request) {
 	newKey := "" // set when a new signing key replaces the old one
 	switch old.Type {
 	case store.TargetTypeEmail:
-		to, err := parseRecipients(in.to)
+		to, err := alert.ParseRecipients(in.to)
 		if err != nil {
 			fail(http.StatusBadRequest, err.Error())
 			return

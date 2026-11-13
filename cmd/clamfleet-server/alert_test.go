@@ -295,3 +295,29 @@ func TestAlertAddWebhookExtraArgumentWithURLStdinIsUsageError(t *testing.T) {
 		t.Fatalf("a target was created: %s", l.stdout)
 	}
 }
+
+// The CLI validates exactly as the console does (shared parsers): tags with
+// control characters or over 64 characters are refused, and duplicate
+// recipients are stored once.
+func TestAlertCLIUsesTheConsoleValidation(t *testing.T) {
+	srv, err := testsmtp.Listen("127.0.0.1:0", testsmtp.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer srv.Close()
+	host, port, _ := strings.Cut(srv.Addr, ":")
+	_, env := alertCLIEnv(t, "CLAMFLEET_SERVER_SMTP_HOST="+host, "CLAMFLEET_SERVER_SMTP_PORT="+port, "CLAMFLEET_SERVER_SMTP_TLS=none", "CLAMFLEET_SERVER_SMTP_FROM=cf@test.example")
+	for name, tags := range map[string]string{"too long": strings.Repeat("a", 65), "control": "a\x07b"} {
+		if r := runServer(t, env, "alert", "add-email", "m"+name[:1], "--to", "a@x.example", "--tags", tags); r.code != 2 {
+			t.Errorf("tags %s: exit %d, want 2", name, r.code)
+		}
+	}
+	if r := runServer(t, env, "alert", "add-email", "dup", "--to", "a@x.example,A@X.example, a@x.example"); r.code != 0 {
+		t.Fatalf("%+v", r)
+	}
+	l := runServer(t, env, "alert", "list", "--json")
+	var es []alertListEntry
+	if json.Unmarshal([]byte(l.stdout), &es) != nil || len(es) != 1 || es[0].Destination != "a@x.example" {
+		t.Fatalf("duplicates must collapse to one recipient: %s", l.stdout)
+	}
+}

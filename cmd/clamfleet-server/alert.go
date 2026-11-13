@@ -31,7 +31,6 @@ import (
 	"io"
 	"io/fs"
 	"log/slog"
-	"net/mail"
 	"strings"
 	"time"
 
@@ -151,7 +150,7 @@ func (a *app) alert(ctx context.Context, args []string) int {
 	}
 
 	// add-webhook / add-email
-	filter, err := parseCLITags(*tags)
+	filter, err := alert.ParseTags(*tags)
 	if err != nil {
 		fmt.Fprintf(a.stderr, "alert %s: %v\n", sub, err)
 		return exitUsage
@@ -168,35 +167,14 @@ func (a *app) alert(ctx context.Context, args []string) int {
 	return a.addWebhook(ctx, log, cfg, st, nt, *urlStdin, *urlFile, audit)
 }
 
-func parseCLITags(raw string) ([]string, error) {
-	var out []string
-	for _, t := range strings.Split(raw, ",") {
-		if t = strings.TrimSpace(t); t != "" {
-			out = append(out, t)
-		}
-	}
-	if len(out) > 20 {
-		return nil, errors.New("at most 20 tags in a filter")
-	}
-	return out, nil
-}
-
 func (a *app) addEmail(ctx context.Context, log *slog.Logger, cfg server.Config, st store.AlertStore, nt store.NewAlertTarget, toRaw string, audit store.Audit) int {
 	if cfg.SMTP.Host == "" {
 		log.Error("email is not configured: set smtp.host and smtp.from in the server configuration first")
 		return exitError
 	}
-	var rcpts []string
-	for _, f := range strings.FieldsFunc(toRaw, func(r rune) bool { return r == ',' || r == ';' || r == ' ' || r == '\n' }) {
-		ad, err := mail.ParseAddress(f)
-		if err != nil || ad.Address == "" {
-			log.Error("one of the recipients is not a valid email address")
-			return exitError
-		}
-		rcpts = append(rcpts, ad.Address)
-	}
-	if len(rcpts) == 0 || len(rcpts) > 20 {
-		log.Error("give between 1 and 20 recipients")
+	rcpts, err := alert.ParseRecipients(toRaw)
+	if err != nil {
+		log.Error(err.Error())
 		return exitError
 	}
 	nt.Type = store.TargetTypeEmail
