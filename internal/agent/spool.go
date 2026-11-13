@@ -412,6 +412,28 @@ func (s *Queue) publish(dir, id string, body []byte) (PublishResult, error) {
 	return res, nil
 }
 
+// AddEvent admits and publishes one event: the whole write side of the event
+// command. If the publish fails the admitted room is given back.
+func (s *Queue) AddEvent(ev proto.Event) (PublishResult, error) {
+	if ev.ID == nil {
+		return PublishResult{}, errors.New("event without an id")
+	}
+	body, err := json.Marshal(ev)
+	if err != nil {
+		return PublishResult{}, fmt.Errorf("encode event: %w", err)
+	}
+	refund, err := s.AdmitEvent(len(body))
+	if err != nil {
+		return PublishResult{}, err
+	}
+	res, err := s.publish(dirEvents, *ev.ID, body)
+	if err != nil {
+		refund()
+		return PublishResult{}, err
+	}
+	return res, nil
+}
+
 // ----- accounting -----
 
 // usageRec is the content of spool/usage.

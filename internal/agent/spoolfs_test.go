@@ -67,6 +67,9 @@ func (r *recFS) reset() {
 }
 
 func (r *recFS) OpenRoot(dir string) (spoolRoot, error) {
+	if err := r.rec("OpenRoot", dir); err != nil {
+		return nil, err
+	}
 	root, err := r.osFS.OpenRoot(dir)
 	if err != nil {
 		return nil, err

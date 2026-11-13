@@ -46,6 +46,9 @@ type Options struct {
 	// LookupEnv and Environ default to os.LookupEnv and os.Environ. Tests inject them.
 	LookupEnv func(string) (string, bool)
 	Environ   func() []string
+	// ReadFile defaults to os.ReadFile. Tests inject it to prove which files a
+	// command opens (the agent's event command must never touch the token).
+	ReadFile func(string) ([]byte, error)
 }
 
 // ResolvePath picks the config path: the flag value, else
@@ -79,8 +82,11 @@ func Load(cfg any, o Options) (warnings []string, err error) {
 	if o.Environ == nil {
 		o.Environ = os.Environ
 	}
+	if o.ReadFile == nil {
+		o.ReadFile = os.ReadFile
+	}
 	if o.Path != "" {
-		raw, rerr := os.ReadFile(o.Path)
+		raw, rerr := o.ReadFile(o.Path)
 		switch {
 		case rerr == nil:
 			if err := decodeStrict(raw, cfg); err != nil {

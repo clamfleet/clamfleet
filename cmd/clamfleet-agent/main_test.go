@@ -187,8 +187,8 @@ func TestVersionAndUsage(t *testing.T) {
 			t.Errorf("%v: exit %d, want 2", args, res.code)
 		}
 	}
-	// Subcommands of later milestones are not advertised.
-	if res := runAgent(t, "", nil, "bogus"); strings.Contains(res.stderr, "scan") || strings.Contains(res.stderr, "event") {
+	// Subcommands of later milestones are not advertised (event arrived in milestone 5).
+	if res := runAgent(t, "", nil, "bogus"); strings.Contains(res.stderr, "scan") {
 		t.Errorf("usage mentions commands that do not exist yet: %s", res.stderr)
 	}
 }

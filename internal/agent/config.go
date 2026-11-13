@@ -61,11 +61,26 @@ type Units struct {
 	Clamonacc string `yaml:"clamonacc"`
 }
 
-// Spool configures the on-disk queue (used from Milestone 5).
+// Spool configures the on-disk queue. The keys must be set in the config
+// FILE: the event command runs as clamd's user with only PATH and two
+// variables, so an environment override would reach `run` but not `event`, and
+// the two would use different spools.
 type Spool struct {
-	Dir   string `yaml:"dir"`
-	MaxMB int    `yaml:"max_mb"`
+	Dir string `yaml:"dir"`
+	// MaxMB is the hard cap on the real disk use of everything under Dir (1-10240).
+	MaxMB int `yaml:"max_mb"`
+	// MaxEventDays: a spooled event older than this is deleted instead of sent
+	// (30-3650). It bounds how long an undeliverable path stays on the host.
+	MaxEventDays int `yaml:"max_event_days"`
 }
+
+// Bounds of the spool keys.
+const (
+	MaxSpoolMB            = 10240
+	MinSpoolEventDays     = 30
+	MaxSpoolEventDays     = 3650
+	DefaultSpoolEventDays = 365
+)
 
 // Scan configures the scheduled scan wrapper (used from a later milestone).
 type Scan struct {
@@ -83,7 +98,7 @@ func DefaultConfig() Config {
 		DBDir:        "/var/lib/clamav",
 		FreshclamLog: "/var/log/clamav/freshclam.log",
 		Units:        Units{Clamd: "clamav-daemon", Freshclam: "clamav-freshclam", Clamonacc: "clamav-clamonacc"},
-		Spool:        Spool{Dir: "/var/lib/clamfleet/spool", MaxMB: 50},
+		Spool:        Spool{Dir: "/var/lib/clamfleet/spool", MaxMB: 50, MaxEventDays: DefaultSpoolEventDays},
 		Scan:         Scan{Paths: []string{}, Summary: "/var/lib/clamfleet/last_scan.json"},
 	}
 }
@@ -104,8 +119,11 @@ func (c Config) Validate() error {
 	if c.Interval <= 0 {
 		return fmt.Errorf("interval must be positive, got %s", c.Interval)
 	}
-	if c.Spool.MaxMB <= 0 {
-		return fmt.Errorf("spool.max_mb must be positive, got %d", c.Spool.MaxMB)
+	if c.Spool.MaxMB < 1 || c.Spool.MaxMB > MaxSpoolMB {
+		return fmt.Errorf("spool.max_mb must be between 1 and %d, got %d", MaxSpoolMB, c.Spool.MaxMB)
+	}
+	if c.Spool.MaxEventDays < MinSpoolEventDays || c.Spool.MaxEventDays > MaxSpoolEventDays {
+		return fmt.Errorf("spool.max_event_days must be between %d and %d, got %d", MinSpoolEventDays, MaxSpoolEventDays, c.Spool.MaxEventDays)
 	}
 	paths := map[string]string{
 		"token_file": c.TokenFile, "clamd_conf": c.ClamdConf, "db_dir": c.DBDir,
