@@ -7,13 +7,196 @@ package sqlcdb
 
 import (
 	"context"
+	"database/sql"
 )
 
-const insertEvent = `-- name: InsertEvent :execrows
+const ackEventByID = `-- name: AckEventByID :execrows
+UPDATE events SET ack_by = ?1, ack_at = ?2
+WHERE id = ?3 AND ack_at IS NULL
+`
+
+type AckEventByIDParams struct {
+	AckBy sql.NullString
+	AckAt sql.NullInt64
+	ID    int64
+}
+
+// ack_at IS NULL: the first writer wins and a second acknowledgement changes nothing.
+func (q *Queries) AckEventByID(ctx context.Context, arg AckEventByIDParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, ackEventByID, arg.AckBy, arg.AckAt, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const ackEventsBulk = `-- name: AckEventsBulk :execrows
+UPDATE events SET ack_by = ?1, ack_at = ?2
+WHERE events.ack_at IS NULL AND events.id <= ?3
+  AND (CAST(?4 AS TEXT) = '' OR events.host_id = (SELECT h2.id FROM hosts h2 WHERE h2.name = ?4))
+  AND (CAST(?5 AS TEXT) = '' OR instr(lower(events.signature), lower(?5)) > 0)
+`
+
+type AckEventsBulkParams struct {
+	AckBy sql.NullString
+	AckAt sql.NullInt64
+	UpTo  int64
+	Host  string
+	Sig   string
+}
+
+// Exactly the open events matching the filters with id <= up_to. Both bounds in
+// one statement inside one transaction, so the count is what this call changed.
+func (q *Queries) AckEventsBulk(ctx context.Context, arg AckEventsBulkParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, ackEventsBulk,
+		arg.AckBy,
+		arg.AckAt,
+		arg.UpTo,
+		arg.Host,
+		arg.Sig,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const bumpEventOccurrences = `-- name: BumpEventOccurrences :exec
+UPDATE events SET occurrences = occurrences + 1 WHERE id = ?1
+`
+
+func (q *Queries) BumpEventOccurrences(ctx context.Context, id int64) error {
+	_, err := q.db.ExecContext(ctx, bumpEventOccurrences, id)
+	return err
+}
+
+const countEvents = `-- name: CountEvents :one
+SELECT count(*)
+FROM events e JOIN hosts h ON h.id = e.host_id
+WHERE (CAST(?1 AS TEXT) = '' OR h.name = ?1)
+  AND (CAST(?2 AS TEXT) = '' OR instr(lower(e.signature), lower(?2)) > 0)
+  AND (CAST(?3 AS TEXT) = 'all'
+       OR (CAST(?3 AS TEXT) = 'open' AND e.ack_at IS NULL)
+       OR (CAST(?3 AS TEXT) = 'acked' AND e.ack_at IS NOT NULL))
+  AND (CAST(?4 AS INTEGER) = 0 OR e.id <= ?4)
+`
+
+type CountEventsParams struct {
+	Host string
+	Sig  string
+	Ack  string
+	UpTo int64
+}
+
+func (q *Queries) CountEvents(ctx context.Context, arg CountEventsParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countEvents,
+		arg.Host,
+		arg.Sig,
+		arg.Ack,
+		arg.UpTo,
+	)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countOpenEvents = `-- name: CountOpenEvents :one
+SELECT count(*) FROM events WHERE ack_at IS NULL
+`
+
+func (q *Queries) CountOpenEvents(ctx context.Context) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countOpenEvents)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const eventIDByKey = `-- name: EventIDByKey :one
+SELECT id FROM events
+WHERE host_id = ?1 AND ts = ?2 AND path = ?3 AND signature = ?4
+`
+
+type EventIDByKeyParams struct {
+	HostID    int64
+	Ts        int64
+	Path      string
+	Signature string
+}
+
+func (q *Queries) EventIDByKey(ctx context.Context, arg EventIDByKeyParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, eventIDByKey,
+		arg.HostID,
+		arg.Ts,
+		arg.Path,
+		arg.Signature,
+	)
+	var id int64
+	err := row.Scan(&id)
+	return id, err
+}
+
+const eventReceiptExists = `-- name: EventReceiptExists :one
+SELECT count(*) FROM event_receipts WHERE host_id = ?1 AND agent_event_id = ?2
+`
+
+type EventReceiptExistsParams struct {
+	HostID       int64
+	AgentEventID string
+}
+
+func (q *Queries) EventReceiptExists(ctx context.Context, arg EventReceiptExistsParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, eventReceiptExists, arg.HostID, arg.AgentEventID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const eventRowByID = `-- name: EventRowByID :one
+SELECT e.id, e.host_id, h.name AS host_name, e.ts, e.received_at, e.path, e.signature, e.source,
+       e.occurrences, e.ack_by, e.ack_at
+FROM events e JOIN hosts h ON h.id = e.host_id
+WHERE e.id = ?1
+`
+
+type EventRowByIDRow struct {
+	ID          int64
+	HostID      int64
+	HostName    string
+	Ts          int64
+	ReceivedAt  int64
+	Path        string
+	Signature   string
+	Source      string
+	Occurrences int64
+	AckBy       sql.NullString
+	AckAt       sql.NullInt64
+}
+
+func (q *Queries) EventRowByID(ctx context.Context, id int64) (EventRowByIDRow, error) {
+	row := q.db.QueryRowContext(ctx, eventRowByID, id)
+	var i EventRowByIDRow
+	err := row.Scan(
+		&i.ID,
+		&i.HostID,
+		&i.HostName,
+		&i.Ts,
+		&i.ReceivedAt,
+		&i.Path,
+		&i.Signature,
+		&i.Source,
+		&i.Occurrences,
+		&i.AckBy,
+		&i.AckAt,
+	)
+	return i, err
+}
+
+const insertEvent = `-- name: InsertEvent :one
 
 INSERT INTO events (host_id, ts, received_at, path, signature, source, alert_pending)
 VALUES (?1, ?2, ?3, ?4, ?5, ?6, 1)
 ON CONFLICT (host_id, ts, path, signature) DO NOTHING
+RETURNING id
 `
 
 type InsertEventParams struct {
@@ -27,11 +210,11 @@ type InsertEventParams struct {
 
 // SPDX-License-Identifier: AGPL-3.0-only
 // SPDX-FileCopyrightText: The ClamFleet Authors
-// alert_pending = 1 only ever lands on a NEW row: a duplicate retry from the
-// agent hits ON CONFLICT DO NOTHING and leaves the existing row (and its flag)
-// alone, so a retried POST never alerts twice.
+// alert_pending = 1 only ever lands on a NEW row: a conflict on the natural key
+// returns no row (sql.ErrNoRows), leaving the existing row and its flag alone,
+// so a retried or merged detection never alerts twice.
 func (q *Queries) InsertEvent(ctx context.Context, arg InsertEventParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, insertEvent,
+	row := q.db.QueryRowContext(ctx, insertEvent,
 		arg.HostID,
 		arg.Ts,
 		arg.ReceivedAt,
@@ -39,6 +222,174 @@ func (q *Queries) InsertEvent(ctx context.Context, arg InsertEventParams) (int64
 		arg.Signature,
 		arg.Source,
 	)
+	var id int64
+	err := row.Scan(&id)
+	return id, err
+}
+
+const insertEventReceipt = `-- name: InsertEventReceipt :exec
+INSERT INTO event_receipts (host_id, agent_event_id, event_id, received_at)
+VALUES (?1, ?2, ?3, ?4)
+`
+
+type InsertEventReceiptParams struct {
+	HostID       int64
+	AgentEventID string
+	EventID      int64
+	ReceivedAt   int64
+}
+
+func (q *Queries) InsertEventReceipt(ctx context.Context, arg InsertEventReceiptParams) error {
+	_, err := q.db.ExecContext(ctx, insertEventReceipt,
+		arg.HostID,
+		arg.AgentEventID,
+		arg.EventID,
+		arg.ReceivedAt,
+	)
+	return err
+}
+
+const listEvents = `-- name: ListEvents :many
+SELECT e.id, e.host_id, h.name AS host_name, e.ts, e.received_at, e.path, e.signature, e.source,
+       e.occurrences, e.ack_by, e.ack_at
+FROM events e JOIN hosts h ON h.id = e.host_id
+WHERE (CAST(?1 AS TEXT) = '' OR h.name = ?1)
+  AND (CAST(?2 AS TEXT) = '' OR instr(lower(e.signature), lower(?2)) > 0)
+  AND (CAST(?3 AS TEXT) = 'all'
+       OR (CAST(?3 AS TEXT) = 'open' AND e.ack_at IS NULL)
+       OR (CAST(?3 AS TEXT) = 'acked' AND e.ack_at IS NOT NULL))
+  AND (CAST(?4 AS INTEGER) = 0 OR e.id < ?4)
+  AND (CAST(?5 AS INTEGER) = 0 OR e.id <= ?5)
+ORDER BY e.id DESC
+LIMIT ?6
+`
+
+type ListEventsParams struct {
+	Host     string
+	Sig      string
+	Ack      string
+	BeforeID int64
+	UpTo     int64
+	MaxRows  int64
+}
+
+type ListEventsRow struct {
+	ID          int64
+	HostID      int64
+	HostName    string
+	Ts          int64
+	ReceivedAt  int64
+	Path        string
+	Signature   string
+	Source      string
+	Occurrences int64
+	AckBy       sql.NullString
+	AckAt       sql.NullInt64
+}
+
+// One filter shape for list, count and bulk boundary. The parameters are CAST so
+// sqlc types them. The signature filter is instr(lower(), lower()), a plain
+// case-insensitive substring: no LIKE wildcards to escape, so % _ and \ in the
+// filter match themselves (sqlc's SQLite parser also rejects LIKE ... ESCAPE).
+func (q *Queries) ListEvents(ctx context.Context, arg ListEventsParams) ([]ListEventsRow, error) {
+	rows, err := q.db.QueryContext(ctx, listEvents,
+		arg.Host,
+		arg.Sig,
+		arg.Ack,
+		arg.BeforeID,
+		arg.UpTo,
+		arg.MaxRows,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListEventsRow
+	for rows.Next() {
+		var i ListEventsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.HostID,
+			&i.HostName,
+			&i.Ts,
+			&i.ReceivedAt,
+			&i.Path,
+			&i.Signature,
+			&i.Source,
+			&i.Occurrences,
+			&i.AckBy,
+			&i.AckAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const maxEventID = `-- name: MaxEventID :one
+SELECT CAST(COALESCE(MAX(e.id), 0) AS INTEGER)
+FROM events e JOIN hosts h ON h.id = e.host_id
+WHERE (CAST(?1 AS TEXT) = '' OR h.name = ?1)
+  AND (CAST(?2 AS TEXT) = '' OR instr(lower(e.signature), lower(?2)) > 0)
+  AND (CAST(?3 AS TEXT) = 'all'
+       OR (CAST(?3 AS TEXT) = 'open' AND e.ack_at IS NULL)
+       OR (CAST(?3 AS TEXT) = 'acked' AND e.ack_at IS NOT NULL))
+`
+
+type MaxEventIDParams struct {
+	Host string
+	Sig  string
+	Ack  string
+}
+
+func (q *Queries) MaxEventID(ctx context.Context, arg MaxEventIDParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, maxEventID, arg.Host, arg.Sig, arg.Ack)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
+const pruneClosedWindows = `-- name: PruneClosedWindows :execrows
+DELETE FROM alert_detection_windows WHERE id IN (
+  SELECT w2.id FROM alert_detection_windows w2 WHERE w2.closed_at IS NOT NULL AND w2.closed_at < ?1 ORDER BY w2.id LIMIT ?2
+)
+`
+
+type PruneClosedWindowsParams struct {
+	Before sql.NullInt64
+	Batch  int64
+}
+
+func (q *Queries) PruneClosedWindows(ctx context.Context, arg PruneClosedWindowsParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, pruneClosedWindows, arg.Before, arg.Batch)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const pruneEvents = `-- name: PruneEvents :execrows
+DELETE FROM events WHERE id IN (
+  SELECT e2.id FROM events e2 WHERE e2.received_at < ?1 ORDER BY e2.id LIMIT ?2
+)
+`
+
+type PruneEventsParams struct {
+	Before int64
+	Batch  int64
+}
+
+// Retention counts from ARRIVAL (received_at), not the agent's ts: a spooled
+// event can be old when it arrives, and must not be pruned the moment it lands.
+func (q *Queries) PruneEvents(ctx context.Context, arg PruneEventsParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, pruneEvents, arg.Before, arg.Batch)
 	if err != nil {
 		return 0, err
 	}

@@ -140,7 +140,7 @@ func (s *Store) ListFleet(ctx context.Context) ([]store.FleetRow, error) {
 		fr := store.FleetRow{
 			ID: r.ID, Name: r.Name, Tags: tags[r.ID], State: nullString(r.State), StateReason: rawJSON(r.StateReason),
 			StateSince: nullTime(r.StateSince), LastSeen: nullTime(r.LastSeen), ClamdVersion: r.ClamdVersion.String,
-			DailyBuilt: nullTime(r.DailyBuilt),
+			DailyBuilt: nullTime(r.DailyBuilt), OpenEvents: r.OpenEvents,
 		}
 		if r.DailyVersion.Valid {
 			v := int(r.DailyVersion.Int64)

@@ -53,6 +53,10 @@ type Store struct {
 	// update and the audit insert, so a test can prove that a failure there
 	// rolls both back. Always nil in production.
 	afterTokenUpdate func() error
+	// afterAckUpdate is a test hook: AckEvent and AckEvents call it between the
+	// acknowledgement UPDATE and the audit row, so a test can prove the two are
+	// one transaction.
+	afterAckUpdate func() error
 
 	// beforeHealthWrite is a test hook: EvaluateHosts calls it after reading
 	// its inputs and before writing, so a test can interleave a competing

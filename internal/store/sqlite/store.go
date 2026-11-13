@@ -285,20 +285,6 @@ func (s *Store) RecordReport(ctx context.Context, r store.ReportRecord) (store.R
 	return res, nil
 }
 
-// RecordEvent implements store.Store.
-func (s *Store) RecordEvent(ctx context.Context, e store.EventRecord) (bool, error) {
-	var stored bool
-	err := s.inTx(ctx, func(q *sqlcdb.Queries) error {
-		n, err := q.InsertEvent(ctx, sqlcdb.InsertEventParams{
-			HostID: e.HostID, Ts: unix(proto.UTC(e.Event.TS)), ReceivedAt: unix(e.ReceivedAt),
-			Path: e.Event.Path, Signature: e.Event.Signature, Source: e.Event.Source,
-		})
-		stored = n == 1
-		return err
-	})
-	return stored, err
-}
-
 // ListHosts implements store.Store.
 func (s *Store) ListHosts(ctx context.Context) ([]store.HostSummary, error) {
 	q := sqlcdb.New(s.r)
@@ -354,6 +340,14 @@ func (s *Store) HostByName(ctx context.Context, name string) (store.HostDetail, 
 	if err != nil {
 		return store.HostDetail{}, err
 	}
+	open, err := q.CountEvents(ctx, sqlcdb.CountEventsParams{Host: name, Ack: store.AckOpen})
+	if err != nil {
+		return store.HostDetail{}, err
+	}
+	recent, err := q.ListEvents(ctx, sqlcdb.ListEventsParams{Host: name, Ack: store.AckAll, MaxRows: 10})
+	if err != nil {
+		return store.HostDetail{}, err
+	}
 	audit, err := q.ListAuditForTarget(ctx, sqlcdb.ListAuditForTargetParams{TargetKind: "host", Target: name, MaxRows: 50})
 	if err != nil {
 		return store.HostDetail{}, err
@@ -370,7 +364,10 @@ func (s *Store) HostByName(ctx context.Context, name string) (store.HostDetail, 
 			State: nullString(h.State), StateReason: rawJSON(h.StateReason), StateSince: nullTime(h.StateSince),
 		},
 		TokenCreatedAt: nullTime(h.TokenCreatedAt),
-		ReportCount:    reports, EventCount: events,
+		ReportCount:    reports, EventCount: events, OpenEvents: open,
+	}
+	for _, r := range recent {
+		d.RecentEvents = append(d.RecentEvents, eventRow(r))
 	}
 	if h.LastReport.Valid {
 		d.LastReport = json.RawMessage(h.LastReport.String)

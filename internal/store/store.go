@@ -173,7 +173,12 @@ type HostDetail struct {
 	LastReport  json.RawMessage `json:"last_report"`
 	ReportCount int64           `json:"report_count"`
 	EventCount  int64           `json:"event_count"`
-	Audit       []AuditEntry    `json:"audit"` // newest first, at most 50
+	// OpenEvents counts the host's unacknowledged events. RecentEvents (its 10
+	// newest, any state) is for the console only: it holds paths, which the
+	// admin CLI's JSON must not print.
+	OpenEvents   int64        `json:"open_events"`
+	RecentEvents []EventRow   `json:"-"`
+	Audit        []AuditEntry `json:"audit"` // newest first, at most 50
 	// StateChanges is the state history, newest first, at most 50.
 	StateChanges []StateChange `json:"state_changes"`
 }
@@ -237,6 +242,8 @@ type FleetRow struct {
 	// (or has not reported).
 	DailyVersion *int
 	DailyBuilt   *time.Time
+	// OpenEvents counts the host's unacknowledged detections.
+	OpenEvents int64
 }
 
 // HealthStore persists host health (Milestone 3).
@@ -444,6 +451,7 @@ type Store interface {
 	SessionStore
 	TOTPStore
 	AlertStore
+	EventStore
 	// CreateHost registers a host with its token hash and writes the audit
 	// row. ErrHostExists if the name is taken. The name is normalised.
 	CreateHost(ctx context.Context, name string, tokenHash []byte, now time.Time, a Audit) (Host, error)
@@ -461,7 +469,12 @@ type Store interface {
 	DeleteHost(ctx context.Context, name string, now time.Time, a Audit) error
 	// RecordReport stores a heartbeat idempotently and updates the host.
 	RecordReport(ctx context.Context, r ReportRecord) (ReportResult, error)
-	// RecordEvent stores a detection idempotently; stored is false for a duplicate.
+	// RecordEvent stores a detection idempotently (one transaction). With an
+	// event id (agent idempotency key): a retry of an id already received is
+	// stored=false and changes nothing; a DIFFERENT id that collides on (host,
+	// second, path, signature) merges into the existing row (occurrences + 1)
+	// and is stored=false, so it raises no second alert but is never lost.
+	// Without an id the natural key alone dedups, as before.
 	RecordEvent(ctx context.Context, e EventRecord) (stored bool, err error)
 	ListHosts(ctx context.Context) ([]HostSummary, error)
 	// HostByName returns ErrNotFound for an unknown host.
