@@ -4,7 +4,7 @@
 // Shared helpers: the fixture handoff, login, and a test fixture that fails any test that
 // logs a browser console error (the console's CSP is strict, so a blocked inline script or
 // style shows up there).
-import { test as base, expect, type Page } from '@playwright/test';
+import { test as base, expect, type APIRequestContext, type Page } from '@playwright/test';
 import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
 
@@ -18,7 +18,18 @@ export interface FixtureInfo {
   totp: Login & { secret_base32: string; recovery_codes: string[] };
   forced?: Login;
   hosts: Record<string, { token: string; initial_state: string }>;
+  alerts: {
+    receiver_url: string;
+    requests_url: string;
+    status_url: string;
+    seeded_target: string;
+    hook_url: string;
+    signing_key: string;
+    host: string;
+  };
 }
+
+export interface Recorded { ts: string; method: string; path: string; header: Record<string, string[]>; body: string }
 
 export function fixture(): FixtureInfo {
   return JSON.parse(fs.readFileSync(process.env.CLAMFLEET_E2E_FIXTURE!, 'utf8'));
@@ -96,4 +107,30 @@ export async function login(page: Page, who: Login): Promise<void> {
   await page.getByTestId('login-email').fill(who.email);
   await page.getByTestId('login-password').fill(who.password);
   await page.getByTestId('login-submit').click();
+}
+
+// The fixture's webhook receiver: every request it got, oldest first (all paths).
+export async function receiverRequests(request: APIRequestContext, fx: FixtureInfo): Promise<Recorded[]> {
+  const res = await request.get(fx.alerts.requests_url);
+  expect(res.status()).toBe(200);
+  return (await res.json()) as Recorded[];
+}
+
+function headerOf(r: Recorded, name: string): string {
+  const k = Object.keys(r.header).find((h) => h.toLowerCase() === name);
+  return k ? r.header[k][0] : '';
+}
+
+// Standard Webhooks check, written independently of the server's Go code: HMAC-SHA256 over
+// "id.timestamp.body" keyed with the base64-decoded part after "whsec_"; the header is
+// space-separated "v1,<base64>" entries.
+export function signatureValid(r: Recorded, whsecKey: string): boolean {
+  expect(whsecKey.startsWith('whsec_')).toBe(true);
+  const key = Buffer.from(whsecKey.slice('whsec_'.length), 'base64');
+  const id = headerOf(r, 'webhook-id');
+  const ts = headerOf(r, 'webhook-timestamp');
+  expect(id).not.toBe('');
+  expect(ts).not.toBe('');
+  const want = crypto.createHmac('sha256', key).update(`${id}.${ts}.${r.body}`).digest('base64');
+  return headerOf(r, 'webhook-signature').split(' ').some((e) => e === `v1,${want}`);
 }
