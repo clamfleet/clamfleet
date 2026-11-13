@@ -255,6 +255,9 @@ type Health struct {
 	BehindWarn      int           `yaml:"behind_warn"`
 	ScanWarnHours   int           `yaml:"scan_warn_hours"` // 0 switches the scan_missed rule off
 	EvalInterval    time.Duration `yaml:"eval_interval"`
+	// RequireVirusEvent: WARN (virusevent_missing) for a host whose clamd.conf
+	// has no VirusEvent line. Switch it off for hosts that are scanned only on a schedule.
+	RequireVirusEvent bool `yaml:"require_virus_event"`
 }
 
 // Thresholds converts the configuration for the rules.
@@ -263,6 +266,7 @@ func (h Health) Thresholds() health.Thresholds {
 		StaleFactor: h.StaleFactor, DefaultInterval: h.DefaultInterval,
 		DailyWarnHours: h.DailyWarnHours, DailyCritHours: h.DailyCritHours,
 		BehindWarn: h.BehindWarn, ScanWarnHours: h.ScanWarnHours,
+		RequireVirusEvent: h.RequireVirusEvent,
 	}
 }
 
@@ -313,7 +317,7 @@ func DefaultConfig() Config {
 		Health: Health{
 			StaleFactor: 3, DefaultInterval: 5 * time.Minute,
 			DailyWarnHours: 24, DailyCritHours: 72, BehindWarn: 2, ScanWarnHours: 48,
-			EvalInterval: 60 * time.Second,
+			EvalInterval: 60 * time.Second, RequireVirusEvent: true,
 		},
 		Auth: Auth{
 			Local:         AuthLocal{Enabled: true},

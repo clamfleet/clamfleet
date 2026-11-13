@@ -36,6 +36,7 @@ health:
   daily_crit_hours: 72     # CRIT; must be greater than daily_warn_hours
   behind_warn: 2           # WARN when the daily version trails the fleet's newest by more than this
   scan_warn_hours: 48      # WARN when the last scan finished longer ago; 0 switches the rule off
+  require_virus_event: true  # WARN (virusevent_missing) when clamd.conf has no VirusEvent line
   eval_interval: 60s       # 1s to 60s: how often silent (STALE) hosts are noticed
 
 # Web console sign-in. The values shown are the defaults. Users are managed with

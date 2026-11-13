@@ -141,6 +141,7 @@ readable by others, or the server refuses to start; keep it out of your database
 | `health.daily_warn_hours` / `health.daily_crit_hours` | `CLAMFLEET_SERVER_HEALTH_DAILY_WARN_HOURS` / `..._DAILY_CRIT_HOURS` | `24` / `72` |
 | `health.behind_warn` | `CLAMFLEET_SERVER_HEALTH_BEHIND_WARN` | `2` |
 | `health.scan_warn_hours` | `CLAMFLEET_SERVER_HEALTH_SCAN_WARN_HOURS` | `48` (0 = off) |
+| `health.require_virus_event` | `CLAMFLEET_SERVER_HEALTH_REQUIRE_VIRUS_EVENT` | `true` (WARN `virusevent_missing` when clamd.conf has no VirusEvent line) |
 | `health.eval_interval` | `CLAMFLEET_SERVER_HEALTH_EVAL_INTERVAL` | `60s` (1s to 60s) |
 | `auth.local.enabled` | `CLAMFLEET_SERVER_AUTH_LOCAL_ENABLED` | `true` (email and password accounts) |
 | `auth.local.totp_required` | `CLAMFLEET_SERVER_AUTH_LOCAL_TOTP_REQUIRED` | `false`; `true` makes every local user set up an authenticator app (needs the key file) |

@@ -50,6 +50,9 @@ const (
 	RuleDailyBehind      = "daily_behind"
 	RuleScanFailed       = "scan_failed"
 	RuleScanMissed       = "scan_missed"
+	// RuleVirusEventMissing: clamd.conf has no VirusEvent line, so detections
+	// on this host never reach ClamFleet (milestone 5, decision 6).
+	RuleVirusEventMissing = "virusevent_missing"
 )
 
 const (
@@ -74,6 +77,8 @@ type Thresholds struct {
 	BehindWarn int
 	// ScanWarnHours: WARN when the last scan finished longer ago. 0 = off.
 	ScanWarnHours int
+	// RequireVirusEvent switches virusevent_missing on (default true).
+	RequireVirusEvent bool
 }
 
 // DefaultThresholds are the spec 9 defaults plus the plan's additions
@@ -82,7 +87,7 @@ func DefaultThresholds() Thresholds {
 	return Thresholds{
 		StaleFactor: 3, DefaultInterval: 5 * time.Minute,
 		DailyWarnHours: 24, DailyCritHours: 72,
-		BehindWarn: 2, ScanWarnHours: 48,
+		BehindWarn: 2, ScanWarnHours: 48, RequireVirusEvent: true,
 	}
 }
 
@@ -211,6 +216,13 @@ func Evaluate(in Input, th Thresholds) Result {
 		} else {
 			add(RuleClamdDown, StateCrit, "clamd is not answering")
 		}
+	}
+
+	// Rule: only an answer of "none" fires. null (clamd.conf unreadable, or an
+	// older agent) and "other" (a wrapper we cannot see into) never do. It reads
+	// only the newest report, so replayed reports cannot fire or clear it.
+	if th.RequireVirusEvent && r.Clamd.VirusEvent != nil && *r.Clamd.VirusEvent == proto.VirusEventNone {
+		add(RuleVirusEventMissing, StateWarn, "clamd.conf has no VirusEvent line that runs clamfleet-agent event: detections on this host are not reported")
 	}
 
 	if d := r.Sigs.Daily; d == nil {

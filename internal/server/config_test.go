@@ -34,7 +34,7 @@ func TestEnvNamesMatchDocumentedTable(t *testing.T) {
 		"CLAMFLEET_SERVER_DB_PATH",
 		"CLAMFLEET_SERVER_HEALTH_BEHIND_WARN", "CLAMFLEET_SERVER_HEALTH_DAILY_CRIT_HOURS",
 		"CLAMFLEET_SERVER_HEALTH_DAILY_WARN_HOURS", "CLAMFLEET_SERVER_HEALTH_DEFAULT_INTERVAL",
-		"CLAMFLEET_SERVER_HEALTH_EVAL_INTERVAL", "CLAMFLEET_SERVER_HEALTH_SCAN_WARN_HOURS",
+		"CLAMFLEET_SERVER_HEALTH_EVAL_INTERVAL", "CLAMFLEET_SERVER_HEALTH_REQUIRE_VIRUS_EVENT", "CLAMFLEET_SERVER_HEALTH_SCAN_WARN_HOURS",
 		"CLAMFLEET_SERVER_HEALTH_STALE_FACTOR",
 		"CLAMFLEET_SERVER_LISTEN", "CLAMFLEET_SERVER_PUBLIC_URL", "CLAMFLEET_SERVER_SECRET_KEY_FILE",
 		"CLAMFLEET_SERVER_SMTP_CA_FILE", "CLAMFLEET_SERVER_SMTP_FROM", "CLAMFLEET_SERVER_SMTP_HELO",
@@ -199,11 +199,11 @@ func TestTrustedProxies(t *testing.T) {
 func TestHealthDefaults(t *testing.T) {
 	h := DefaultConfig().Health
 	want := Health{StaleFactor: 3, DefaultInterval: 5 * time.Minute, DailyWarnHours: 24, DailyCritHours: 72,
-		BehindWarn: 2, ScanWarnHours: 48, EvalInterval: 60 * time.Second}
+		BehindWarn: 2, ScanWarnHours: 48, EvalInterval: 60 * time.Second, RequireVirusEvent: true}
 	if h != want {
 		t.Fatalf("%+v", h)
 	}
-	if th := h.Thresholds(); th.StaleFactor != 3 || th.DailyCritHours != 72 || th.DefaultInterval != 5*time.Minute || th.ScanWarnHours != 48 || th.BehindWarn != 2 {
+	if th := h.Thresholds(); th.StaleFactor != 3 || th.DailyCritHours != 72 || th.DefaultInterval != 5*time.Minute || th.ScanWarnHours != 48 || th.BehindWarn != 2 || !th.RequireVirusEvent {
 		t.Fatalf("%+v", th)
 	}
 	if err := DefaultConfig().Validate(); err != nil {
