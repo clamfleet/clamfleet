@@ -547,6 +547,9 @@ func TestRouteTable(t *testing.T) {
 		{Method: "GET", Path: "/{$}", Auth: server.AuthUser},
 		{Method: "GET", Path: "/fleet/rows", Auth: server.AuthUser},
 		{Method: "GET", Path: "/hosts/{name}", Auth: server.AuthUser},
+		{Method: "GET", Path: "/events", Auth: server.AuthUser},
+		{Method: "POST", Path: "/events/{id}/ack", Auth: server.AuthAdmin},
+		{Method: "POST", Path: "/events/ack", Auth: server.AuthAdmin},
 		{Method: "GET", Path: "/admin/hosts", Auth: server.AuthAdmin},
 		{Method: "POST", Path: "/admin/hosts", Auth: server.AuthAdmin},
 		{Method: "POST", Path: "/admin/hosts/{name}/rotate-token", Auth: server.AuthAdmin},
@@ -581,7 +584,7 @@ func TestRouteTable(t *testing.T) {
 		}
 	}
 	e := newEnv(t)
-	concrete := strings.NewReplacer("{$}", "", "{file}", "app.css", "{name}", "web01")
+	concrete := strings.NewReplacer("{$}", "", "{file}", "app.css", "{name}", "web01", "{id}", "1")
 	for _, rt := range expected {
 		path := concrete.Replace(rt.Path)
 		var r resp

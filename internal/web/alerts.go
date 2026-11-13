@@ -96,12 +96,14 @@ type targetFormView struct {
 	Tags        string
 	State       bool
 	Detections  bool
-	Enabled     bool
-	Pending     int
-	Unreadable  bool
-	EmailOff    bool
-	SMTPPlain   bool
-	Log         []logRowView
+	// Burst is the detection burst limit as text (the form field).
+	Burst      string
+	Enabled    bool
+	Pending    int
+	Unreadable bool
+	EmailOff   bool
+	SMTPPlain  bool
+	Log        []logRowView
 }
 
 type secretBody struct {
@@ -258,21 +260,41 @@ func (w *Web) alertsPage(rw http.ResponseWriter, r *http.Request) {
 
 type targetInput struct {
 	name, typ, url, to, minSev, tags string
+	burst                            string
 	state, detections, enabled       bool
+}
+
+// maxDetectionBurst bounds the burst field: beyond it "every detection alone"
+// (0) is the honest setting.
+const maxDetectionBurst = 1000
+
+// parseBurst reads the detection burst field. set is false for an empty field
+// (an older form or a script that does not know it): the caller keeps the
+// stored value, or the default for a new target.
+func parseBurst(s string) (n int, set bool, err error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return 0, false, nil
+	}
+	n, err = strconv.Atoi(s)
+	if err != nil || n < 0 || n > maxDetectionBurst {
+		return 0, true, fmt.Errorf("the detection burst must be a whole number from 0 to %d (0 sends every detection on its own)", maxDetectionBurst)
+	}
+	return n, true, nil
 }
 
 func readTargetForm(r *http.Request) targetInput {
 	f := r.PostForm
 	return targetInput{
 		name: strings.TrimSpace(f.Get("name")), typ: f.Get("type"), url: strings.TrimSpace(f.Get("url")), to: f.Get("to"),
-		minSev: f.Get("min_severity"), tags: f.Get("tags"),
+		minSev: f.Get("min_severity"), tags: f.Get("tags"), burst: f.Get("detection_burst"),
 		state: f.Get("state_changes") != "", detections: f.Get("detections") != "", enabled: f.Get("enabled") != "",
 	}
 }
 
 func (f targetInput) view(create bool, typ string) targetFormView {
 	return targetFormView{Create: create, Name: f.name, Type: typ, To: f.to, MinSeverity: f.minSev, Tags: f.tags,
-		State: f.state, Detections: f.detections, Enabled: f.enabled}
+		State: f.state, Detections: f.detections, Burst: f.burst, Enabled: f.enabled}
 }
 
 // formFail re-renders the form with an error. The URL field is never echoed.
@@ -293,7 +315,7 @@ func (w *Web) newTargetPage(rw http.ResponseWriter, r *http.Request) {
 		w.errorPage(rw, r, http.StatusBadRequest)
 		return
 	}
-	v := targetFormView{Create: true, Type: typ, MinSeverity: "WARN", State: true, Detections: true, Enabled: true,
+	v := targetFormView{Create: true, Type: typ, MinSeverity: "WARN", State: true, Detections: true, Burst: strconv.Itoa(store.DefaultDetectionBurst), Enabled: true,
 		EmailOff: !w.Alerts.EmailEnabled, SMTPPlain: w.Alerts.SMTPPlaintext}
 	w.render(rw, http.StatusOK, "alert_target", w.newView(r, "New alert target", "alerts", v))
 }
@@ -324,8 +346,16 @@ func (w *Web) createTarget(rw http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	burst, set, err := parseBurst(in.burst)
+	if err != nil {
+		w.formFail(rw, r, http.StatusBadRequest, v, err.Error())
+		return
+	}
+	if !set {
+		burst = store.DefaultDetectionBurst
+	}
 	nt := store.NewAlertTarget{Name: name, Type: in.typ, MinSeverity: in.minSev, TagFilter: tags,
-		SendStateChanges: in.state, SendDetections: in.detections, DetectionBurst: store.DefaultDetectionBurst, Enabled: in.enabled}
+		SendStateChanges: in.state, SendDetections: in.detections, DetectionBurst: burst, Enabled: in.enabled}
 	var seal func(id int64) ([]byte, error)
 	var signing string
 	switch in.typ {
@@ -426,7 +456,7 @@ func (w *Web) renderEdit(rw http.ResponseWriter, r *http.Request, t store.AlertT
 	pending, _ := w.Store.CountPendingAlerts(r.Context(), t.Name)
 	dest, plain := destination(t)
 	v := targetFormView{Name: t.Name, Type: t.Type, URLDisplay: dest, Plaintext: plain, MinSeverity: t.MinSeverity, Tags: strings.Join(t.TagFilter, ", "),
-		State: t.SendStateChanges, Detections: t.SendDetections, Enabled: t.Enabled, Pending: pending, Unreadable: !w.secretReadable(t),
+		State: t.SendStateChanges, Detections: t.SendDetections, Burst: strconv.Itoa(t.DetectionBurst), Enabled: t.Enabled, Pending: pending, Unreadable: !w.secretReadable(t),
 		EmailOff: !w.Alerts.EmailEnabled, SMTPPlain: w.Alerts.SMTPPlaintext, Log: logView(w.Now(), logs)}
 	if t.Type == store.TargetTypeEmail {
 		to, _ := alert.Recipients(t.Config)
@@ -459,6 +489,12 @@ func (w *Web) updateTarget(rw http.ResponseWriter, r *http.Request) {
 	}
 	u := store.AlertTargetUpdate{Config: old.Config, MinSeverity: in.minSev, TagFilter: tags,
 		SendStateChanges: in.state, SendDetections: in.detections, Enabled: in.enabled, Expect: &store.TargetSnapshot{Config: old.Config, Sealed: old.Sealed}}
+	if n, set, err := parseBurst(in.burst); err != nil {
+		fail(http.StatusBadRequest, err.Error())
+		return
+	} else if set {
+		u.DetectionBurst = &n
+	}
 	var seal func(id int64) ([]byte, error)
 	newKey := "" // set when a new signing key replaces the old one
 	switch old.Type {

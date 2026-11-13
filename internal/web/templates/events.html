@@ -1,0 +1,67 @@
+{{/* SPDX-License-Identifier: AGPL-3.0-only */}}
+{{/* SPDX-FileCopyrightText: The ClamFleet Authors */}}
+{{/*
+  events.html: the detections page. Body: web.eventsBody.
+  The filters are a plain GET form: host, signature (a substring) and state. There is
+  deliberately no path filter, so no path ever appears in a URL. Pagination is by
+  keyset (before=<id>), so rows arriving between two page loads neither repeat nor
+  skip. Acknowledgement markup is left out for a viewer by the handler (IsAdmin),
+  not only hidden: a viewer's page contains no ack form.
+*/}}
+{{define "content"}}
+<h1 data-testid="events-page">Detections</h1>
+<form method="get" action="/events" class="filters inline" data-testid="events-filter">
+  <div>
+    <label for="host">Host</label>
+    <select id="host" name="host" data-testid="events-filter-host">
+      <option value="">All hosts</option>
+      {{range .Body.Hosts}}<option value="{{.}}"{{if eq . $.Body.HostFilter}} selected{{end}}>{{.}}</option>{{end}}
+    </select>
+  </div>
+  <div>
+    <label for="sig">Signature contains</label>
+    <input type="text" id="sig" name="sig" value="{{.Body.SigFilter}}" maxlength="256" data-testid="events-filter-sig">
+  </div>
+  <div>
+    <label for="ack">State</label>
+    <select id="ack" name="ack" data-testid="events-filter-ack">
+      {{range .Body.AckOptions}}<option value="{{.}}"{{if eq . $.Body.AckFilter}} selected{{end}}>{{if eq . "open"}}Open{{else if eq . "acked"}}Acknowledged{{else}}All{{end}}</option>{{end}}
+    </select>
+  </div>
+  <button type="submit" data-testid="events-filter-submit">Filter</button>
+</form>
+
+<p class="hint" data-testid="events-count">{{num .Body.Count}} matching</p>
+
+{{if .Body.Bulk}}
+<details data-testid="events-bulk-open">
+  <summary>Acknowledge all matching</summary>
+  <form method="post" action="/events/ack">
+    <input type="hidden" name="csrf_token" value="{{.Body.Bulk.CSRF}}">
+    <input type="hidden" name="host" value="{{.Body.Bulk.Host}}">
+    <input type="hidden" name="sig" value="{{.Body.Bulk.Sig}}">
+    <input type="hidden" name="upto" value="{{.Body.Bulk.UpTo}}">
+    <input type="hidden" name="expected" value="{{.Body.Bulk.Expected}}">
+    <p>Acknowledge all <strong data-testid="events-bulk-expected">{{.Body.Bulk.Expected}}</strong> open detections matching these filters, up to #{{.Body.Bulk.UpTo}}. Detections that arrive after this page was loaded are not included. This cannot be undone and does not change any alert or host state.</p>
+    <button type="submit" class="danger" data-testid="events-bulk-submit">Acknowledge all {{.Body.Bulk.Expected}}</button>
+  </form>
+</details>
+{{end}}
+
+{{if .Body.Empty}}
+<div class="card" data-testid="events-empty">No detections have been reported yet.</div>
+{{else if not .Body.Rows}}
+<div class="card" data-testid="events-no-match">No detection matches the filters.</div>
+{{else}}
+<table data-testid="events-table">
+  <thead><tr><th>Detected</th><th>Host</th><th>Signature</th><th>Path</th><th></th><th>Source</th><th>Status</th>{{if .Body.IsAdmin}}<th></th>{{end}}</tr></thead>
+  <tbody>
+  {{range .Body.Rows}}{{template "event_row" .}}{{end}}
+  </tbody>
+</table>
+<p class="filters inline">
+  {{if .Body.Newest}}<a href="{{.Body.Newest}}" data-testid="events-newest">Newest</a>{{end}}
+  {{if .Body.Older}}<a href="{{.Body.Older}}" data-testid="events-older">Older</a>{{end}}
+</p>
+{{end}}
+{{end}}

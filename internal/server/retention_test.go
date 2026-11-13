@@ -50,8 +50,8 @@ func TestRetentionRunner(t *testing.T) {
 		ts   time.Time
 		recv time.Time
 	}{
-		{"/srv/MARKER-OLD", old, old},                                   // arrived 400 days ago: pruned
-		{"/srv/MARKER-SPOOLED", old, clk.Now().Add(-24 * time.Hour)},    // old ts, arrived yesterday: kept
+		{"/srv/MARKER-OLD", old, old},                                  // arrived 400 days ago: pruned
+		{"/srv/MARKER-SPOOLED", old, clk.Now().Add(-24 * time.Hour)},   // old ts, arrived yesterday: kept
 		{"/srv/MARKER-RECENT", clk.Now(), clk.Now().Add(-time.Minute)}, // kept
 	} {
 		if _, err := st.RecordEvent(ctx, store.EventRecord{HostID: h.ID, ReceivedAt: c.recv,

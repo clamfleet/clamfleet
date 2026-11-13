@@ -30,6 +30,7 @@
   {{if .Principal}}
   <nav class="inline">
     <a href="/" data-testid="nav-fleet"{{if eq .Nav "fleet"}} class="current"{{end}}>Fleet</a>
+    <a href="/events" data-testid="nav-events"{{if eq .Nav "events"}} class="current"{{end}}>Detections{{if .OpenKnown}} <span class="badge {{if .OpenEvents}}CRIT{{else}}pending{{end}}" data-testid="nav-events-count">{{.OpenEvents}}</span>{{end}}</a>
     {{if eq .Principal.Role "admin"}}<a href="/admin/hosts" data-testid="nav-admin"{{if eq .Nav "admin"}} class="current"{{end}}>Hosts</a>
     <a href="/admin/alerts" data-testid="nav-alerts"{{if eq .Nav "alerts"}} class="current"{{end}}>Alerts</a>{{end}}
     <a href="/account" data-testid="nav-account"{{if eq .Nav "account"}} class="current"{{end}}>Account</a>

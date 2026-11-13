@@ -30,6 +30,7 @@ import (
 	"log/slog"
 	"net/http"
 	"path"
+	"strconv"
 	"strings"
 	"time"
 
@@ -99,11 +100,13 @@ func New(d Deps) *Web {
 	w := &Web{Deps: d, pages: map[string]*template.Template{}}
 	funcs := template.FuncMap{
 		"lower": strings.ToLower,
-		"list":  func(items ...string) []string { return items },
+		// num formats a count with thousands separators ("1,234").
+		"num":  formatCount,
+		"list": func(items ...string) []string { return items },
 		// actions builds the data of the shared host_actions template.
 		"actions": func(name string, hasToken bool, csrf string) hostAction { return hostAction{name, hasToken, csrf} },
 	}
-	for _, p := range []string{"login", "login_totp", "fleet", "host", "admin_hosts", "token_once", "account", "account_totp", "totp_setup", "recovery_codes", "admin_alerts", "alert_target", "secret_once", "alert_test_result", "error"} {
+	for _, p := range []string{"login", "login_totp", "fleet", "host", "admin_hosts", "token_once", "account", "account_totp", "totp_setup", "recovery_codes", "admin_alerts", "alert_target", "secret_once", "alert_test_result", "events", "error"} {
 		t := template.New(p).Funcs(funcs)
 		files := []string{"templates/layout.html", "templates/" + p + ".html"}
 		if p == "fleet" {
@@ -114,6 +117,9 @@ func New(d Deps) *Web {
 		}
 		if p == "host" || p == "admin_hosts" {
 			files = append(files, "templates/host_actions.html")
+		}
+		if p == "host" || p == "events" {
+			files = append(files, "templates/event_row.html")
 		}
 		w.pages[p] = template.Must(t.ParseFS(templateFS, files...))
 	}
@@ -135,6 +141,9 @@ func (w *Web) Handlers() map[string]http.HandlerFunc {
 		"GET /{$}":                                w.fleet,
 		"GET /fleet/rows":                         w.fleetRows,
 		"GET /hosts/{name}":                       w.host,
+		"GET /events":                             w.eventsPage,
+		"POST /events/{id}/ack":                   w.ackEvent,
+		"POST /events/ack":                        w.ackEvents,
 		"GET /admin/hosts":                        w.adminHosts,
 		"POST /admin/hosts":                       w.adminRegister,
 		"POST /admin/hosts/{name}/rotate-token":   w.adminRotate,
@@ -169,6 +178,11 @@ type base struct {
 	SourceURL string
 	Notice    string // a success message
 	Error     string // an error message
+	// OpenEvents is the nav badge: the number of unacknowledged detections.
+	// OpenKnown is false when the count could not be read: the badge is then
+	// left out rather than showing a wrong number.
+	OpenEvents int64
+	OpenKnown  bool
 }
 
 // view is what a page template receives: the layout fields promoted from base
@@ -185,8 +199,32 @@ func (w *Web) newView(r *http.Request, title, nav string, body any) *view {
 	if p, ok := webauth.FromContext(r.Context()); ok {
 		v.Principal, v.CSRF = &p, p.CSRFToken()
 		v.Notice = recoveryNotice(r)
+		// One cheap count (a partial index) per page, for the nav badge.
+		if n, err := w.Store.CountOpenEvents(r.Context()); err == nil {
+			v.OpenEvents, v.OpenKnown = n, true
+		}
 	}
 	return v
+}
+
+// formatCount renders n with thousands separators.
+func formatCount(n int64) string {
+	s := strconv.FormatInt(n, 10)
+	neg := strings.HasPrefix(s, "-")
+	if neg {
+		s = s[1:]
+	}
+	var b strings.Builder
+	for i, c := range s {
+		if i > 0 && (len(s)-i)%3 == 0 {
+			b.WriteByte(',')
+		}
+		b.WriteRune(c)
+	}
+	if neg {
+		return "-" + b.String()
+	}
+	return b.String()
 }
 
 // render executes page into a buffer first, so a template error yields a clean
