@@ -192,7 +192,32 @@ func runRun(ctx context.Context, args []string, stderr io.Writer) int {
 		log.Info("report sent", "server", cfg.Server)
 		return exitOK
 	}
-	log.Info("agent started", "server", cfg.Server, "interval", cfg.Interval.String(), "version", version.Version)
+	// The service owns the spool: it refuses to start on a spool it cannot trust
+	// (missing, a symlink, not ours, world-writable) and takes the single-instance
+	// lock, so two services never drain the same directory.
+	for _, k := range []string{"SPOOL_DIR", "SPOOL_MAX_MB", "SPOOL_MAX_EVENT_DAYS"} {
+		if _, ok := os.LookupEnv(agent.EnvPrefix + k); ok {
+			// The event command runs as clamd's user with no such variable, so it
+			// would use the file's value while this service used the override.
+			log.Warn(agent.EnvPrefix + k + " is set in the environment, but the event command run by clamd cannot see it: set the spool keys in the config file")
+		}
+	}
+	queue, err := agent.OpenSpoolForRun(agent.SpoolOptions{
+		Dir: cfg.Spool.Dir, MaxBytes: int64(cfg.Spool.MaxMB) << 20,
+		MaxEventAge: time.Duration(cfg.Spool.MaxEventDays) * 24 * time.Hour,
+		AgentUID:    os.Getuid(), Now: time.Now, Log: log,
+	})
+	if err != nil {
+		log.Error("cannot open the spool", "dir", cfg.Spool.Dir, "error", err.Error())
+		return exitError
+	}
+	defer queue.Close()
+	r.Queue, r.Now = queue, time.Now
+	r.Drain = &agent.Drainer{
+		Q: queue, Send: sender.Send, Now: time.Now, Log: log,
+		MaxEventAge: time.Duration(cfg.Spool.MaxEventDays) * 24 * time.Hour,
+	}
+	log.Info("agent started", "server", cfg.Server, "interval", cfg.Interval.String(), "version", version.Version, "spool", cfg.Spool.Dir)
 	if err := r.Loop(ctx); err != nil {
 		log.Error("agent stopped", "error", err.Error())
 		return exitError

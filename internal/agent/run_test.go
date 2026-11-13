@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -68,13 +69,37 @@ func TestOnce(t *testing.T) {
 	}
 }
 
-func TestLoopSendsImmediatelyThenPerTickAndSurvivesFailures(t *testing.T) {
-	sent := make(chan error, 10)
+// loopRunner builds a Runner whose Loop writes to a real spool and sends
+// through a Drainer on the real clock (the lanes' 1 s backoff is real here).
+func loopRunner(t *testing.T, send func(ctx context.Context, path string, body []byte) ([]byte, error)) (*Runner, *testSpool, chan time.Time, *syncBuf) {
+	t.Helper()
+	ts := newTestSpool(t)
+	ts.Opts.Now = time.Now
+	logs := &syncBuf{}
+	log := slog.New(slog.NewJSONHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	ts.Opts.Log = log
+	q := ts.OpenRun(t)
+	r, tick, _ := testRunner(t, send)
+	r.Log = log
+	r.Collect = func(context.Context) (proto.Report, []Problem, error) {
+		return proto.Report{Schema: 1, Host: "app01", Tags: []string{}, TS: time.Now().UTC()}, nil, nil
+	}
+	r.Queue, r.Now = q, time.Now
+	r.Drain = &Drainer{Q: q, Send: send, Now: time.Now, Log: log, MaxEventAge: 365 * 24 * time.Hour, Poll: 5 * time.Millisecond}
+	return r, ts, tick, logs
+}
+
+func TestLoopSpoolsImmediatelyThenPerTickAndSurvivesFailures(t *testing.T) {
+	sent := make(chan error, 20)
+	var mu sync.Mutex
 	calls := 0
-	r, tick, logs := testRunner(t, func(context.Context, string, []byte) ([]byte, error) {
+	r, ts, tick, logs := loopRunner(t, func(context.Context, string, []byte) ([]byte, error) {
+		mu.Lock()
 		calls++
+		n := calls
+		mu.Unlock()
 		var err error
-		if calls == 2 {
+		if n == 2 {
 			err = &SendError{Class: ClassUnauthorized, Status: 401}
 		}
 		sent <- err
@@ -99,12 +124,15 @@ func TestLoopSendsImmediatelyThenPerTickAndSurvivesFailures(t *testing.T) {
 	select {
 	case <-sent:
 		t.Fatal("sent twice without a tick")
-	case <-time.After(50 * time.Millisecond):
+	case <-time.After(100 * time.Millisecond):
 	}
 	tick <- time.Now()
 	expect("tick 1 (fails)", true)
+	// The failed report stays in the spool and is retried after the backoff
+	// (1 s), so a tick that comes while the server is down loses nothing.
 	tick <- time.Now()
-	expect("tick 2 (the loop survived the failure)", false)
+	expect("retry of the failed report, or the next one", false)
+	expect("the other report", false)
 
 	cancel()
 	select {
@@ -118,13 +146,17 @@ func TestLoopSendsImmediatelyThenPerTickAndSurvivesFailures(t *testing.T) {
 	if !strings.Contains(logs.String(), `"class":"unauthorized"`) || !strings.Contains(logs.String(), "report not sent") {
 		t.Fatalf("failure not logged with its class:\n%s", logs.String())
 	}
+	if left := ts.names(t, dirReports); len(left) != 0 {
+		t.Fatalf("reports left in the spool after delivery: %v", left)
+	}
 }
 
 // Cancelling while a send is in flight must stop the loop, not log a bogus failure.
 func TestLoopStopsWhenCancelledDuringSend(t *testing.T) {
 	started := make(chan struct{})
-	r, _, logs := testRunner(t, func(ctx context.Context, _ string, _ []byte) ([]byte, error) {
-		close(started)
+	var once sync.Once
+	r, _, _, logs := loopRunner(t, func(ctx context.Context, _ string, _ []byte) ([]byte, error) {
+		once.Do(func() { close(started) })
 		<-ctx.Done()
 		return nil, &SendError{Class: ClassNetwork, Err: ctx.Err()}
 	})
@@ -143,5 +175,30 @@ func TestLoopStopsWhenCancelledDuringSend(t *testing.T) {
 	}
 	if strings.Contains(logs.String(), "report not sent") {
 		t.Fatalf("a shutdown was logged as a failed send:\n%s", logs.String())
+	}
+}
+
+// A collect failure is logged with its class and does not stop the loop.
+func TestLoopSurvivesCollectFailure(t *testing.T) {
+	r, _, tick, logs := loopRunner(t, func(context.Context, string, []byte) ([]byte, error) { return nil, nil })
+	var fails atomic.Bool
+	fails.Store(true)
+	r.Collect = func(context.Context) (proto.Report, []Problem, error) {
+		if fails.Load() {
+			return proto.Report{}, nil, errors.New("boom")
+		}
+		return proto.Report{Schema: 1, Host: "h", Tags: []string{}, TS: time.Now()}, nil, nil
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- r.Loop(ctx) }()
+	time.Sleep(50 * time.Millisecond)
+	fails.Store(false)
+	tick <- time.Now()
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+	<-done
+	if !strings.Contains(logs.String(), `"class":"collect"`) {
+		t.Fatalf("collect failure not logged:\n%s", logs.String())
 	}
 }
