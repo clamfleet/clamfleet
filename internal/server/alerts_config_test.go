@@ -5,6 +5,8 @@ package server
 
 import (
 	"github.com/clamfleet/clamfleet/internal/alert"
+	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -158,5 +160,22 @@ smtp: {host: relay.example, port: 465, tls: tls, from: "ClamFleet <cf@example.or
 func TestTestSendCapIsBelowTheWriteTimeout(t *testing.T) {
 	if alert.MaxTestSend >= writeTimeout {
 		t.Fatalf("alert.MaxTestSend %v must be below the write timeout %v", alert.MaxTestSend, writeTimeout)
+	}
+}
+
+// smtp.password_file keeps leading and trailing spaces of the password.
+func TestBuildAlertsKeepsPasswordSpaces(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "pw")
+	if err := os.WriteFile(p, []byte(" pass word \n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := DefaultConfig()
+	cfg.SMTP.Host, cfg.SMTP.From, cfg.SMTP.Username, cfg.SMTP.PasswordFile = "relay.example", "cf@example.org", "u", p
+	a, err := BuildAlerts(cfg, nil, nil, time.Now, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := a.Dispatcher.Mail.(*alert.SMTPSender).Config.Password; got != " pass word " {
+		t.Fatalf("password %q", got)
 	}
 }

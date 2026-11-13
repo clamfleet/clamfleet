@@ -91,7 +91,7 @@ func BuildAlerts(cfg Config, st store.AlertStore, keys *secrets.Keyring, now fun
 		}
 		password := ""
 		if m.PasswordFile != "" {
-			if password, err = secrets.ReadProtectedFile(m.PasswordFile, "smtp.password_file"); err != nil {
+			if password, err = secrets.ReadProtectedFileExact(m.PasswordFile, "smtp.password_file"); err != nil {
 				return nil, err
 			}
 		}

@@ -195,6 +195,26 @@ func LoadFile(path string) (*Keyring, error) {
 	return ring, nil
 }
 
+// ReadProtectedFileExact is ReadProtectedFile for a password: only a trailing
+// line end ("\n" or "\r\n") is removed, so leading and trailing spaces that
+// are part of the password survive. An empty result is an error.
+func ReadProtectedFileExact(path, what string) (string, error) {
+	f, err := openProtected(path, what)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	b, err := io.ReadAll(io.LimitReader(f, maxKeyFile))
+	if err != nil {
+		return "", fmt.Errorf("%s: %w", what, err)
+	}
+	v := strings.TrimSuffix(strings.TrimSuffix(string(b), "\n"), "\r")
+	if v == "" {
+		return "", fmt.Errorf("%s %s is empty", what, path)
+	}
+	return v, nil
+}
+
 // ReadProtectedFile reads a small secret file (an SMTP password, a webhook URL)
 // under the permission rule of the key file. what names the file in errors
 // ("smtp.password_file"). At most 64 KiB are read; leading and trailing

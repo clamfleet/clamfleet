@@ -299,3 +299,19 @@ func TestReadProtectedFileRefusesSymlinkMissingAndEmpty(t *testing.T) {
 		t.Error("an empty file was accepted")
 	}
 }
+
+// An SMTP password may begin or end with spaces: only the final line end goes.
+func TestReadProtectedFileExactKeepsSpaces(t *testing.T) {
+	for in, want := range map[string]string{" pw \n": " pw ", "pw\r\n": "pw", "pw": "pw", "  \n": "  ", "a\n\n": "a\n"} {
+		got, err := ReadProtectedFileExact(writeSecretFile(t, 0o600, in), "smtp.password_file")
+		if err != nil || got != want {
+			t.Errorf("%q: %q %v, want %q", in, got, err, want)
+		}
+	}
+	if _, err := ReadProtectedFileExact(writeSecretFile(t, 0o600, "\n"), "f"); err == nil {
+		t.Error("an empty password was accepted")
+	}
+	if _, err := ReadProtectedFileExact(writeSecretFile(t, 0o644, "pw"), "f"); err == nil {
+		t.Error("permissions are not checked")
+	}
+}
