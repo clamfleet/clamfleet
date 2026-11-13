@@ -174,6 +174,9 @@ const (
 var (
 	// ErrTargetExists: an alert target with that name exists.
 	ErrTargetExists = errors.New("alert target already exists")
+	// ErrChangedMeanwhile: the target's stored configuration or secret is no longer
+	// what the caller read (another admin edited or rotated it). Nothing was written.
+	ErrChangedMeanwhile = errors.New("alert target changed meanwhile")
 	// ErrLeaseLost: the delivery is no longer claimed by the caller (its lease
 	// expired and it was claimed again, or it was cancelled). Nothing about the
 	// delivery was written.
@@ -218,6 +221,14 @@ type NewAlertTarget struct {
 	Enabled          bool
 }
 
+// TargetSnapshot is the part of a target a read-modify-write must still find
+// unchanged: the stored config and the sealed secret. Updates and key rotations
+// compare it inside their transaction (compare-and-swap, as the re-seal does).
+type TargetSnapshot struct {
+	Config []byte
+	Sealed []byte
+}
+
 // AlertTargetUpdate is the full desired non-secret state of a target.
 type AlertTargetUpdate struct {
 	Config           []byte
@@ -226,6 +237,9 @@ type AlertTargetUpdate struct {
 	SendStateChanges bool
 	SendDetections   bool
 	Enabled          bool
+	// Expect, when set, makes the update conditional on the stored config and
+	// secret still being these (ErrChangedMeanwhile otherwise).
+	Expect *TargetSnapshot
 }
 
 // Cancelled reports what an update switched off.
@@ -350,9 +364,10 @@ type AlertStore interface {
 	// log row, and the notify state goes when state changes are turned off or
 	// the target is disabled. The audit detail names the changed fields only.
 	UpdateAlertTarget(ctx context.Context, name string, u AlertTargetUpdate, seal func(id int64) ([]byte, error), now time.Time, a Audit) (Cancelled, error)
-	// RotateAlertSecret replaces the sealed secret only (a new signing key) and
+	// RotateAlertSecret replaces the sealed secret only (a new signing key), only
+	// while the stored config and secret still equal expect (ErrChangedMeanwhile), and
 	// audits alert_target.secret.rotate. ErrNotFound for an unknown target.
-	RotateAlertSecret(ctx context.Context, name string, seal func(id int64) ([]byte, error), now time.Time, a Audit) error
+	RotateAlertSecret(ctx context.Context, name string, expect TargetSnapshot, seal func(id int64) ([]byte, error), now time.Time, a Audit) error
 	// DeleteAlertTarget cascades the target's deliveries and notify state; its
 	// log rows stay (target id NULL, name snapshot).
 	DeleteAlertTarget(ctx context.Context, name string, now time.Time, a Audit) error

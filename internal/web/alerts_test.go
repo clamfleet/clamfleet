@@ -13,6 +13,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"html"
 	"io"
@@ -842,3 +843,88 @@ func TestTestSendIsCappedBelowTheWriteTimeout(t *testing.T) {
 		t.Fatal("the failed test was not logged")
 	}
 }
+
+// racyStore simulates another admin acting between the console's read of a target
+// and its write: after the first AlertTarget read it runs `during` once.
+type racyStore struct {
+	store.Store
+	during func()
+	armed  *atomic.Bool
+}
+
+func (r racyStore) AlertTarget(ctx context.Context, name string) (store.AlertTarget, error) {
+	t, err := r.Store.AlertTarget(ctx, name)
+	if err == nil && r.armed.Swap(false) {
+		r.during()
+	}
+	return t, err
+}
+
+// Review finding 2 through the router: an update and a rotation interleaved
+// answer 409 "changed by someone else", never a silent overwrite.
+func TestRotateAndUpdateRaceAnswers409(t *testing.T) {
+	rcv := newHookRecv(t)
+	var armed atomic.Bool
+	var inner store.Store
+	var during func()
+	keys := testKeyring(t)
+	e := newReportEnv(t, func(d *server.Deps) {
+		inner = d.Store
+		d.Store = racyStore{d.Store, func() { during() }, &armed}
+		cfg := server.DefaultConfig()
+		cfg.Alert.Webhook.AllowLoopback = true
+		al, err := server.BuildAlerts(cfg, d.Store, keys, d.Now, d.Log)
+		if err != nil {
+			t.Fatal(err)
+		}
+		d.Alerts, d.Keys = al, keys
+	})
+	b, tok := adminBrowser(t, e)
+	createWebhook(t, b, tok, "ops", rcv.url("/h"), nil)
+	secret := func() string {
+		raw, _ := openRaw(e.dbPath)
+		defer raw.Close()
+		var s string
+		raw.QueryRow(`SELECT hex(secret) || config FROM alert_targets WHERE name = 'ops'`).Scan(&s)
+		return s
+	}
+	rotateConcurrently := func() {
+		tg, _ := inner.AlertTarget(context.Background(), "ops")
+		inner.RotateAlertSecret(context.Background(), "ops", store.TargetSnapshot{Config: tg.Config, Sealed: tg.Sealed},
+			func(int64) ([]byte, error) { return []byte("other-admin"), nil }, e.clock(), cliAudit)
+	}
+
+	// A URL change races a rotation by another admin.
+	during = rotateConcurrently
+	armed.Store(true)
+	p := b.post("/admin/alerts/ops", url.Values{"csrf_token": {tok}, "url": {rcv.url("/new")}, "min_severity": {"WARN"}, "state_changes": {"1"}, "detections": {"1"}, "enabled": {"1"}})
+	if p.status != 409 || !strings.Contains(p.body, "changed by someone else") {
+		t.Fatalf("update racing a rotation: %d\n%s", p.status, p.body)
+	}
+	if got := secret(); !strings.HasPrefix(got, hexOf("other-admin")) {
+		t.Fatalf("the update overwrote the other admin's rotation: %s", got)
+	}
+	// A rotation races a URL change by another admin.
+	during = func() {
+		tg, _ := inner.AlertTarget(context.Background(), "ops")
+		inner.UpdateAlertTarget(context.Background(), "ops", store.AlertTargetUpdate{Config: []byte(`{"url_display":"theirs","plaintext":true}`), MinSeverity: "WARN",
+			SendStateChanges: true, SendDetections: true, Enabled: true}, func(int64) ([]byte, error) { return []byte("their-url"), nil }, e.clock(), cliAudit)
+		_ = tg
+	}
+	// "other-admin" is not a real sealed blob, so the rotate would answer 409 (cannot open) on its own; give the
+	// target a real secret first through the console.
+	if p := b.post("/admin/alerts/ops", url.Values{"csrf_token": {tok}, "url": {rcv.url("/real")}, "min_severity": {"WARN"}, "state_changes": {"1"}, "detections": {"1"}, "enabled": {"1"}}); p.status != 200 && p.status != 303 {
+		t.Fatalf("re-entering the URL: %d", p.status)
+	}
+	armed.Store(true)
+	before := secret()
+	p = b.post("/admin/alerts/ops/rotate-secret", url.Values{"csrf_token": {tok}})
+	if p.status != 409 || !strings.Contains(p.body, "changed by someone else") {
+		t.Fatalf("rotation racing an update: %d\n%s", p.status, p.body)
+	}
+	if got := secret(); got == before || !strings.HasPrefix(got, hexOf("their-url")) {
+		t.Fatalf("the rotation overwrote the other admin's update: %s", got)
+	}
+}
+
+func hexOf(s string) string { return strings.ToUpper(hex.EncodeToString([]byte(s))) }

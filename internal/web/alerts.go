@@ -458,7 +458,7 @@ func (w *Web) updateTarget(rw http.ResponseWriter, r *http.Request) {
 		return
 	}
 	u := store.AlertTargetUpdate{Config: old.Config, MinSeverity: in.minSev, TagFilter: tags,
-		SendStateChanges: in.state, SendDetections: in.detections, Enabled: in.enabled}
+		SendStateChanges: in.state, SendDetections: in.detections, Enabled: in.enabled, Expect: &store.TargetSnapshot{Config: old.Config, Sealed: old.Sealed}}
 	var seal func(id int64) ([]byte, error)
 	newKey := "" // set when a new signing key replaces the old one
 	switch old.Type {
@@ -506,6 +506,10 @@ func (w *Web) updateTarget(rw http.ResponseWriter, r *http.Request) {
 			w.errorPage(rw, r, http.StatusNotFound)
 			return
 		}
+		if errors.Is(err, store.ErrChangedMeanwhile) {
+			w.changedMeanwhile(rw, r, old.Name)
+			return
+		}
 		w.Log.Error("alert target: cannot update", "target", old.Name, "error", err.Error())
 		w.errorPage(rw, r, http.StatusInternalServerError)
 		return
@@ -549,7 +553,11 @@ func (w *Web) rotateSecret(rw http.ResponseWriter, r *http.Request) {
 	}
 	sec.SigningKey = key
 	p, audit := w.actor(r)
-	if err := w.Store.RotateAlertSecret(r.Context(), t.Name, w.sealer(sec), w.Now(), audit); err != nil {
+	if err := w.Store.RotateAlertSecret(r.Context(), t.Name, snapshotOf(t), w.sealer(sec), w.Now(), audit); err != nil {
+		if errors.Is(err, store.ErrChangedMeanwhile) {
+			w.changedMeanwhile(rw, r, t.Name)
+			return
+		}
 		w.Log.Error("alert target: cannot rotate", "target", t.Name, "error", err.Error())
 		w.errorPage(rw, r, http.StatusInternalServerError)
 		return
@@ -664,4 +672,20 @@ func mustJSON(v any) []byte {
 		panic(err)
 	}
 	return b
+}
+
+func snapshotOf(t store.AlertTarget) store.TargetSnapshot {
+	return store.TargetSnapshot{Config: t.Config, Sealed: t.Sealed}
+}
+
+// changedMeanwhile answers 409 when another admin edited or rotated the target
+// between this request's read and its write: nothing was written, and the page
+// is re-read so the admin sees the current state before trying again.
+func (w *Web) changedMeanwhile(rw http.ResponseWriter, r *http.Request, name string) {
+	t, err := w.Store.AlertTarget(r.Context(), name)
+	if err != nil {
+		w.errorPage(rw, r, http.StatusConflict)
+		return
+	}
+	w.renderEdit(rw, r, t, http.StatusConflict, "This target was changed by someone else while you were editing it, so nothing was saved. Check the settings below and try again.")
 }

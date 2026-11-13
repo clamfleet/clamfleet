@@ -19,6 +19,7 @@
 package sqlite
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"database/sql"
@@ -191,6 +192,9 @@ func (s *Store) UpdateAlertTarget(ctx context.Context, name string, u store.Aler
 		if err != nil {
 			return notFound(err)
 		}
+		if u.Expect != nil && !snapshotMatches(old, *u.Expect) {
+			return store.ErrChangedMeanwhile
+		}
 		if err := validTargetFields(old.Type, u.MinSeverity); err != nil {
 			return err
 		}
@@ -279,8 +283,13 @@ func (s *Store) UpdateAlertTarget(ctx context.Context, name string, u store.Aler
 	return res, err
 }
 
+// snapshotMatches is the compare of the compare-and-swap of updates and rotations.
+func snapshotMatches(t sqlcdb.AlertTarget, e store.TargetSnapshot) bool {
+	return t.Config == string(e.Config) && bytes.Equal(t.Secret, e.Sealed)
+}
+
 // RotateAlertSecret implements store.AlertStore.
-func (s *Store) RotateAlertSecret(ctx context.Context, name string, seal func(id int64) ([]byte, error), now time.Time, a store.Audit) error {
+func (s *Store) RotateAlertSecret(ctx context.Context, name string, expect store.TargetSnapshot, seal func(id int64) ([]byte, error), now time.Time, a store.Audit) error {
 	name = lower(name)
 	return s.inTx(ctx, func(q *sqlcdb.Queries) error {
 		t, err := q.AlertTargetByName(ctx, name)
@@ -289,6 +298,9 @@ func (s *Store) RotateAlertSecret(ctx context.Context, name string, seal func(id
 		}
 		if t.Type != store.TargetTypeWebhook {
 			return fmt.Errorf("target %q has no signing key", name)
+		}
+		if !snapshotMatches(t, expect) {
+			return store.ErrChangedMeanwhile
 		}
 		blob, err := seal(t.ID)
 		if err != nil {

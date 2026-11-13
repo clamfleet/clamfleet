@@ -115,14 +115,14 @@ func TestAlertTargetCreateUpdateDeleteAndAudit(t *testing.T) {
 	if _, err := s.UpdateAlertTarget(ctx, "nope", store.AlertTargetUpdate{MinSeverity: "WARN"}, nil, t0, cli); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("%v", err)
 	}
-	if err := s.RotateAlertSecret(ctx, "ops", func(id int64) ([]byte, error) { return []byte("rotated"), nil }, t0, cli); err != nil {
+	if err := s.RotateAlertSecret(ctx, "ops", store.TargetSnapshot{Config: got.Config, Sealed: got.Sealed}, func(id int64) ([]byte, error) { return []byte("rotated"), nil }, t0, cli); err != nil {
 		t.Fatal(err)
 	}
 	if got, _ = s.AlertTarget(ctx, "ops"); string(got.Sealed) != "rotated" {
 		t.Fatalf("%q", got.Sealed)
 	}
 	em := newTarget(t, s, "mail", "email", nil)
-	if err := s.RotateAlertSecret(ctx, em.Name, func(int64) ([]byte, error) { return nil, nil }, t0, cli); err == nil {
+	if err := s.RotateAlertSecret(ctx, em.Name, store.TargetSnapshot{Config: em.Config}, func(int64) ([]byte, error) { return nil, nil }, t0, cli); err == nil {
 		t.Fatal("an email target has no key to rotate")
 	}
 	if err := s.DeleteAlertTarget(ctx, "ops", t0, cli); err != nil {
@@ -935,5 +935,50 @@ func TestResealSecretsIsOneTransaction(t *testing.T) {
 	}
 	if count(t, s, `SELECT count(*) FROM audit_log WHERE action = 'secrets.reencrypt' AND detail LIKE '%"totp":"1"%' AND detail LIKE '%"alert_target":"1"%' AND detail LIKE '%"conflicts":"1"%'`) != 1 {
 		t.Fatal("the audit row must carry the counts and the conflicts")
+	}
+}
+
+// Review finding 2: a read-modify-write must still find what it read. A rotation
+// and an update that both started from the same snapshot cannot both win.
+func TestAlertTargetUpdateAndRotateAreCompareAndSwap(t *testing.T) {
+	ctx := context.Background()
+	s := openTemp(t)
+	tg := newTarget(t, s, "ops", "webhook", nil)
+	snap := store.TargetSnapshot{Config: tg.Config, Sealed: tg.Sealed}
+	upd := store.AlertTargetUpdate{Config: []byte(`{"url_display":"new"}`), MinSeverity: "CRIT", SendStateChanges: true, SendDetections: true, Enabled: true, Expect: &snap}
+	newSecret := func(id int64) ([]byte, error) { return []byte("replaced"), nil }
+
+	// 1. rotate wins; the update from the same snapshot is refused and changes nothing.
+	if err := s.RotateAlertSecret(ctx, "ops", snap, newSecret, t0, cli); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.UpdateAlertTarget(ctx, "ops", upd, nil, t0, cli); !errors.Is(err, store.ErrChangedMeanwhile) {
+		t.Fatalf("stale update after a rotation: %v", err)
+	}
+	got, _ := s.AlertTarget(ctx, "ops")
+	if got.MinSeverity != "WARN" || string(got.Config) != string(tg.Config) || string(got.Sealed) != "replaced" {
+		t.Fatalf("a refused update wrote: %+v", got)
+	}
+	// 2. update (new URL) wins; a rotation from the older snapshot is refused and does not clobber it.
+	snap2 := store.TargetSnapshot{Config: got.Config, Sealed: got.Sealed}
+	if _, err := s.UpdateAlertTarget(ctx, "ops", store.AlertTargetUpdate{Config: []byte(`{"url_display":"new"}`), MinSeverity: "WARN", SendStateChanges: true, SendDetections: true, Enabled: true,
+		Expect: &snap2}, func(int64) ([]byte, error) { return []byte("from-update"), nil }, t0, cli); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RotateAlertSecret(ctx, "ops", snap2, newSecret, t0, cli); !errors.Is(err, store.ErrChangedMeanwhile) {
+		t.Fatalf("stale rotation after an update: %v", err)
+	}
+	if got, _ = s.AlertTarget(ctx, "ops"); string(got.Sealed) != "from-update" {
+		t.Fatalf("a refused rotation overwrote the secret: %q", got.Sealed)
+	}
+	// 3. a blank-URL update (config and secret kept) that raced a URL change is refused too.
+	if _, err := s.UpdateAlertTarget(ctx, "ops", store.AlertTargetUpdate{Config: snap2.Config, MinSeverity: "WARN", SendStateChanges: true, SendDetections: true, Enabled: true, Expect: &snap2}, nil, t0, cli); !errors.Is(err, store.ErrChangedMeanwhile) {
+		t.Fatalf("blank-URL update over a newer config: %v", err)
+	}
+	if got, _ = s.AlertTarget(ctx, "ops"); string(got.Config) != `{"url_display":"new"}` {
+		t.Fatalf("the newer config was overwritten: %s", got.Config)
+	}
+	if count(t, s, `SELECT count(*) FROM audit_log WHERE action IN ('alert_target.update','alert_target.secret.rotate')`) != 2 {
+		t.Fatal("a refused change must not be audited")
 	}
 }
