@@ -432,6 +432,31 @@ func TestReaderBoundedAndOwnership(t *testing.T) {
 	}
 }
 
+// A 10 MiB file in spool/events must cost at most limit+1 bytes of reading, not 10 MiB:
+// the bound is what keeps clamd's group from making the agent allocate without limit.
+func TestReaderNeverReadsMoreThanItsLimit(t *testing.T) {
+	ts := newTestSpool(t)
+	q := ts.OpenRun(t)
+	n := itemFileName(ts.Clock, idA, 0)
+	f, err := os.Create(filepath.Join(ts.Dir, dirEvents, n))
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Truncate(10 << 20) // sparse: it costs no disk, and reads back as zeros
+	f.Close()
+	ts.FS.mu.Lock()
+	ts.FS.bytesRead = 0
+	ts.FS.mu.Unlock()
+	if _, _, err := q.ReadItem(dirEvents, n, maxEventFileBytes); !errors.Is(err, errTooLarge) {
+		t.Fatalf("err = %v, want errTooLarge", err)
+	}
+	ts.FS.mu.Lock()
+	defer ts.FS.mu.Unlock()
+	if ts.FS.bytesRead > maxEventFileBytes+1 {
+		t.Fatalf("read %d bytes of an oversized item, want at most %d", ts.FS.bytesRead, maxEventFileBytes+1)
+	}
+}
+
 func TestEventSideRefusesSymlinkedSpool(t *testing.T) {
 	ts := newTestSpool(t)
 	ts.OpenRun(t).Close()

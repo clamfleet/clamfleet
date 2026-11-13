@@ -33,6 +33,8 @@ type recFS struct {
 	// syncDelay is slept in a file Sync (a slow disk).
 	syncDelay time.Duration
 	readDirs  int
+	// bytesRead counts the bytes returned by file Reads (the reader's allocation bound).
+	bytesRead int64
 }
 
 func (r *recFS) rec(op, name string) error {
@@ -159,6 +161,14 @@ func (f *recFile) Chmod(m fs.FileMode) error {
 		return err
 	}
 	return f.spoolFile.Chmod(m)
+}
+
+func (f *recFile) Read(p []byte) (int, error) {
+	n, err := f.spoolFile.Read(p)
+	f.r.mu.Lock()
+	f.r.bytesRead += int64(n)
+	f.r.mu.Unlock()
+	return n, err
 }
 
 func (f *recFile) Write(p []byte) (int, error) {
