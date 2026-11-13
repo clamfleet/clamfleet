@@ -251,3 +251,66 @@ func TestServePassesTheAlertSettingsToTheConsole(t *testing.T) {
 		t.Fatalf("the console did not get the alert settings from serve: %d\n%s", resp.StatusCode, body)
 	}
 }
+
+// Mutation: AfterEvent not wired in serve. The dispatcher's own ticker is 5 s;
+// a new detection must reach the receiver well inside that, because ingest wakes
+// the dispatcher. The POST is made 0.5 s after start-up so the next tick is
+// about 4.5 s away: without the wake the alert arrives after the 2.5 s limit.
+func TestServeWakesTheDispatcherOnANewEvent(t *testing.T) {
+	var mu sync.Mutex
+	var hits []string
+	rcv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		hits = append(hits, string(b))
+		mu.Unlock()
+		w.WriteHeader(204)
+	}))
+	defer rcv.Close()
+	tlsb, err := testtls.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	db, _ := newDB(t)
+	keyPath := writeKeyFile(t, 0o600, newKey(t))
+	seedWebhookTarget(t, db, "ops", rcv.URL+"/hook", loadRing(t, keyPath), nil)
+	srv := startServe(t, tlsb, db, "CLAMFLEET_SERVER_SECRET_KEY_FILE="+keyPath, "CLAMFLEET_SERVER_ALERT_WEBHOOK_ALLOW_LOOPBACK=true")
+	reg := runServer(t, srv.env, "host", "add", "web01")
+	if reg.code != 0 {
+		t.Fatal(reg)
+	}
+	time.Sleep(500 * time.Millisecond)
+
+	ca, _ := os.ReadFile(tlsb.CA)
+	pool := x509.NewCertPool()
+	pool.AppendCertsFromPEM(ca)
+	c := &http.Client{Timeout: 10 * time.Second, Transport: &http.Transport{TLSClientConfig: &ctls.Config{RootCAs: pool}}}
+	body := `{"schema":1,"id":"` + strings.Repeat("a", 32) + `","host":"web01","ts":"` + time.Now().UTC().Format(time.RFC3339) +
+		`","path":"/srv/eicar","signature":"Win.Test.EICAR_HDB-1","source":"clamd"}`
+	req, _ := http.NewRequest("POST", "https://"+srv.addr+"/v1/event", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(reg.stdout))
+	req.Header.Set("Content-Type", "application/json")
+	posted := time.Now()
+	resp, err := c.Do(req)
+	if err != nil || resp.StatusCode != 202 {
+		t.Fatalf("post: %v %v", resp, err)
+	}
+	resp.Body.Close()
+	for {
+		mu.Lock()
+		n := len(hits)
+		mu.Unlock()
+		if n > 0 {
+			break
+		}
+		if time.Since(posted) > 2500*time.Millisecond {
+			t.Fatalf("no alert within 2.5 s of the event: the dispatcher was not woken\n%s", srv.stderr.String())
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(hits) != 1 || !strings.Contains(hits[0], `"kind":"detection"`) {
+		t.Fatalf("%v", hits)
+	}
+}

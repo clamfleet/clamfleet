@@ -602,55 +602,99 @@ func (s *Store) ExpireLeases(ctx context.Context, now time.Time, all bool) (expi
 	return expired, exhausted, err
 }
 
+// dueRow is the common shape of the two due queries' rows.
+type dueRow struct {
+	ID            int64
+	AlertID       string
+	TargetID      int64
+	HostID        int64
+	Recipient     string
+	StateChangeID sql.NullInt64
+	EventID       sql.NullInt64
+	Kind          string
+	Payload       string
+	Attempts      int64
+	HostName      string
+}
+
 // ClaimDeliveries implements store.AlertStore.
-func (s *Store) ClaimDeliveries(ctx context.Context, now time.Time, lease time.Duration, max int) ([]store.ClaimedDelivery, error) {
-	if max <= 0 {
+func (s *Store) ClaimDeliveries(ctx context.Context, now time.Time, lease time.Duration, lim store.ClaimLimits) ([]store.ClaimedDelivery, error) {
+	if lim.Total <= 0 {
 		return nil, nil
 	}
 	var out []store.ClaimedDelivery
 	err := s.inTx(ctx, func(q *sqlcdb.Queries) error {
 		out = nil
-		rows, err := q.DueDeliveries(ctx, sqlcdb.DueDeliveriesParams{Now: nullInt(now), MaxRows: int64(max)})
+		targets := map[int64]sqlcdb.AlertTarget{}
+		claim := func(rows []dueRow) error {
+			for _, r := range rows {
+				token := make([]byte, 16)
+				if _, err := rand.Read(token); err != nil {
+					return err
+				}
+				n, err := q.ClaimDelivery(ctx, sqlcdb.ClaimDeliveryParams{Token: token, LeaseUntil: nullInt(now.Add(lease)), ID: r.ID})
+				if err != nil {
+					return err
+				}
+				if n == 0 {
+					continue
+				}
+				t, ok := targets[r.TargetID]
+				if !ok {
+					if t, err = q.AlertTargetByID(ctx, r.TargetID); err != nil {
+						return err
+					}
+					targets[r.TargetID] = t
+				}
+				attempt := int(r.Attempts) + 1
+				logID, err := q.InsertAlertLog(ctx, sqlcdb.InsertAlertLogParams{
+					Ts: unix(now), TargetID: sql.NullInt64{Int64: t.ID, Valid: true}, TargetName: t.Name,
+					DeliveryID: sql.NullInt64{Int64: r.ID, Valid: true}, Recipient: nullText(r.Recipient), HostName: nullStr(r.HostName),
+					StateChangeID: r.StateChangeID, EventID: r.EventID, Attempt: sql.NullInt64{Int64: int64(attempt), Valid: true},
+					Status: store.AlertLogAttempting,
+				})
+				if err != nil {
+					return err
+				}
+				out = append(out, store.ClaimedDelivery{
+					ID: r.ID, AlertID: r.AlertID, Target: toTarget(t), HostID: r.HostID, HostName: r.HostName, Recipient: r.Recipient,
+					StateChangeID: ptrInt64(r.StateChangeID), EventID: ptrInt64(r.EventID), Kind: r.Kind, Payload: []byte(r.Payload),
+					Attempt: attempt, Token: token, LogID: logID, ClaimedAt: now,
+				})
+			}
+			return nil
+		}
+		// State alerts first: a CRIT must never wait behind detections.
+		states, err := q.DueStateDeliveries(ctx, sqlcdb.DueStateDeliveriesParams{Now: nullInt(now), MaxRows: int64(lim.Total)})
 		if err != nil {
 			return err
 		}
-		targets := map[int64]sqlcdb.AlertTarget{}
-		for _, r := range rows {
-			token := make([]byte, 16)
-			if _, err := rand.Read(token); err != nil {
-				return err
-			}
-			n, err := q.ClaimDelivery(ctx, sqlcdb.ClaimDeliveryParams{Token: token, LeaseUntil: nullInt(now.Add(lease)), ID: r.ID})
-			if err != nil {
-				return err
-			}
-			if n == 0 {
-				continue
-			}
-			t, ok := targets[r.TargetID]
-			if !ok {
-				if t, err = q.AlertTargetByID(ctx, r.TargetID); err != nil {
-					return err
-				}
-				targets[r.TargetID] = t
-			}
-			attempt := int(r.Attempts) + 1
-			logID, err := q.InsertAlertLog(ctx, sqlcdb.InsertAlertLogParams{
-				Ts: unix(now), TargetID: sql.NullInt64{Int64: t.ID, Valid: true}, TargetName: t.Name,
-				DeliveryID: sql.NullInt64{Int64: r.ID, Valid: true}, Recipient: nullText(r.Recipient), HostName: nullStr(r.HostName),
-				StateChangeID: r.StateChangeID, EventID: r.EventID, Attempt: sql.NullInt64{Int64: int64(attempt), Valid: true},
-				Status: store.AlertLogAttempting,
-			})
-			if err != nil {
-				return err
-			}
-			out = append(out, store.ClaimedDelivery{
-				ID: r.ID, AlertID: r.AlertID, Target: toTarget(t), HostID: r.HostID, HostName: r.HostName, Recipient: r.Recipient,
-				StateChangeID: ptrInt64(r.StateChangeID), EventID: ptrInt64(r.EventID), Kind: r.Kind, Payload: []byte(r.Payload),
-				Attempt: attempt, Token: token, LogID: logID, ClaimedAt: now,
-			})
+		rows := make([]dueRow, 0, len(states))
+		for _, r := range states {
+			rows = append(rows, dueRow(r))
 		}
-		return nil
+		if err := claim(rows); err != nil {
+			return err
+		}
+		// Then detections and summaries in what is left, within the reserve and
+		// the per-target cap.
+		detMax := min(lim.Total-len(out), lim.Detections)
+		if detMax <= 0 {
+			return nil
+		}
+		perTarget := int64(lim.PerTarget)
+		if perTarget <= 0 {
+			perTarget = 1 << 30
+		}
+		dets, err := q.DueDetectionDeliveries(ctx, sqlcdb.DueDetectionDeliveriesParams{Now: nullInt(now), PerTarget: perTarget, MaxRows: int64(detMax)})
+		if err != nil {
+			return err
+		}
+		rows = rows[:0]
+		for _, r := range dets {
+			rows = append(rows, dueRow(r))
+		}
+		return claim(rows)
 	})
 	if err != nil {
 		return nil, err

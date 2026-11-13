@@ -58,6 +58,24 @@ type AlertTarget struct {
 	UpdatedAt        time.Time
 }
 
+// ClaimLimits bound one claim: the dispatcher's capacity rules (milestone 5,
+// section 4.12).
+type ClaimLimits struct {
+	// Total is the number of idle workers: no more than this is claimed.
+	Total int
+	// Detections is how many of them may be detections or summaries. The
+	// dispatcher keeps one worker for state alerts by passing workers-1 minus
+	// the detections already in flight.
+	Detections int
+	// PerTarget caps detection-class deliveries in flight (claimed) per target,
+	// those already claimed included; 0 means no cap.
+	PerTarget int
+}
+
+// Claim returns limits with n slots, all usable by any kind and no per-target
+// cap (tests and callers that have no reserve).
+func Claim(n int) ClaimLimits { return ClaimLimits{Total: n, Detections: n} }
+
 // PlanHost is what the planner needs to know about a host.
 type PlanHost struct {
 	ID   int64
@@ -394,11 +412,14 @@ type AlertStore interface {
 	// delivery becomes 'failed' with a 'failed' log row in the same transaction;
 	// otherwise it is due at once.
 	ExpireLeases(ctx context.Context, now time.Time, all bool) (expired, exhausted int, err error)
-	// ClaimDeliveries, one transaction, claims at most max due deliveries (the
-	// caller's idle workers, never more) and returns them. A delivery of a
-	// disabled target or of a kind switched off is not claimed, nor one with an
-	// older pending delivery for the same (target, host, recipient).
-	ClaimDeliveries(ctx context.Context, now time.Time, lease time.Duration, max int) ([]ClaimedDelivery, error)
+	// ClaimDeliveries, one transaction, claims due deliveries within lim and
+	// returns them: state-change deliveries FIRST (up to lim.Total), then
+	// detections and summaries (up to lim.Detections and what is left of
+	// lim.Total), at most lim.PerTarget of them in flight per target. A delivery
+	// of a disabled target or of a kind switched off is not claimed, nor one with
+	// an older pending delivery of the same kind for the same (target, host,
+	// recipient).
+	ClaimDeliveries(ctx context.Context, now time.Time, lease time.Duration, lim ClaimLimits) ([]ClaimedDelivery, error)
 	// FinishAttempt records the outcome of a claimed attempt, conditional on the
 	// claim token. ErrLeaseLost: the delivery was not written (the attempt's log
 	// row still is, while it is 'attempting').

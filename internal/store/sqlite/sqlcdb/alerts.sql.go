@@ -187,7 +187,90 @@ func (q *Queries) DeleteNotifyStateOfTarget(ctx context.Context, targetID int64)
 	return err
 }
 
-const dueDeliveries = `-- name: DueDeliveries :many
+const dueDetectionDeliveries = `-- name: DueDetectionDeliveries :many
+SELECT x.id, x.alert_id, x.target_id, x.host_id, x.recipient, x.state_change_id, x.event_id, x.kind, x.payload, x.attempts, x.host_name
+FROM (
+  SELECT d.id, d.alert_id, d.target_id, d.host_id, d.recipient, d.state_change_id, d.event_id, d.kind, d.payload, d.attempts, h.name AS host_name,
+         ROW_NUMBER() OVER (PARTITION BY d.target_id ORDER BY d.id) AS rn
+  FROM alert_deliveries d
+  JOIN alert_targets t ON t.id = d.target_id
+  JOIN hosts h ON h.id = d.host_id
+  WHERE d.status = 'pending' AND d.claim_token IS NULL AND d.next_attempt_at <= ?1
+    AND t.enabled = 1
+    AND d.kind <> 'state_change' AND t.send_detections = 1
+    AND NOT EXISTS (SELECT 1 FROM alert_deliveries o
+                    WHERE o.target_id = d.target_id AND o.host_id = d.host_id AND o.recipient = d.recipient
+                      AND o.kind = d.kind AND o.status = 'pending' AND o.id < d.id)
+) x
+WHERE x.rn <= CAST(?2 AS INTEGER)
+              - (SELECT count(*) FROM alert_deliveries f
+                 WHERE f.target_id = x.target_id AND f.status = 'pending' AND f.claim_token IS NOT NULL AND f.kind <> 'state_change')
+ORDER BY x.id
+LIMIT ?3
+`
+
+type DueDetectionDeliveriesParams struct {
+	Now       sql.NullInt64
+	PerTarget int64
+	MaxRows   int64
+}
+
+type DueDetectionDeliveriesRow struct {
+	ID            int64
+	AlertID       string
+	TargetID      int64
+	HostID        int64
+	Recipient     string
+	StateChangeID sql.NullInt64
+	EventID       sql.NullInt64
+	Kind          string
+	Payload       string
+	Attempts      int64
+	HostName      string
+}
+
+// The same for detections and detection summaries (every kind that is not a
+// state change), with a cap on how many may be in flight to one target: the
+// window numbers the claimable rows of each target, and only the first
+// (per_target - already claimed) of them are returned. One dead receiver
+// therefore cannot occupy every detection worker, and, because the numbering
+// is done in SQL before the LIMIT, its backlog cannot hide another target's rows.
+func (q *Queries) DueDetectionDeliveries(ctx context.Context, arg DueDetectionDeliveriesParams) ([]DueDetectionDeliveriesRow, error) {
+	rows, err := q.db.QueryContext(ctx, dueDetectionDeliveries, arg.Now, arg.PerTarget, arg.MaxRows)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []DueDetectionDeliveriesRow
+	for rows.Next() {
+		var i DueDetectionDeliveriesRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.AlertID,
+			&i.TargetID,
+			&i.HostID,
+			&i.Recipient,
+			&i.StateChangeID,
+			&i.EventID,
+			&i.Kind,
+			&i.Payload,
+			&i.Attempts,
+			&i.HostName,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const dueStateDeliveries = `-- name: DueStateDeliveries :many
 
 SELECT d.id, d.alert_id, d.target_id, d.host_id, d.recipient, d.state_change_id, d.event_id, d.kind, d.payload, d.attempts, h.name AS host_name
 FROM alert_deliveries d
@@ -195,20 +278,20 @@ JOIN alert_targets t ON t.id = d.target_id
 JOIN hosts h ON h.id = d.host_id
 WHERE d.status = 'pending' AND d.claim_token IS NULL AND d.next_attempt_at <= ?1
   AND t.enabled = 1
-  AND ((d.kind = 'state_change' AND t.send_state_changes = 1) OR (d.kind = 'detection' AND t.send_detections = 1))
+  AND d.kind = 'state_change' AND t.send_state_changes = 1
   AND NOT EXISTS (SELECT 1 FROM alert_deliveries o
                   WHERE o.target_id = d.target_id AND o.host_id = d.host_id AND o.recipient = d.recipient
-                    AND o.status = 'pending' AND o.id < d.id)
+                    AND o.kind = d.kind AND o.status = 'pending' AND o.id < d.id)
 ORDER BY d.id
 LIMIT ?2
 `
 
-type DueDeliveriesParams struct {
+type DueStateDeliveriesParams struct {
 	Now     sql.NullInt64
 	MaxRows int64
 }
 
-type DueDeliveriesRow struct {
+type DueStateDeliveriesRow struct {
 	ID            int64
 	AlertID       string
 	TargetID      int64
@@ -223,19 +306,21 @@ type DueDeliveriesRow struct {
 }
 
 // ---------------------------------------------------------- claim and finish
-// Pending, unclaimed and due; the target is enabled and the delivery's kind is
-// still switched on; and no OLDER pending delivery exists for the same
-// (target, host, recipient), so a receiver never gets "OK" before the "CRIT"
-// that is still being retried.
-func (q *Queries) DueDeliveries(ctx context.Context, arg DueDeliveriesParams) ([]DueDeliveriesRow, error) {
-	rows, err := q.db.QueryContext(ctx, dueDeliveries, arg.Now, arg.MaxRows)
+// State-change deliveries that can be claimed now: pending, unclaimed and due;
+// the target is enabled and still sends state changes; and no OLDER pending
+// delivery of the SAME KIND exists for the same (target, host, recipient), so a
+// receiver never gets "OK" before the "CRIT" that is still being retried. Order is
+// per kind on purpose: a burst of detection deliveries for a host must not hold
+// that host's state alerts back (milestone 5).
+func (q *Queries) DueStateDeliveries(ctx context.Context, arg DueStateDeliveriesParams) ([]DueStateDeliveriesRow, error) {
+	rows, err := q.db.QueryContext(ctx, dueStateDeliveries, arg.Now, arg.MaxRows)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []DueDeliveriesRow
+	var items []DueStateDeliveriesRow
 	for rows.Next() {
-		var i DueDeliveriesRow
+		var i DueStateDeliveriesRow
 		if err := rows.Scan(
 			&i.ID,
 			&i.AlertID,

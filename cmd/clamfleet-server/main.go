@@ -233,7 +233,19 @@ func (a *app) serve(ctx context.Context, args []string) int {
 		log.Error("alerting", "error", err.Error())
 		return exitError
 	}
-	h, err := server.NewHandlerFromConfig(cfg, server.Deps{Store: st, Now: a.now, Log: log, AfterReport: ev.Host, Keys: keys, Alerts: alerts})
+	// A state transition and a new detection both wake the dispatcher, so an
+	// alert starts at once instead of at the next 5 s tick.
+	afterReport := func(ctx context.Context, hostID int64) error {
+		err := ev.Host(ctx, hostID)
+		alerts.Dispatcher.Wake()
+		return err
+	}
+	afterEvent := func(_ context.Context, stored bool) {
+		if stored {
+			alerts.Dispatcher.Wake()
+		}
+	}
+	h, err := server.NewHandlerFromConfig(cfg, server.Deps{Store: st, Now: a.now, Log: log, AfterReport: afterReport, AfterEvent: afterEvent, Keys: keys, Alerts: alerts})
 	if err != nil {
 		log.Error("invalid configuration", "error", err.Error())
 		return exitError

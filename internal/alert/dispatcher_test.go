@@ -863,3 +863,144 @@ func TestAttemptDeadlineCutsOffABlockedSender(t *testing.T) {
 		t.Fatalf("retrying rows %d, pending %d", e.logRows("retrying"), e.statuses("pending"))
 	}
 }
+
+// kindOf reads the kind from a webhook body.
+func kindOf(body []byte) string {
+	var p struct {
+		Kind string `json:"kind"`
+	}
+	_ = json.Unmarshal(body, &p)
+	return p.Kind
+}
+
+func (e *dispEnv) detection(hostID int64, path string) {
+	e.t.Helper()
+	if _, err := e.st.RecordEvent(context.Background(), store.EventRecord{HostID: hostID, ReceivedAt: e.clk.Now(),
+		Event: proto.Event{TS: e.clk.Now(), Path: path, Signature: "S", Source: "clamd"}}); err != nil {
+		e.t.Fatal(err)
+	}
+}
+
+// A dead detection receiver (every send hangs to its deadline) must not delay a
+// CRIT: at most 2 sends are in flight to it, at least one worker stays free,
+// and the state alert goes out on the next pass.
+func TestFailingDetectionsDoNotStarveCRIT(t *testing.T) {
+	e := newDispEnv(t)
+	var ids []int64
+	for i := range 10 {
+		ids = append(ids, e.host(fmt.Sprintf("h%02d", i)))
+	}
+	e.webhook("dead", func(n *store.NewAlertTarget) { n.SendStateChanges = false })
+	e.webhook("ops", func(n *store.NewAlertTarget) { n.SendDetections = false })
+	for i, id := range ids {
+		e.detection(id, fmt.Sprintf("/p%d", i))
+	}
+	release := make(chan struct{})
+	var mu sync.Mutex
+	inflightDet, maxDet, stateSent := 0, 0, 0
+	e.wh.fn = func(_ int, _ string, body []byte, ctx context.Context) Result {
+		if kindOf(body) == KindStateChange {
+			mu.Lock()
+			stateSent++
+			mu.Unlock()
+			return Result{Outcome: OutcomeSent, Code: "HTTP 204"}
+		}
+		mu.Lock()
+		inflightDet++
+		maxDet = max(maxDet, inflightDet)
+		mu.Unlock()
+		select {
+		case <-release:
+		case <-ctx.Done():
+		}
+		mu.Lock()
+		inflightDet--
+		mu.Unlock()
+		return Result{Outcome: OutcomeSent, Code: "HTTP 204"}
+	}
+	defer func() { close(release); e.d.Wait() }()
+
+	if err := e.d.Pass(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if n := e.d.Inflight(); n != 2 {
+		t.Fatalf("%d sends in flight, want 2 (the per-target cap)", n)
+	}
+	// Further passes (the 5 s tick) do not grow it.
+	for range 3 {
+		e.d.Pass(context.Background())
+	}
+	if n := e.d.Inflight(); n != 2 {
+		t.Fatalf("%d sends in flight after more passes, want 2", n)
+	}
+	e.state("CRIT", ids[0])
+	if err := e.d.Pass(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		mu.Lock()
+		n := stateSent
+		mu.Unlock()
+		if n == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the CRIT was not sent while the detection receiver was hanging")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if maxDet > MaxDetectionsPerTarget {
+		t.Fatalf("%d detection sends in flight at once to one target, cap %d", maxDet, MaxDetectionsPerTarget)
+	}
+}
+
+// The reserve holds across targets too: with many targets each hanging, at most
+// workers-1 detection sends are in flight, whatever the per-target cap.
+func TestOneWorkerStaysReservedForStateAlerts(t *testing.T) {
+	e := newDispEnv(t)
+	h := e.host("a")
+	for i := range 4 {
+		e.webhook(fmt.Sprintf("d%d", i), func(n *store.NewAlertTarget) { n.SendStateChanges = false })
+	}
+	e.detection(h, "/p")
+	release := make(chan struct{})
+	e.wh.fn = func(_ int, _ string, _ []byte, ctx context.Context) Result {
+		select {
+		case <-release:
+		case <-ctx.Done():
+		}
+		return Result{Outcome: OutcomeSent, Code: "HTTP 204"}
+	}
+	defer func() { close(release); e.d.Wait() }()
+	if err := e.d.Pass(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if n := e.d.Inflight(); n != 3 {
+		t.Fatalf("%d sends in flight, want workers-1 = 3 with 4 detection deliveries due", n)
+	}
+}
+
+// Wake makes Run do a pass at once: with a tick channel that never fires, a
+// detection is still sent within moments of the wake (the ingest hook).
+func TestWakeStartsAPass(t *testing.T) {
+	e := newDispEnv(t)
+	h := e.host("a")
+	e.webhook("t", nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { e.d.Run(ctx, nil); close(done) }()
+	defer func() { cancel(); <-done }()
+	time.Sleep(50 * time.Millisecond) // the first pass finds nothing
+	e.detection(h, "/p")
+	e.d.Wake()
+	deadline := time.Now().Add(2 * time.Second)
+	for e.wh.count() == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("no send within 2 s of Wake and no tick")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}

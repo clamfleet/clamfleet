@@ -131,22 +131,51 @@ SELECT EXISTS (SELECT 1 FROM alert_deliveries WHERE status = 'pending' AND claim
 
 -- ---------------------------------------------------------- claim and finish
 
--- name: DueDeliveries :many
--- Pending, unclaimed and due; the target is enabled and the delivery's kind is
--- still switched on; and no OLDER pending delivery exists for the same
--- (target, host, recipient), so a receiver never gets "OK" before the "CRIT"
--- that is still being retried.
+-- name: DueStateDeliveries :many
+-- State-change deliveries that can be claimed now: pending, unclaimed and due;
+-- the target is enabled and still sends state changes; and no OLDER pending
+-- delivery of the SAME KIND exists for the same (target, host, recipient), so a
+-- receiver never gets "OK" before the "CRIT" that is still being retried. Order is
+-- per kind on purpose: a burst of detection deliveries for a host must not hold
+-- that host's state alerts back (milestone 5).
 SELECT d.id, d.alert_id, d.target_id, d.host_id, d.recipient, d.state_change_id, d.event_id, d.kind, d.payload, d.attempts, h.name AS host_name
 FROM alert_deliveries d
 JOIN alert_targets t ON t.id = d.target_id
 JOIN hosts h ON h.id = d.host_id
 WHERE d.status = 'pending' AND d.claim_token IS NULL AND d.next_attempt_at <= sqlc.arg(now)
   AND t.enabled = 1
-  AND ((d.kind = 'state_change' AND t.send_state_changes = 1) OR (d.kind = 'detection' AND t.send_detections = 1))
+  AND d.kind = 'state_change' AND t.send_state_changes = 1
   AND NOT EXISTS (SELECT 1 FROM alert_deliveries o
                   WHERE o.target_id = d.target_id AND o.host_id = d.host_id AND o.recipient = d.recipient
-                    AND o.status = 'pending' AND o.id < d.id)
+                    AND o.kind = d.kind AND o.status = 'pending' AND o.id < d.id)
 ORDER BY d.id
+LIMIT sqlc.arg(max_rows);
+
+-- name: DueDetectionDeliveries :many
+-- The same for detections and detection summaries (every kind that is not a
+-- state change), with a cap on how many may be in flight to one target: the
+-- window numbers the claimable rows of each target, and only the first
+-- (per_target - already claimed) of them are returned. One dead receiver
+-- therefore cannot occupy every detection worker, and, because the numbering
+-- is done in SQL before the LIMIT, its backlog cannot hide another target's rows.
+SELECT x.id, x.alert_id, x.target_id, x.host_id, x.recipient, x.state_change_id, x.event_id, x.kind, x.payload, x.attempts, x.host_name
+FROM (
+  SELECT d.id, d.alert_id, d.target_id, d.host_id, d.recipient, d.state_change_id, d.event_id, d.kind, d.payload, d.attempts, h.name AS host_name,
+         ROW_NUMBER() OVER (PARTITION BY d.target_id ORDER BY d.id) AS rn
+  FROM alert_deliveries d
+  JOIN alert_targets t ON t.id = d.target_id
+  JOIN hosts h ON h.id = d.host_id
+  WHERE d.status = 'pending' AND d.claim_token IS NULL AND d.next_attempt_at <= sqlc.arg(now)
+    AND t.enabled = 1
+    AND d.kind <> 'state_change' AND t.send_detections = 1
+    AND NOT EXISTS (SELECT 1 FROM alert_deliveries o
+                    WHERE o.target_id = d.target_id AND o.host_id = d.host_id AND o.recipient = d.recipient
+                      AND o.kind = d.kind AND o.status = 'pending' AND o.id < d.id)
+) x
+WHERE x.rn <= CAST(sqlc.arg(per_target) AS INTEGER)
+              - (SELECT count(*) FROM alert_deliveries f
+                 WHERE f.target_id = x.target_id AND f.status = 'pending' AND f.claim_token IS NOT NULL AND f.kind <> 'state_change')
+ORDER BY x.id
 LIMIT sqlc.arg(max_rows);
 
 -- name: ClaimDelivery :execrows

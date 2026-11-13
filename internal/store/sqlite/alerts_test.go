@@ -255,7 +255,7 @@ func TestClaimDeliveriesCapacityOrderAndLease(t *testing.T) {
 		t.Fatalf("%d pending", n)
 	}
 	lease := 40 * time.Second
-	got, err := s.ClaimDeliveries(ctx, t0, lease, 4)
+	got, err := s.ClaimDeliveries(ctx, t0, lease, store.Claim(4))
 	if err != nil || len(got) != 4 {
 		t.Fatalf("claimed %d: %v (never more than max)", len(got), err)
 	}
@@ -274,14 +274,14 @@ func TestClaimDeliveriesCapacityOrderAndLease(t *testing.T) {
 		}
 	}
 	// Claimed rows are not claimed again until their lease ends; the other two are.
-	more, _ := s.ClaimDeliveries(ctx, t0.Add(time.Second), lease, 10)
+	more, _ := s.ClaimDeliveries(ctx, t0.Add(time.Second), lease, store.Claim(10))
 	if len(more) != 2 {
 		t.Fatalf("second claim got %d, want the 2 unclaimed", len(more))
 	}
-	if again, _ := s.ClaimDeliveries(ctx, t0.Add(2*time.Second), lease, 10); len(again) != 0 {
+	if again, _ := s.ClaimDeliveries(ctx, t0.Add(2*time.Second), lease, store.Claim(10)); len(again) != 0 {
 		t.Fatalf("a claimed row was claimed again inside its lease: %d", len(again))
 	}
-	if none, _ := s.ClaimDeliveries(ctx, t0, lease, 0); len(none) != 0 {
+	if none, _ := s.ClaimDeliveries(ctx, t0, lease, store.Claim(0)); len(none) != 0 {
 		t.Fatal("max 0 must claim nothing")
 	}
 }
@@ -311,7 +311,7 @@ func TestClaimDeliveriesKeepsOrderPerTargetHostRecipient(t *testing.T) {
 	if n := statusCount(t, s, "pending"); n != 6 { // 3 alerts x 2 recipients
 		t.Fatalf("%d pending", n)
 	}
-	got, err := s.ClaimDeliveries(ctx, t0.Add(22*time.Minute), time.Minute, 100)
+	got, err := s.ClaimDeliveries(ctx, t0.Add(22*time.Minute), time.Minute, store.Claim(100))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -339,7 +339,7 @@ func TestClaimDeliveriesKeepsOrderPerTargetHostRecipient(t *testing.T) {
 	if err := s.FinishAttempt(ctx, first, store.AttemptResult{Status: store.AlertLogSent, Code: "SMTP 250"}, t0.Add(23*time.Minute)); err != nil {
 		t.Fatal(err)
 	}
-	next, _ := s.ClaimDeliveries(ctx, t0.Add(24*time.Minute), time.Minute, 100)
+	next, _ := s.ClaimDeliveries(ctx, t0.Add(24*time.Minute), time.Minute, store.Claim(100))
 	if len(next) != 1 || next[0].Recipient != "r1@x.example" || next[0].HostName != "a" {
 		t.Fatalf("only r1's recovery may be claimed now: %+v", next)
 	}
@@ -353,7 +353,7 @@ func TestClaimDeliveriesKeepsOrderPerTargetHostRecipient(t *testing.T) {
 	if err := s.FinishAttempt(ctx, r2, store.AttemptResult{Status: store.AlertLogFailed, Code: "SMTP 550"}, t0.Add(25*time.Minute)); err != nil {
 		t.Fatal(err)
 	}
-	if last, _ := s.ClaimDeliveries(ctx, t0.Add(26*time.Minute), time.Minute, 100); len(last) != 1 || last[0].Recipient != "r2@x.example" {
+	if last, _ := s.ClaimDeliveries(ctx, t0.Add(26*time.Minute), time.Minute, store.Claim(100)); len(last) != 1 || last[0].Recipient != "r2@x.example" {
 		t.Fatalf("%+v", last)
 	}
 }
@@ -370,14 +370,14 @@ func TestClaimDeliveriesSkipsDisabledTargetAndSwitchedOffKind(t *testing.T) {
 		if _, err := s.w.Exec(q); err != nil {
 			t.Fatal(err)
 		}
-		if got, _ := s.ClaimDeliveries(ctx, t0, time.Minute, 10); len(got) != 0 {
+		if got, _ := s.ClaimDeliveries(ctx, t0, time.Minute, store.Claim(10)); len(got) != 0 {
 			t.Fatalf("claimed after %q: %d", q, len(got))
 		}
 	}
 	if _, err := s.w.Exec(`UPDATE alert_targets SET send_state_changes = 1`); err != nil {
 		t.Fatal(err)
 	}
-	if got, _ := s.ClaimDeliveries(ctx, t0, time.Minute, 10); len(got) != 1 || got[0].HostID != h.ID {
+	if got, _ := s.ClaimDeliveries(ctx, t0, time.Minute, store.Claim(10)); len(got) != 1 || got[0].HostID != h.ID {
 		t.Fatalf("%+v", got)
 	}
 }
@@ -391,7 +391,7 @@ func TestFinishAttemptTokenAndCancellation(t *testing.T) {
 	transition(t, s, t0, "CRIT")
 	plan(t, s, t0)
 
-	first, _ := s.ClaimDeliveries(ctx, t0, 40*time.Second, 1)
+	first, _ := s.ClaimDeliveries(ctx, t0, 40*time.Second, store.Claim(1))
 	if len(first) != 1 {
 		t.Fatal("no claim")
 	}
@@ -399,7 +399,7 @@ func TestFinishAttemptTokenAndCancellation(t *testing.T) {
 	if _, _, err := s.ExpireLeases(ctx, t0.Add(time.Minute), false); err != nil {
 		t.Fatal(err)
 	}
-	second, _ := s.ClaimDeliveries(ctx, t0.Add(time.Minute), 40*time.Second, 1)
+	second, _ := s.ClaimDeliveries(ctx, t0.Add(time.Minute), 40*time.Second, store.Claim(1))
 	if len(second) != 1 || second[0].Attempt != 2 || string(second[0].Token) == string(first[0].Token) {
 		t.Fatalf("%+v", second)
 	}
@@ -431,7 +431,7 @@ func TestFinishAttemptTokenAndCancellation(t *testing.T) {
 	// A cancelled delivery stays cancelled when its in-flight attempt reports.
 	transition(t, s, t0.Add(30*time.Minute), "OK")
 	plan(t, s, t0.Add(30*time.Minute))
-	third, _ := s.ClaimDeliveries(ctx, t0.Add(30*time.Minute), time.Minute, 1)
+	third, _ := s.ClaimDeliveries(ctx, t0.Add(30*time.Minute), time.Minute, store.Claim(1))
 	if len(third) != 1 {
 		t.Fatal("no third claim")
 	}
@@ -459,15 +459,15 @@ func TestFinishAttemptRetryingSchedulesNextAttempt(t *testing.T) {
 	newTarget(t, s, "ops", "webhook", nil)
 	transition(t, s, t0, "CRIT")
 	plan(t, s, t0)
-	c, _ := s.ClaimDeliveries(ctx, t0, time.Minute, 1)
+	c, _ := s.ClaimDeliveries(ctx, t0, time.Minute, store.Claim(1))
 	retryAt := t0.Add(time.Minute)
 	if err := s.FinishAttempt(ctx, c[0], store.AttemptResult{Status: store.AlertLogRetrying, Code: "HTTP 503", Error: "x", RetryAt: retryAt}, t0); err != nil {
 		t.Fatal(err)
 	}
-	if got, _ := s.ClaimDeliveries(ctx, retryAt.Add(-time.Second), time.Minute, 1); len(got) != 0 {
+	if got, _ := s.ClaimDeliveries(ctx, retryAt.Add(-time.Second), time.Minute, store.Claim(1)); len(got) != 0 {
 		t.Fatal("claimed before the retry time")
 	}
-	got, _ := s.ClaimDeliveries(ctx, retryAt, time.Minute, 1)
+	got, _ := s.ClaimDeliveries(ctx, retryAt, time.Minute, store.Claim(1))
 	if len(got) != 1 || got[0].Attempt != 2 {
 		t.Fatalf("%+v", got)
 	}
@@ -493,7 +493,7 @@ func TestExpireLeases(t *testing.T) {
 	}
 	// Attempts 3 (claim makes it 4? no: set 2 so the claim is attempt 3).
 	setAttempts(2)
-	c, _ := s.ClaimDeliveries(ctx, t0, 40*time.Second, 1)
+	c, _ := s.ClaimDeliveries(ctx, t0, 40*time.Second, store.Claim(1))
 	if c[0].Attempt != 3 {
 		t.Fatalf("attempt %d", c[0].Attempt)
 	}
@@ -508,7 +508,7 @@ func TestExpireLeases(t *testing.T) {
 	if status != "interrupted" || statusCount(t, s, "pending") != 1 {
 		t.Fatalf("log %s", status)
 	}
-	if again, _ := s.ClaimDeliveries(ctx, t0.Add(41*time.Second), time.Minute, 1); len(again) != 1 || again[0].Attempt != 4 {
+	if again, _ := s.ClaimDeliveries(ctx, t0.Add(41*time.Second), time.Minute, store.Claim(1)); len(again) != 1 || again[0].Attempt != 4 {
 		t.Fatalf("an expired attempt-3 row must be due at once: %+v", again)
 	}
 
@@ -517,7 +517,7 @@ func TestExpireLeases(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.w.Exec(`UPDATE alert_log SET status = 'interrupted' WHERE status = 'attempting'`)
-	c5, _ := s.ClaimDeliveries(ctx, t0.Add(time.Hour), 40*time.Second, 1)
+	c5, _ := s.ClaimDeliveries(ctx, t0.Add(time.Hour), 40*time.Second, store.Claim(1))
 	if len(c5) != 1 || c5[0].Attempt != 5 {
 		t.Fatalf("%+v", c5)
 	}
@@ -540,7 +540,7 @@ func TestExpireLeases(t *testing.T) {
 		count(t, s, `SELECT count(*) FROM alert_log WHERE status = 'failed' AND error LIKE '%attempt 5 was interrupted%'`) != 1 {
 		t.Fatal("the last attempt's expiry must end the delivery with a failed log row")
 	}
-	if more, _ := s.ClaimDeliveries(ctx, t0.Add(48*time.Hour), time.Minute, 5); len(more) != 0 {
+	if more, _ := s.ClaimDeliveries(ctx, t0.Add(48*time.Hour), time.Minute, store.Claim(5)); len(more) != 0 {
 		t.Fatal("a failed delivery was claimed again")
 	}
 }
@@ -554,7 +554,7 @@ func TestExpireLeasesAllAtStart(t *testing.T) {
 	newTarget(t, s, "ops", "webhook", nil)
 	transition(t, s, t0, "CRIT")
 	plan(t, s, t0)
-	c, _ := s.ClaimDeliveries(ctx, t0, time.Hour, 1)
+	c, _ := s.ClaimDeliveries(ctx, t0, time.Hour, store.Claim(1))
 	if e, _, _ := s.ExpireLeases(ctx, t0.Add(time.Second), false); e != 0 {
 		t.Fatal("not expired yet")
 	}
@@ -673,7 +673,7 @@ func TestCascadesOfHostAndTargetDelete(t *testing.T) {
 	if err := s.RecordTestSend(ctx, "ops", []store.TestSendRecord{{Result: store.AttemptResult{Status: store.AlertLogSent, Code: "HTTP 204"}}}, t0, cli); err != nil {
 		t.Fatal(err)
 	}
-	c, _ := s.ClaimDeliveries(ctx, t0, time.Minute, 1)
+	c, _ := s.ClaimDeliveries(ctx, t0, time.Minute, store.Claim(1))
 	s.FinishAttempt(ctx, c[0], store.AttemptResult{Status: store.AlertLogSent, Code: "HTTP 204"}, t0)
 
 	// Target delete: deliveries and notify state go, log rows stay with the name.
@@ -809,7 +809,7 @@ func TestAlertLogAndTargetSummary(t *testing.T) {
 	newTarget(t, s, "other", "email", nil)
 	transition(t, s, t0, "CRIT")
 	plan(t, s, t0)
-	c, _ := s.ClaimDeliveries(ctx, t0, time.Minute, 5)
+	c, _ := s.ClaimDeliveries(ctx, t0, time.Minute, store.Claim(5))
 	for _, d := range c {
 		s.FinishAttempt(ctx, d, store.AttemptResult{Status: store.AlertLogRetrying, Code: "HTTP 503", Error: "the receiver answered HTTP 503", RetryAt: t0.Add(time.Minute), Duration: 3 * time.Millisecond}, t0.Add(time.Second))
 	}
@@ -865,7 +865,7 @@ func TestHasAlertWorkSeesEachKindOfWork(t *testing.T) {
 	if !work(t0) { // a due delivery
 		t.Fatal("due delivery")
 	}
-	c, _ := s.ClaimDeliveries(ctx, t0, 40*time.Second, 1)
+	c, _ := s.ClaimDeliveries(ctx, t0, 40*time.Second, store.Claim(1))
 	if work(t0.Add(time.Second)) {
 		t.Fatal("a claimed delivery inside its lease is not work")
 	}
