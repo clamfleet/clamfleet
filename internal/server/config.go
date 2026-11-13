@@ -12,7 +12,9 @@ package server
 
 import (
 	"fmt"
+	"net/mail"
 	"net/netip"
+	"net/url"
 	"path/filepath"
 	"strings"
 	"time"
@@ -48,7 +50,157 @@ type Config struct {
 	// directory on purpose: a backup of the database must not carry the key.
 	// Intended ownership: root:clamfleet-server mode 0640. Absolute path.
 	SecretKeyFile string `yaml:"secret_key_file"`
+	// PublicURL is the address of the console as people reach it
+	// ("https://clamfleet.example"), used for links in alerts only (M4 decision
+	// 12). Empty: alert links are null. No path prefix support in the console.
+	PublicURL string `yaml:"public_url"`
+	Alert     Alert  `yaml:"alert"`
+	SMTP      SMTP   `yaml:"smtp"`
 }
+
+// Alert configures alert delivery (docs/plans/milestone-4.md 4.9).
+type Alert struct {
+	// Cooldown: at most one state alert per host per target per window; changes
+	// inside it are held and summarised at its end. 0 turns holds off.
+	Cooldown time.Duration `yaml:"cooldown"`
+	Webhook  AlertWebhook  `yaml:"webhook"`
+}
+
+// AlertWebhook is the webhook destination policy (SSRF, plan 4.7) and timeout.
+type AlertWebhook struct {
+	// Timeout bounds one attempt, from the claim.
+	Timeout time.Duration `yaml:"timeout"`
+	// AllowPrivate: RFC 1918, 100.64.0.0/10 and fc00::/7 (and plaintext to them).
+	AllowPrivate bool `yaml:"allow_private"`
+	// AllowLoopback: 127.0.0.0/8, ::1 and the localhost names.
+	AllowLoopback bool `yaml:"allow_loopback"`
+	// DenyNetworks are extra CIDRs that are always blocked.
+	DenyNetworks []string `yaml:"deny_networks"`
+	// CAFile adds trust anchors (PEM) to the system roots.
+	CAFile string `yaml:"ca_file"`
+}
+
+// SMTP configures email alerts; an empty Host switches email off.
+type SMTP struct {
+	Host string `yaml:"host"`
+	Port int    `yaml:"port"`
+	// TLS is starttls (default, mandatory once chosen: no fallback to plaintext),
+	// tls (implicit, port 465) or none (decision 19: only to a relay on a
+	// loopback or private address, and never with credentials beyond loopback).
+	TLS      string `yaml:"tls"`
+	From     string `yaml:"from"`
+	Username string `yaml:"username"`
+	// PasswordFile holds the password (never YAML or environment: one secret
+	// store, file-based). Read once at start under the key-file permission rule.
+	PasswordFile string `yaml:"password_file"`
+	// Helo is the name announced in EHLO; empty = the host of public_url, else
+	// os.Hostname(), else localhost.
+	Helo    string        `yaml:"helo"`
+	CAFile  string        `yaml:"ca_file"`
+	Timeout time.Duration `yaml:"timeout"`
+}
+
+// validateAlerting checks public_url, alert.* and smtp.*. Files are not read here
+// (Validate does no I/O); serve checks password_file and the CA files.
+func (c Config) validateAlerting() error {
+	if c.PublicURL != "" {
+		u, err := url.Parse(c.PublicURL)
+		switch {
+		case err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "":
+			return fmt.Errorf("public_url must be an absolute http or https URL such as https://clamfleet.example")
+		case u.User != nil || u.RawQuery != "" || u.Fragment != "" || strings.ContainsAny(c.PublicURL, "?#"):
+			return fmt.Errorf("public_url must not contain a user name, query or fragment")
+		}
+	}
+	a := c.Alert
+	if a.Cooldown < 0 || a.Cooldown > 24*time.Hour {
+		return fmt.Errorf("alert.cooldown must be between 0 and 24h, got %s", a.Cooldown)
+	}
+	if a.Webhook.Timeout < time.Second || a.Webhook.Timeout > 30*time.Second {
+		return fmt.Errorf("alert.webhook.timeout must be between 1s and 30s, got %s", a.Webhook.Timeout)
+	}
+	if _, err := ParseDenyNetworks(a.Webhook.DenyNetworks); err != nil {
+		return err
+	}
+	if a.Webhook.CAFile != "" && !filepath.IsAbs(a.Webhook.CAFile) {
+		return fmt.Errorf("alert.webhook.ca_file must be an absolute path, got %q", a.Webhook.CAFile)
+	}
+
+	m := c.SMTP
+	if m.Host == "" {
+		return nil
+	}
+	if m.Port < 1 || m.Port > 65535 {
+		return fmt.Errorf("smtp.port must be between 1 and 65535, got %d", m.Port)
+	}
+	if m.TLS != "starttls" && m.TLS != "tls" && m.TLS != "none" {
+		return fmt.Errorf("smtp.tls must be starttls, tls or none, got %q", m.TLS)
+	}
+	if m.From == "" {
+		return fmt.Errorf("smtp.from is required when smtp.host is set")
+	}
+	if addr, err := mail.ParseAddress(m.From); err != nil || strings.ContainsAny(m.From, "\r\n") || addr.Address == "" {
+		return fmt.Errorf("smtp.from is not a valid email address")
+	}
+	if m.Username != "" && m.PasswordFile == "" {
+		return fmt.Errorf("smtp.password_file is required when smtp.username is set (the password is never read from YAML or the environment)")
+	}
+	if m.Username == "" && m.PasswordFile != "" {
+		return fmt.Errorf("smtp.password_file needs smtp.username")
+	}
+	for k, p := range map[string]string{"smtp.password_file": m.PasswordFile, "smtp.ca_file": m.CAFile} {
+		if p != "" && !filepath.IsAbs(p) {
+			return fmt.Errorf("%s must be an absolute path, got %q", k, p)
+		}
+	}
+	if m.Timeout < 5*time.Second || m.Timeout > 120*time.Second {
+		return fmt.Errorf("smtp.timeout must be between 5s and 120s, got %s", m.Timeout)
+	}
+	if m.TLS == "none" {
+		// Decision 19. An IP literal can be checked now; a host name is checked at
+		// dial, on the address it resolves to.
+		if ip, err := netip.ParseAddr(strings.Trim(m.Host, "[]")); err == nil {
+			ip = ip.Unmap()
+			if !ip.IsLoopback() && !ip.IsPrivate() && !(netip.MustParsePrefix("100.64.0.0/10").Contains(ip)) {
+				return fmt.Errorf("smtp.tls: none is only allowed for a relay on a loopback or private address, and %s is public: use starttls or tls", ip)
+			}
+			if m.Username != "" && !ip.IsLoopback() {
+				return fmt.Errorf("smtp.tls: none with smtp.username would send the password in clear to %s: credentials are only sent unencrypted to loopback; use starttls or tls", ip)
+			}
+		} else if m.Username != "" && !config.IsLoopbackHost(m.Host) {
+			return fmt.Errorf("smtp.tls: none with smtp.username would send the password in clear to %q: credentials are only sent unencrypted to loopback; use starttls or tls", m.Host)
+		}
+	}
+	return nil
+}
+
+// ParseDenyNetworks parses alert.webhook.deny_networks. An invalid entry is an
+// error (Validate calls this): a typo must not silently leave a network allowed.
+func ParseDenyNetworks(list []string) ([]netip.Prefix, error) {
+	out := make([]netip.Prefix, 0, len(list))
+	for _, e := range list {
+		e = strings.TrimSpace(e)
+		p, err := netip.ParsePrefix(e)
+		if err != nil {
+			a, aerr := netip.ParseAddr(e)
+			if aerr != nil {
+				return nil, fmt.Errorf("alert.webhook.deny_networks: %q is not an IP address or CIDR", e)
+			}
+			p = netip.PrefixFrom(a, a.BitLen())
+		}
+		if p.Addr().Is4In6() {
+			if p.Bits() < 96 {
+				return nil, fmt.Errorf("alert.webhook.deny_networks: %q is not an IP address or CIDR this server can match (IPv4-mapped prefixes need at least /96)", e)
+			}
+			p = netip.PrefixFrom(p.Addr().Unmap(), p.Bits()-96)
+		}
+		out = append(out, p.Masked())
+	}
+	return out, nil
+}
+
+// PublicBase is public_url without a trailing slash.
+func (c Config) PublicBase() string { return strings.TrimRight(c.PublicURL, "/") }
 
 // Auth configures console sign-in (docs/plans/milestone-3.md 4.4, 4.6). The
 // shape is one subtree per provider, so local accounts, LDAP and OIDC can be
@@ -167,6 +319,11 @@ func DefaultConfig() Config {
 			Local:         AuthLocal{Enabled: true},
 			SessionMaxAge: 12 * time.Hour, SessionIdle: time.Hour, CookieSecure: true,
 		},
+		Alert: Alert{
+			Cooldown: 15 * time.Minute,
+			Webhook:  AlertWebhook{Timeout: 10 * time.Second, AllowPrivate: true, DenyNetworks: []string{}},
+		},
+		SMTP: SMTP{Port: 587, TLS: "starttls", Timeout: 30 * time.Second},
 	}
 }
 
@@ -205,6 +362,9 @@ func (c Config) Validate() error {
 		return err
 	}
 	if err := c.Auth.Validate(); err != nil {
+		return err
+	}
+	if err := c.validateAlerting(); err != nil {
 		return err
 	}
 	if c.Listen == "" {

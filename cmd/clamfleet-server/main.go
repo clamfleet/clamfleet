@@ -207,6 +207,17 @@ func (a *app) serve(ctx context.Context, args []string) int {
 	// Host after each report, the loop below notices hosts that went silent.
 	// Its start time is the restart-grace reference (see health.Evaluate).
 	ev := health.New(st, a.now, cfg.Health.Thresholds(), log)
+	// Alerting: files named in the configuration (smtp.password_file, CA bundles)
+	// are read here, so a bad one refuses the start with its reason.
+	alerts, err := server.BuildAlerts(cfg, st, keys, a.now, log)
+	if err != nil {
+		log.Error("invalid alert configuration", "error", err.Error())
+		return exitError
+	}
+	if err := alerts.Dispatcher.Start(ctx); err != nil {
+		log.Error("alerting", "error", err.Error())
+		return exitError
+	}
 	h, err := server.NewHandlerFromConfig(cfg, server.Deps{Store: st, Now: a.now, Log: log, AfterReport: ev.Host, Keys: keys})
 	if err != nil {
 		log.Error("invalid configuration", "error", err.Error())
@@ -218,7 +229,8 @@ func (a *app) serve(ctx context.Context, args []string) int {
 	loopCtx, stopLoop := context.WithCancel(ctx)
 	tick := time.NewTicker(cfg.Health.EvalInterval)
 	cleanTick := time.NewTicker(time.Hour)
-	loopDone := make(chan struct{}, 2)
+	alertTick := time.NewTicker(alertInterval)
+	loopDone := make(chan struct{}, 3)
 	go func() {
 		defer func() { loopDone <- struct{}{} }()
 		ev.Run(loopCtx, tick.C)
@@ -227,12 +239,18 @@ func (a *app) serve(ctx context.Context, args []string) int {
 		defer func() { loopDone <- struct{}{} }()
 		webauth.RunCleanup(loopCtx, st, a.now, cfg.Auth.SessionIdle, log, cleanTick.C)
 	}()
+	go func() {
+		defer func() { loopDone <- struct{}{} }()
+		alerts.Dispatcher.Run(loopCtx, alertTick.C)
+	}()
 	err = server.Serve(ctx, cfg, h, log)
 	// Wait for the loops before the deferred st.Close(): an evaluation cut off by
 	// a closing database would log a spurious error at every shutdown.
 	stopLoop()
 	tick.Stop()
 	cleanTick.Stop()
+	alertTick.Stop()
+	<-loopDone
 	<-loopDone
 	<-loopDone
 	if err != nil {
@@ -241,6 +259,10 @@ func (a *app) serve(ctx context.Context, args []string) int {
 	}
 	return exitOK
 }
+
+// alertInterval is how often the dispatcher looks for work besides being woken
+// by a finished send: it is what notices a due retry or a hold whose window ended.
+const alertInterval = 5 * time.Second
 
 func (a *app) migrate(ctx context.Context, args []string) int {
 	fs, cfgFlag := newFlags("migrate", a.stderr)

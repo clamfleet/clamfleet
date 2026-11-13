@@ -191,6 +191,7 @@ func generateKeyFile(path string, add bool, now time.Time) (string, error) {
 // sealedLister is the part of the store the start-up check and reencrypt need.
 type sealedLister interface {
 	SealedTOTPSecrets(ctx context.Context) ([]store.SealedSecret, error)
+	SealedAlertSecrets(ctx context.Context) ([]store.SealedTargetSecret, error)
 }
 
 // reencrypt re-seals every TOTP secret that is not sealed with the active key.
@@ -234,8 +235,18 @@ func reencrypt(ctx context.Context, st interface {
 //     (a file that exists must be valid, or a permissions slip would hide until
 //     users had burned their recovery codes);
 //   - file valid: every stored TOTP secret must open, else refuse naming the count.
+//
+// Alert-target secrets are different (M4 decision 10): the server STARTS even
+// when some cannot be opened (no key file, an unknown key, a failed decrypt),
+// because email and the other targets must keep working (spec 13). The count and
+// the fix are logged at error; those webhook deliveries fail permanently with a
+// clear text and the Alerts page shows a banner per target.
 func startupKeys(ctx context.Context, log *slog.Logger, cfg server.Config, st sealedLister) (*secrets.Keyring, error) {
 	stored, err := st.SealedTOTPSecrets(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("read stored secrets: %w", err)
+	}
+	targets, err := st.SealedAlertSecrets(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("read stored secrets: %w", err)
 	}
@@ -248,6 +259,7 @@ func startupKeys(ctx context.Context, log *slog.Logger, cfg server.Config, st se
 			return nil, fmt.Errorf("%d user(s) have TOTP enabled but the secret key file %s does not exist: restore it from backup, or run `clamfleet-server user reset-totp EMAIL` for each of them (see `user list`) and create a new key with `key generate`", len(stored), cfg.SecretKeyFile)
 		}
 		log.Warn("no secret key file: two-factor sign-in (TOTP) is unavailable until one is created with `clamfleet-server key generate`", "secret_key_file", cfg.SecretKeyFile)
+		warnUnopenableTargets(log, cfg, len(targets), len(targets))
 		return nil, nil
 	}
 	if err != nil {
@@ -262,5 +274,21 @@ func startupKeys(ctx context.Context, log *slog.Logger, cfg server.Config, st se
 	if bad > 0 {
 		return nil, fmt.Errorf("%d of %d stored TOTP secrets cannot be opened with the keys in %s (wrong or replaced key file?): restore the key file they were sealed with, or run `clamfleet-server user reset-totp EMAIL` for the affected users (see `user list`)", bad, len(stored), cfg.SecretKeyFile)
 	}
+	badTargets := 0
+	for _, t := range targets {
+		if _, err := ring.Open(secrets.PurposeAlertTarget, t.Sealed, uint64(t.ID)); err != nil {
+			badTargets++
+		}
+	}
+	warnUnopenableTargets(log, cfg, badTargets, len(targets))
 	return ring, nil
+}
+
+// warnUnopenableTargets logs the alert-target part of the start-up check.
+func warnUnopenableTargets(log *slog.Logger, cfg server.Config, bad, total int) {
+	if bad == 0 {
+		return
+	}
+	log.Error("webhook alert targets cannot be opened with the keys in the key file: their alerts fail until fixed; restore the key file they were sealed with, or enter each URL again and rotate its key in the console (email and other targets keep working)",
+		"unreadable", bad, "webhook_targets", total, "secret_key_file", cfg.SecretKeyFile)
 }
