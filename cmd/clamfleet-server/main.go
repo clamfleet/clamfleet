@@ -233,7 +233,7 @@ func (a *app) serve(ctx context.Context, args []string) int {
 		log.Error("alerting", "error", err.Error())
 		return exitError
 	}
-	h, err := server.NewHandlerFromConfig(cfg, server.Deps{Store: st, Now: a.now, Log: log, AfterReport: ev.Host, Keys: keys})
+	h, err := server.NewHandlerFromConfig(cfg, server.Deps{Store: st, Now: a.now, Log: log, AfterReport: ev.Host, Keys: keys, Alerts: alerts})
 	if err != nil {
 		log.Error("invalid configuration", "error", err.Error())
 		return exitError

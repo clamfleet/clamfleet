@@ -9,11 +9,15 @@ package main
 
 import (
 	"context"
+	ctls "crypto/tls"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
 	"io"
 	"net/http"
+	"net/http/cookiejar"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -27,6 +31,7 @@ import (
 	"github.com/clamfleet/clamfleet/internal/store"
 	"github.com/clamfleet/clamfleet/internal/store/sqlite"
 	"github.com/clamfleet/clamfleet/internal/testtls"
+	"github.com/clamfleet/clamfleet/internal/webauth"
 )
 
 func TestServeRefusesBadAlertConfiguration(t *testing.T) {
@@ -195,5 +200,54 @@ func TestServeDeliversAnAlertWhenTheAgentReportsAProblem(t *testing.T) {
 	}
 	if strings.Contains(srv.stderr.String(), "TOKEN-MARKER") {
 		t.Fatal("the URL path reached the server log")
+	}
+}
+
+// The console must get the alert settings from `serve` (a Deps field that main
+// forgets to pass leaves every page on strict defaults and no test send): with
+// public_url and an SMTP host configured, the Alerts page shows neither banner.
+func TestServePassesTheAlertSettingsToTheConsole(t *testing.T) {
+	tlsb, err := testtls.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	db, _ := newDB(t)
+	st, err := sqlite.Open(context.Background(), db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hash, err := webauth.NewHasher().Hash(context.Background(), "correct horse battery staple")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.CreateUser(context.Background(), store.NewUser{Email: "adm@example.com", Role: store.RoleAdmin, PasswordHash: hash}, time.Now(), testAudit); err != nil {
+		t.Fatal(err)
+	}
+	st.Close()
+
+	srv := startServe(t, tlsb, db, "CLAMFLEET_SERVER_PUBLIC_URL=https://cf.example",
+		"CLAMFLEET_SERVER_SMTP_HOST=127.0.0.1", "CLAMFLEET_SERVER_SMTP_FROM=cf@example.org", "CLAMFLEET_SERVER_SMTP_TLS=none")
+	ca, _ := os.ReadFile(tlsb.CA)
+	pool := x509.NewCertPool()
+	pool.AppendCertsFromPEM(ca)
+	jar, _ := cookiejar.New(nil)
+	c := &http.Client{Jar: jar, Timeout: 20 * time.Second, Transport: &http.Transport{TLSClientConfig: &ctls.Config{RootCAs: pool}},
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	req, _ := http.NewRequest("POST", "https://"+srv.addr+"/login", strings.NewReader(url.Values{"email": {"adm@example.com"}, "password": {"correct horse battery staple"}}.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	resp, err := c.Do(req)
+	if err != nil || resp.StatusCode != 303 {
+		t.Fatalf("login: %v %v", resp, err)
+	}
+	resp.Body.Close()
+	resp, err = c.Get("https://" + srv.addr + "/admin/alerts")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != 200 || strings.Contains(string(body), "alert-banner-no-public-url") || strings.Contains(string(body), "alert-banner-email-off") {
+		t.Fatalf("the console did not get the alert settings from serve: %d\n%s", resp.StatusCode, body)
 	}
 }
