@@ -458,6 +458,33 @@ func TestPruneAlertWindows(t *testing.T) {
 	}
 }
 
+// Rule: a closed window is pruned only when closed_at is strictly before the
+// cutoff (closed_at < before), so a window closed exactly at the retention
+// boundary survives one more run, like events pruned by received_at.
+func TestPruneAlertWindowsBoundary(t *testing.T) {
+	ctx := context.Background()
+	s := openTemp(t)
+	h := addHost(t, s, "a")
+	hid := itoa(h.ID)
+	for _, q := range []string{
+		`INSERT INTO alert_targets (id, name, type, config, created_at, updated_at) VALUES (1, 't', 'webhook', '{}', 1, 1)`,
+		`INSERT INTO alert_detection_windows (id, target_id, host_id, window_start, closed_at, outcome) VALUES (1, 1, ` + hid + `, 1, 199, 'summarised')`,
+		`INSERT INTO alert_detection_windows (id, target_id, host_id, window_start, closed_at, outcome) VALUES (2, 1, ` + hid + `, 1, 200, 'summarised')`,
+		`INSERT INTO alert_detection_windows (id, target_id, host_id, window_start, closed_at, outcome) VALUES (3, 1, ` + hid + `, 1, 201, 'summarised')`,
+	} {
+		if _, err := s.w.Exec(q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	n, err := s.PruneAlertWindows(ctx, time.Unix(200, 0), 10)
+	if err != nil || n != 1 {
+		t.Fatalf("pruned %d err %v, want only the window closed before the cutoff", n, err)
+	}
+	if left := count(t, s, `SELECT count(*) FROM alert_detection_windows WHERE closed_at = 200`); left != 1 {
+		t.Fatal("the window closed exactly at the cutoff was pruned")
+	}
+}
+
 func TestHostDetailAndFleetShowOpenEvents(t *testing.T) {
 	ctx := context.Background()
 	s := openTemp(t)
