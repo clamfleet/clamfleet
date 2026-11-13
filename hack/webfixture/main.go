@@ -47,6 +47,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -110,6 +111,20 @@ type AlertsFixture struct {
 	Host string `json:"host"`
 }
 
+// EventsFixture describes the seeded detections (the events page and acknowledgement).
+// They are posted through the real /v1/event with the hosts' tokens; some are then
+// acknowledged by the fixture admin, straight in the store (before any browser test
+// starts), so the Acknowledged filter and "Acknowledged by" have content.
+type EventsFixture struct {
+	// OpenCount is how many are unacknowledged (the nav badge at the start).
+	OpenCount int `json:"open_count"`
+	// IDsByHost lists the event ids of each host, oldest first.
+	IDsByHost map[string][]int64 `json:"ids_by_host"`
+	// AckedIDs were acknowledged by AckedBy (the admin's email).
+	AckedIDs []int64 `json:"acked_ids"`
+	AckedBy  string  `json:"acked_by"`
+}
+
 // Fixture is the content of fixture.json.
 type Fixture struct {
 	URL        string `json:"url"`
@@ -130,6 +145,7 @@ type Fixture struct {
 	Forced       *Login          `json:"forced,omitempty"`
 	Hosts        map[string]Host `json:"hosts"`
 	Alerts       AlertsFixture   `json:"alerts"`
+	Events       EventsFixture   `json:"events"`
 }
 
 func main() {
@@ -285,6 +301,13 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		if err := postReport(ctx, client, fx.URL, fx.Hosts[h.name].Token, h.report(h.name, now)); err != nil {
 			return fmt.Errorf("seed report of %s: %w", h.name, err)
 		}
+	}
+
+	// Detections next, before the alert target exists, and the dispatcher is given
+	// time to plan them (with no target they match none), so no seeded detection is
+	// ever delivered to the seeded target later.
+	if err := seedEvents(ctx, client, fx, now); err != nil {
+		return fmt.Errorf("seed events: %w", err)
 	}
 
 	// The seeded alert target, created after the reports so it never sees the
@@ -506,6 +529,140 @@ func postReport(ctx context.Context, c *http.Client, base, token string, r proto
 		return err
 	}
 	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, base+"/v1/report", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := c.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusAccepted {
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return fmt.Errorf("status %d: %s", resp.StatusCode, strings.TrimSpace(string(b)))
+	}
+	return nil
+}
+
+// Characters the Go source spells with escapes the reader can see.
+const (
+	rloChar = "\u202e" // RIGHT-TO-LEFT OVERRIDE
+	lsChar  = "\u2028" // LINE SEPARATOR
+	bs1     = "\\"     // one backslash
+	bs2     = "\\\\"   // two: how the agent encodes one backslash in a file name
+)
+
+// seedEvent is one detection to post.
+type seedEvent struct {
+	host      string
+	n         int // the agent event id is n in hex; two events with the same key but different n merge (x2)
+	ago       time.Duration
+	path, sig string
+	ackedBy   bool
+}
+
+// eventSeeds are the detections of the fixture. Paths are in the AGENT'S ENCODING
+// (docs/api.md): a backslash is doubled, a non-UTF-8 byte is \xNN.
+func eventSeeds() []seedEvent {
+	const eicar = "Win.Test.EICAR_HDB-1"
+	return []seedEvent{
+		{host: "crit01", n: 1, ago: 2 * time.Minute, path: "/srv/eicar/a.com", sig: eicar},
+		{host: "crit01", n: 2, ago: time.Minute, path: "/srv/eicar/b.com", sig: eicar},
+		// Hostile names: markup, a real right-to-left override, the text of an escape, a
+		// real U+2028, a real backslash in a file name, and a byte that is not UTF-8.
+		{host: "xss01", n: 3, ago: 4 * time.Minute, path: "/srv/<img src=x onerror=alert(1)>/" + rloChar + "txt.exe", sig: "<b>Win.Test.XSS</b>"},
+		{host: "xss01", n: 4, ago: 3 * time.Minute, path: "/srv/literal" + bs2 + "u{202E}name", sig: "Win.Test.Literal"},
+		{host: "xss01", n: 5, ago: 150 * time.Second, path: "/srv/line" + lsChar + "break", sig: "Win.Test.LineSep"},
+		{host: "xss01", n: 6, ago: 140 * time.Second, path: "/srv/back" + bs2 + "slash.txt", sig: "Win.Test.Backslash"},
+		{host: "xss01", n: 7, ago: 130 * time.Second, path: "/srv/raw" + bs1 + "xffbyte", sig: "Win.Test.RawByte"},
+		// One detection reported twice with two ids and the same key: shown once, x2.
+		{host: "warn01", n: 8, ago: 5 * time.Minute, path: "/srv/dup/file.bin", sig: "Eicar-Test"},
+		{host: "warn01", n: 9, ago: 5 * time.Minute, path: "/srv/dup/file.bin", sig: "Eicar-Test"},
+		{host: "alerts01", n: 10, ago: 30 * time.Second, path: "/srv/alerts/eicar.com", sig: eicar},
+		// History: detected 3 h before it arrived (it waited in an agent's spool), then acknowledged.
+		{host: "ok01", n: 11, ago: 3 * time.Hour, path: "/srv/old/one.bin", sig: eicar, ackedBy: true},
+		{host: "ok01", n: 12, ago: 3*time.Hour + time.Minute, path: "/srv/old/two.bin", sig: eicar, ackedBy: true},
+	}
+}
+
+// seedEvents posts the detections, waits until the dispatcher has planned them,
+// acknowledges the ones marked, and records the ids in fx.Events.
+func seedEvents(ctx context.Context, c *http.Client, fx *Fixture, now time.Time) error {
+	seeds := eventSeeds()
+	for _, e := range seeds {
+		id := fmt.Sprintf("%032x", e.n)
+		ev := proto.Event{Schema: proto.SchemaVersion, ID: &id, Host: e.host, TS: proto.UTC(now.Add(-e.ago)), Path: e.path, Signature: e.sig, Source: "clamd"}
+		if err := postJSON(ctx, c, fx.URL+"/v1/event", fx.Hosts[e.host].Token, ev); err != nil {
+			return fmt.Errorf("%s: %w", e.host, err)
+		}
+	}
+	st, err := sqlite.Open(ctx, fx.DB)
+	if err != nil {
+		return err
+	}
+	defer st.Close()
+	// Flagged events are planned by the dispatcher (it is woken by each new event);
+	// with no alert target they are unrouted and the flags clear.
+	deadline := time.Now().Add(20 * time.Second)
+	for {
+		work, err := st.HasAlertWork(ctx, time.Now(), 0)
+		if err != nil {
+			return err
+		}
+		if !work {
+			break
+		}
+		if time.Now().After(deadline) {
+			return errors.New("the dispatcher did not plan the seeded detections within 20 s")
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	rows, err := st.ListEvents(ctx, store.EventFilter{Ack: store.AckAll, Limit: store.MaxEventPage})
+	if err != nil {
+		return err
+	}
+	byPath := map[string]store.EventRow{}
+	for _, r := range rows {
+		byPath[r.Host+"\x00"+r.Path] = r
+	}
+	fx.Events = EventsFixture{IDsByHost: map[string][]int64{}, AckedBy: fx.Admin.Email}
+	audit := store.Audit{Kind: store.ActorUser, Actor: fx.Admin.Email}
+	seen := map[int64]bool{}
+	for _, e := range seeds {
+		r, ok := byPath[e.host+"\x00"+e.path]
+		if !ok {
+			return fmt.Errorf("seeded event %d of %s was not stored", e.n, e.host)
+		}
+		if seen[r.ID] {
+			continue // the merged duplicate
+		}
+		seen[r.ID] = true
+		fx.Events.IDsByHost[e.host] = append(fx.Events.IDsByHost[e.host], r.ID)
+		if e.ackedBy {
+			if _, _, err := st.AckEvent(ctx, r.ID, time.Now(), audit); err != nil {
+				return err
+			}
+			fx.Events.AckedIDs = append(fx.Events.AckedIDs, r.ID)
+		}
+	}
+	for host := range fx.Events.IDsByHost {
+		ids := fx.Events.IDsByHost[host]
+		sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	}
+	open, err := st.CountOpenEvents(ctx)
+	if err != nil {
+		return err
+	}
+	fx.Events.OpenCount = int(open)
+	return nil
+}
+
+// postJSON posts v with a bearer token and expects 202.
+func postJSON(ctx context.Context, c *http.Client, url, token string, v any) error {
+	body, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := c.Do(req)

@@ -481,3 +481,49 @@ func TestFixtureAlertsReceiverAndSeededTarget(t *testing.T) {
 		t.Fatalf("%d requests after DELETE", n)
 	}
 }
+
+// The events fixture promises: ids per host, an open count, some acknowledged events,
+// and hostile names that render inert. The page is read as the admin and as the viewer.
+func TestFixtureSeedsDetections(t *testing.T) {
+	fx, newClient := startFixture(t, buildServer(t))
+	ev := fx.Events
+	if ev.OpenCount != 9 || len(ev.AckedIDs) != 2 || ev.AckedBy != fx.Admin.Email {
+		t.Fatalf("%+v", ev)
+	}
+	for host, want := range map[string]int{"crit01": 2, "xss01": 5, "warn01": 1, "alerts01": 1, "ok01": 2} {
+		if got := len(ev.IDsByHost[host]); got != want {
+			t.Errorf("%s: %d event ids, want %d (a merged duplicate counts once)", host, got, want)
+		}
+	}
+	c := newClient()
+	if code, _ := post(t, c, fx.URL, "/login", url.Values{"email": {fx.Admin.Email}, "password": {fx.Admin.Password}}); code != 303 {
+		t.Fatal("admin cannot sign in")
+	}
+	get := func(path string) string {
+		resp, err := c.Get(fx.URL + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		b, _ := io.ReadAll(resp.Body)
+		return string(b)
+	}
+	page := get("/events?ack=all")
+	for _, want := range []string{
+		`data-testid="nav-events-count">9<`, "Acknowledged by " + fx.Admin.Email, "&times;2", "received 3h later, spooled",
+		`\u{202E}</span>`, `\u{2028}</span>`, `byte 0xFF, not valid UTF-8`, `back\slash.txt`, `literal\u{202E}name`,
+		`&lt;img src=x onerror=alert(1)&gt;`, `&lt;b&gt;Win.Test.XSS&lt;/b&gt;`,
+	} {
+		if !strings.Contains(page, want) {
+			t.Errorf("the events page lacks %q", want)
+		}
+	}
+	for _, bad := range []string{"\u202e", "\u2028", "<img src=x", "<b>Win"} {
+		if strings.Contains(page, bad) {
+			t.Errorf("the raw %q reached the page", bad)
+		}
+	}
+	if open := get("/events"); strings.Contains(open, "Acknowledged by") || strings.Count(open, `data-testid="event-row-`) != 9 {
+		t.Errorf("the default (open) filter shows %d rows, want 9 (9 open; the x2 merge is one row)", strings.Count(open, `data-testid="event-row-`))
+	}
+}

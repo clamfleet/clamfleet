@@ -254,6 +254,48 @@ and `/admin/alerts/<name>`): `alert-form-page`, `alert-form`, `alert-name`, `ale
 `secret-page`, `secret-notice`, `secret-value`, `secret-done`. Rotate and delete are inside `<details>`
 elements: click the `*-open` summary first.
 
+### Detections in the fixture
+
+The fixture posts 12 detections through the real `POST /v1/event` with the hosts' tokens, **before** the alert
+target exists and after the dispatcher has planned them (with no target they match none), so no seeded
+detection is ever delivered to the receiver. `ok01`'s two are then acknowledged by `admin@fixture.example`
+straight in the store. `fixture.json` has an `events` object:
+
+| Key | Content |
+|---|---|
+| `open_count` | 9: the number in the nav badge at the start (and the rows of the default Open filter) |
+| `ids_by_host` | event ids per host, oldest first (a merged duplicate counts once) |
+| `acked_ids`, `acked_by` | the two acknowledged events of `ok01` and the admin's email |
+
+| Host | Seeded detections |
+|---|---|
+| `crit01` | 2 open EICAR detections (`/srv/eicar/a.com`, `b.com`): the acknowledgement flow clicks one, then `fleet-open-crit01` reads 1 |
+| `xss01` | 5 open: a path with markup and a real U+202E (`/srv/<img src=x onerror=alert(1)>/` + RLO + `txt.exe`) and a signature with HTML; a path with the literal text `\u{202E}`; a path with a real U+2028; a file name with a real backslash (`back\slash.txt`, the agent sends it doubled); a path with a raw non-UTF-8 byte (`\xff`) |
+| `warn01` | 1 row shown "x2": one detection posted twice with two ids and the same key |
+| `alerts01` | 1 open detection |
+| `ok01` | 2 acknowledged detections, detected 3 h before they arrived ("received 3h later, spooled") |
+
+Selectors added for the Detections pages: `nav-events` and `nav-events-count` (every signed-in user); on
+`/events`: `events-page`, `events-filter`, `events-filter-host`, `events-filter-sig`, `events-filter-ack`,
+`events-filter-submit`, `events-count` ("N matching"), `events-table`, `events-empty` (no detection exists),
+`events-no-match` (the filters match none), `events-older`, `events-newest`, and, **for admins only**,
+`events-bulk-open` (a `<details>`: click it first), `events-bulk-expected` (the count the admin is shown) and
+`events-bulk-submit`; per row `event-row-<id>` (with `data-ack="true|false"`), `event-sig-<id>`,
+`event-path-<id>`, `event-occurrences-<id>` (only when more than one), `event-late-<id>`, `event-status-<id>`,
+`event-ackby-<id>` (once acknowledged), and, admins only and only while open, `event-ack-<id>`. On the fleet
+page: `fleet-open-<host>` and `fleet-count-open`; on a host page: `host-events`, `host-events-open`,
+`host-events-all`, `host-no-events` and `host-virusevent`; on the alert target form: `alert-detection-burst`.
+
+How the path is shown: an escape is `<span class="esc" title="...">\u{202E}</span>` (an invisible or
+direction-changing character, or `\xNN` for a non-UTF-8 byte), and literal text is plain text, so a spec can
+tell a real U+202E (an `.esc` element) from a file literally named `\u{202E}` (text). The raw characters
+(U+202E, U+2028) must never appear in the HTML.
+
+**Acknowledging.** As admin, `event-ack-<id>` is an htmx form: the row swaps to "Acknowledged by
+admin@fixture.example" without a page load and with no console or CSP error; a reload keeps it, `nav-events-count`
+is one lower and `fleet-open-<host>` follows. A viewer's page has no `event-ack-*` or `events-bulk-*` at all,
+and a `POST /events/<id>/ack` from the page context with the CSRF token answers 403.
+
 ## Re-recording fixtures (`make fixtures`)
 
 `deploy/test/capture-fixtures.sh` re-records `internal/agent/testdata` from the container
