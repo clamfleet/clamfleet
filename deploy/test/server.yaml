@@ -12,7 +12,11 @@ db_path: /var/lib/clamfleet-server/clamfleet.db
 # default thresholds the host would start CRIT (daily_old_crit) and the clamd
 # transition the health e2e looks for would be invisible. The baseline with these
 # overrides is WARN (freshclam_inactive). eval_interval 2s lets STALE show in seconds.
+# require_virus_event: false because most scenarios run a clamd with no VirusEvent
+# line, which would add a second WARN reason (virusevent_missing) next to the
+# baseline; the detection scenarios (event_e2e_test.go) wire VirusEvent themselves.
 health:
+  require_virus_event: false
   daily_warn_hours: 100000
   daily_crit_hours: 200000
   eval_interval: 2s
