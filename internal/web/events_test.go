@@ -28,11 +28,9 @@ func recordEvent(t *testing.T, e *env, hostID int64, path, sig string, ts, recv 
 		Event: proto.Event{Schema: 1, ID: &aid, TS: ts, Path: path, Signature: sig, Source: "clamd"}}); err != nil {
 		t.Fatal(err)
 	}
-	rows, err := e.st.ListEvents(context.Background(), store.EventFilter{Ack: store.AckAll, Limit: 1})
-	if err != nil {
-		t.Fatal(err)
-	}
-	return rows[0].ID
+	// The id of the row this call stored, found through its receipt: the newest
+	// row by any ordering is not necessarily the one just created.
+	return int64(e.count(`SELECT event_id FROM event_receipts WHERE host_id = ? AND agent_event_id = ?`, hostID, aid))
 }
 
 func hostID(t *testing.T, e *env, name string) int64 {
@@ -181,7 +179,7 @@ func TestAckThroughRouter(t *testing.T) {
 	}
 
 	// Without htmx: 303 to a validated return, never off-site.
-	for _, c := range []struct{ ret, want string }{
+	for i, c := range []struct{ ret, want string }{
 		{"/events?host=web01&ack=all", "/events?host=web01&ack=all"},
 		{"/hosts/web01", "/hosts/web01"},
 		{"//evil.example/", "/events"},
@@ -192,7 +190,11 @@ func TestAckThroughRouter(t *testing.T) {
 		{"/admin/hosts", "/events"},
 		{"", "/events"},
 	} {
-		id2 := recordEvent(t, e, hid, "/srv/"+strconv.Itoa(len(c.ret)), "Eicar", e.clock(), e.clock(), 100+len(c.ret)+int(time.Now().UnixNano()%1000))
+		// The index makes path and agent id unique per case, so each case acknowledges a fresh event.
+		id2 := recordEvent(t, e, hid, "/srv/ret"+strconv.Itoa(i), "Eicar", e.clock(), e.clock(), 100+i)
+		if n := e.count(`SELECT count(*) FROM events WHERE id = ? AND ack_by IS NULL`, id2); n != 1 {
+			t.Fatalf("return=%q: event %d is already acknowledged", c.ret, id2)
+		}
 		p := b.post("/events/"+strconv.FormatInt(id2, 10)+"/ack", url.Values{"csrf_token": {tok}, "return": {c.ret}})
 		if p.status != 303 || p.header.Get("Location") != c.want {
 			t.Errorf("return=%q: %d to %q, want 303 to %q", c.ret, p.status, p.header.Get("Location"), c.want)
