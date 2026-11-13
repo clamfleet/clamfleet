@@ -70,6 +70,10 @@ type Store struct {
 	// transaction. Always nil in production.
 	betweenExpireWrites func() error
 
+	// betweenResealRows is a test hook: ResealSecrets calls it after each row, to
+	// prove a failure midway rolls every row back. Always nil in production.
+	betweenResealRows func() error
+
 	// afterHostDelete is a test hook: DeleteHost calls it between the delete
 	// and the audit insert, to prove a failure there rolls both back.
 	afterHostDelete func() error

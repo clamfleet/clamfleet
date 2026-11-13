@@ -885,3 +885,55 @@ func TestHasAlertWorkSeesEachKindOfWork(t *testing.T) {
 		t.Fatal("a due hold is work")
 	}
 }
+
+// Review finding 11: key rotation re-seals TOTP and alert-target secrets in ONE
+// transaction. A failure midway rolls everything back; a conflict leaves the
+// changed row alone and commits the rest.
+func TestResealSecretsIsOneTransaction(t *testing.T) {
+	ctx := context.Background()
+	s := openTemp(t)
+	u := enrolled(t, s, "a@example.com")
+	a := newTarget(t, s, "a", "webhook", nil)
+	b := newTarget(t, s, "b", "webhook", nil)
+	totp := []store.Reseal{{UserID: u.ID, Old: []byte("sealed-1"), New: []byte("new-totp")}}
+	alerts := []store.AlertReseal{
+		{TargetID: a.ID, Old: a.Sealed, New: []byte("new-a")},
+		{TargetID: b.ID, Old: b.Sealed, New: []byte("new-b")},
+	}
+	// A failure after the second row: nothing at all is re-sealed.
+	boom := errors.New("boom")
+	calls := 0
+	s.betweenResealRows = func() error {
+		calls++
+		if calls == 2 {
+			return boom
+		}
+		return nil
+	}
+	if _, err := s.ResealSecrets(ctx, totp, alerts, t0, cli); !errors.Is(err, boom) {
+		t.Fatalf("%v", err)
+	}
+	s.betweenResealRows = nil
+	if st, _ := s.UserTOTP(ctx, u.ID); string(st.Sealed) != "sealed-1" {
+		t.Fatalf("the TOTP secret was re-sealed in a rolled-back run: %q", st.Sealed)
+	}
+	for _, n := range []string{"a", "b"} {
+		if got, _ := s.AlertTarget(ctx, n); !strings.HasPrefix(string(got.Sealed), "sealed-") {
+			t.Fatalf("target %s re-sealed in a rolled-back run: %q", n, got.Sealed)
+		}
+	}
+	if count(t, s, `SELECT count(*) FROM audit_log WHERE action = 'secrets.reencrypt'`) != 0 {
+		t.Fatal("a rolled-back run was audited")
+	}
+	// A conflict on b: the other rows commit and the conflict is reported.
+	if _, err := s.w.Exec(`UPDATE alert_targets SET secret = x'ff' WHERE id = ?`, b.ID); err != nil {
+		t.Fatal(err)
+	}
+	res, err := s.ResealSecrets(ctx, totp, alerts, t0, cli)
+	if err != nil || res.TOTP != 1 || res.AlertTargets != 1 || len(res.AlertConflicts) != 1 || res.AlertConflicts[0] != b.ID || len(res.TOTPConflicts) != 0 {
+		t.Fatalf("%+v %v", res, err)
+	}
+	if count(t, s, `SELECT count(*) FROM audit_log WHERE action = 'secrets.reencrypt' AND detail LIKE '%"totp":"1"%' AND detail LIKE '%"alert_target":"1"%' AND detail LIKE '%"conflicts":"1"%'`) != 1 {
+		t.Fatal("the audit row must carry the counts and the conflicts")
+	}
+}

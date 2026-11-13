@@ -161,8 +161,11 @@ type TOTPStore interface {
 	// SealedTOTPSecrets lists every stored sealed secret (start-up check, key rotation).
 	SealedTOTPSecrets(ctx context.Context) ([]SealedSecret, error)
 	// ResealTOTPSecrets applies each replacement only while the stored blob is
-	// still Old, and audits secrets.reencrypt. It returns how many were applied.
-	ResealTOTPSecrets(ctx context.Context, rs []Reseal, now time.Time, a Audit) (int, error)
+	// still Old (compare-and-swap), and audits secrets.reencrypt. It returns how
+	// many were applied and the user ids whose blob changed meanwhile (conflicts).
+	// Key rotation uses ResealSecrets (AlertStore), which does TOTP and alert
+	// targets in one transaction.
+	ResealTOTPSecrets(ctx context.Context, rs []Reseal, now time.Time, a Audit) (applied int, conflicts []int64, err error)
 
 	// DeleteExpiredChallenges removes challenges with expires_at <= now.
 	DeleteExpiredChallenges(ctx context.Context, now time.Time) (int64, error)

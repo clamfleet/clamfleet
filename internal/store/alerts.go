@@ -313,6 +313,14 @@ type AlertReseal struct {
 	New      []byte
 }
 
+// ResealResult is what ResealSecrets did. Conflicts are the ids (user ids for
+// TOTP, target ids for alert targets) whose blob changed between the caller's
+// read and the write: they were left alone.
+type ResealResult struct {
+	TOTP, AlertTargets            int
+	TOTPConflicts, AlertConflicts []int64
+}
+
 // UnroutedEvent is a detection that no target matched.
 type UnroutedEvent struct {
 	EventID int64
@@ -393,8 +401,12 @@ type AlertStore interface {
 
 	// SealedAlertSecrets lists every stored webhook secret.
 	SealedAlertSecrets(ctx context.Context) ([]SealedTargetSecret, error)
-	// ResealAlertSecrets applies each replacement as a compare-and-swap on the
-	// old blob, in one transaction. It returns the applied count and the ids
-	// whose blob changed meanwhile.
+	// ResealSecrets re-seals TOTP secrets and alert-target secrets in ONE
+	// transaction, each row a compare-and-swap on its old blob. A database error
+	// rolls everything back (nothing is re-sealed); a row whose blob changed
+	// meanwhile is a conflict, the other rows commit. It audits secrets.reencrypt
+	// with the counts when something was applied.
+	ResealSecrets(ctx context.Context, totp []Reseal, alerts []AlertReseal, now time.Time, a Audit) (ResealResult, error)
+	// ResealAlertSecrets is ResealSecrets for alert targets only.
 	ResealAlertSecrets(ctx context.Context, rs []AlertReseal, now time.Time, a Audit) (applied int, conflicts []int64, err error)
 }

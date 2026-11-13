@@ -788,26 +788,63 @@ func (s *Store) SealedAlertSecrets(ctx context.Context) ([]store.SealedTargetSec
 
 // ResealAlertSecrets implements store.AlertStore.
 func (s *Store) ResealAlertSecrets(ctx context.Context, rs []store.AlertReseal, now time.Time, a store.Audit) (int, []int64, error) {
-	applied := 0
-	var conflicts []int64
+	res, err := s.ResealSecrets(ctx, nil, rs, now, a)
+	return res.AlertTargets, res.AlertConflicts, err
+}
+
+// ResealSecrets implements store.AlertStore. One transaction for both kinds of
+// secret, so an interrupted key rotation (a crash, a database error) re-seals
+// nothing and running it again does the whole job; a row that changed between
+// the caller's read and this write (an admin rotated a webhook key, a user
+// re-enrolled TOTP) is reported as a conflict instead of being overwritten, and
+// the caller must say so (exit 1) rather than claim a complete rotation.
+func (s *Store) ResealSecrets(ctx context.Context, totp []store.Reseal, alerts []store.AlertReseal, now time.Time, a store.Audit) (store.ResealResult, error) {
+	var res store.ResealResult
 	err := s.inTx(ctx, func(q *sqlcdb.Queries) error {
-		applied, conflicts = 0, nil
-		for _, r := range rs {
+		res = store.ResealResult{}
+		for _, r := range totp {
+			n, err := q.ResealTOTPSecret(ctx, sqlcdb.ResealTOTPSecretParams{NewSecret: r.New, ID: r.UserID, OldSecret: r.Old})
+			if err != nil {
+				return err
+			}
+			if n == 1 {
+				res.TOTP++
+			} else {
+				res.TOTPConflicts = append(res.TOTPConflicts, r.UserID)
+			}
+			if s.betweenResealRows != nil {
+				if err := s.betweenResealRows(); err != nil {
+					return err
+				}
+			}
+		}
+		for _, r := range alerts {
 			n, err := q.ResealAlertSecret(ctx, sqlcdb.ResealAlertSecretParams{NewSecret: r.New, ID: r.TargetID, OldSecret: r.Old})
 			if err != nil {
 				return err
 			}
 			if n == 1 {
-				applied++
+				res.AlertTargets++
 			} else {
-				conflicts = append(conflicts, r.TargetID)
+				res.AlertConflicts = append(res.AlertConflicts, r.TargetID)
+			}
+			if s.betweenResealRows != nil {
+				if err := s.betweenResealRows(); err != nil {
+					return err
+				}
 			}
 		}
+		applied := res.TOTP + res.AlertTargets
 		if applied == 0 {
-			return nil
+			return nil // idempotent: nothing to do, nothing to audit
 		}
-		return writeAuditKind(ctx, q, now, a, store.ActionSecretsReseal, store.TargetServer, store.TargetServer,
-			map[string]string{"purpose": "alert-target", "count": strconv.Itoa(applied)})
+		return writeAuditKind(ctx, q, now, a, store.ActionSecretsReseal, store.TargetServer, store.TargetServer, map[string]string{
+			"count": strconv.Itoa(applied), "totp": strconv.Itoa(res.TOTP), "alert_target": strconv.Itoa(res.AlertTargets),
+			"conflicts": strconv.Itoa(len(res.TOTPConflicts) + len(res.AlertConflicts)),
+		})
 	})
-	return applied, conflicts, err
+	if err != nil {
+		return store.ResealResult{}, err
+	}
+	return res, nil
 }

@@ -318,24 +318,9 @@ func (s *Store) SealedTOTPSecrets(ctx context.Context) ([]store.SealedSecret, er
 }
 
 // ResealTOTPSecrets implements store.TOTPStore.
-func (s *Store) ResealTOTPSecrets(ctx context.Context, rs []store.Reseal, now time.Time, a store.Audit) (int, error) {
-	applied := 0
-	err := s.inTx(ctx, func(q *sqlcdb.Queries) error {
-		applied = 0 // the transaction body is not retried, but keep it honest if it ever is
-		for _, r := range rs {
-			n, err := q.ResealTOTPSecret(ctx, sqlcdb.ResealTOTPSecretParams{NewSecret: r.New, ID: r.UserID, OldSecret: r.Old})
-			if err != nil {
-				return err
-			}
-			applied += int(n)
-		}
-		if applied == 0 {
-			return nil // idempotent: nothing to do, nothing to audit
-		}
-		return writeAuditKind(ctx, q, now, a, store.ActionSecretsReseal, store.TargetServer, store.TargetServer,
-			map[string]string{"count": strconv.Itoa(applied)})
-	})
-	return applied, err
+func (s *Store) ResealTOTPSecrets(ctx context.Context, rs []store.Reseal, now time.Time, a store.Audit) (int, []int64, error) {
+	res, err := s.ResealSecrets(ctx, rs, nil, now, a)
+	return res.TOTP, res.TOTPConflicts, err
 }
 
 // DeleteExpiredChallenges implements store.TOTPStore.

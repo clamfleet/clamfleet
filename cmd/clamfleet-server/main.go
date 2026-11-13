@@ -79,7 +79,10 @@ commands:
                                               lock and end their sessions (needs no key file)
   key generate [--file PATH] [--add]          create the secret key file (as root; default: secret_key_file);
                                               --add puts a new key on top of an existing file (rotation)
-  key reencrypt                               re-seal stored secrets with the active key (after key generate --add)
+  key reencrypt                               re-seal stored secrets (TOTP and webhook targets) with the active key
+                                              (after key generate --add); exit 1 when incomplete: run it again
+  key check                                   open every stored secret; exit 0 only when all open with the ACTIVE key
+                                              (run it before deleting an old key line)
   version                                     print the version
 
 Host and user commands and migrate take --config FILE too (default: $CLAMFLEET_SERVER_CONFIG or ` + server.DefaultConfigPath + `).
