@@ -68,6 +68,11 @@ func freshServer(t *testing.T) string {
 		"chmod 644 /etc/clamfleet/ca.pem /etc/clamfleet/tls.crt\n"+
 		"chown clamfleet-server:clamfleet-server /etc/clamfleet/tls.key; chmod 600 /etc/clamfleet/tls.key\n")
 
+	// The secret key file (webhook targets seal their URL with it), created as
+	// root exactly like the documented install: root:clamfleet-server 0640. It
+	// must exist before serve starts, which reads it only at start.
+	sh(t, "/usr/local/bin/clamfleet-server key generate 2>/dev/null; chgrp clamfleet-server /etc/clamfleet/server-secret.key; chmod 0640 /etc/clamfleet/server-secret.key")
+
 	// Default (info) level: the journal must already hold the successful request lines.
 	sh(t, "systemd-run --quiet --collect --unit="+serverUnit+" --uid=clamfleet-server "+
 		"/usr/local/bin/clamfleet-server serve")
