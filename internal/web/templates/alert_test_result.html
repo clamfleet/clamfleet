@@ -1,0 +1,8 @@
+{{/* SPDX-License-Identifier: AGPL-3.0-only */}}
+{{/* SPDX-FileCopyrightText: The ClamFleet Authors */}}
+{{/*
+  alert_test_result.html: the htmx fragment a test send swaps into the target's
+  result cell. Body: web.testResultView. Our own words only: never a response
+  body, never the URL.
+*/}}
+{{define "alert_test_result"}}<div class="{{if .OK}}ok{{else}}fail{{end}}" data-testid="test-result-text-{{.Target}}">{{range .Lines}}<div>{{.}}</div>{{end}}</div>{{end}}

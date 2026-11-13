@@ -120,7 +120,7 @@ administrator-issued enrolment code would remove this; it is not built.
 
 ## The secret key file
 
-TOTP secrets are stored encrypted (AES-256-GCM) with a key from a file, `secret_key_file` (default
+TOTP secrets and the URLs and signing keys of webhook alert targets are stored encrypted (AES-256-GCM) with a key from a file, `secret_key_file` (default
 `/etc/clamfleet/server-secret.key`). The key is not in the database, and a backup of the database does not
 carry it. Recovery codes are stored as SHA-256 hashes and do not depend on the key.
 
@@ -139,10 +139,14 @@ sudo chmod 0640 /etc/clamfleet/server-secret.key
   unavailable (a TOTP user's password alone is never enough: the second step answers 503 for a code, and a
   recovery code still works). With `totp_required` on, or with users who have TOTP, and no key file: it
   refuses to start and says how many. With a key file that cannot open every stored secret: it refuses to
-  start and names the count.
+  start and names the count. Webhook alert targets are the exception: when their secrets cannot be opened
+  (no key file, a retired key) the server starts, logs the count and the fix, and only those targets' alerts
+  fail (see [alerts.md](alerts.md#key-rotation)).
 - **Rotation.** `key generate --add` puts a new key at the top of the file (the first key seals, every key
   opens); restart the server; `sudo -u clamfleet-server clamfleet-server key reencrypt` re-seals every
-  secret with the new key (all or nothing, audited, safe to repeat); delete the old key line; restart. The
+  secret (TOTP and webhook targets) with the new key in one transaction (audited, safe to repeat; it exits 1
+  with `incomplete` when a row changed meanwhile: run it again); `key check` must exit 0 (it opens every secret
+  and reports how many still use an older key); only then delete the old key line; restart. The
   server reads the file only at start. An enrolment that was in progress during a rotation has to be
   started again.
 - **A lost key.** The enrolments cannot be opened and the server refuses to start. Create a new key with
@@ -201,7 +205,9 @@ cookie loses `Secure` and the `__Host-` prefix, and the server logs a warning at
 addresses. With two-factor sign-in, `users` also holds each user's encrypted TOTP secret, the last
 accepted time step and a failure counter, and the database holds the SHA-256 of each recovery code. All of
 it stays in your database: no QR-code service, no CDN, no other third party is involved. Deleting a user is not available; the audit rows keep the
-email as text, and retention for the audit log arrives with a later milestone.
+email as text, and retention for the audit log arrives with a later milestone. Alerting adds recipient
+addresses (in a target's configuration and, per delivery, in the delivery and log rows, pruned after 90 days
+or with the target) and the payloads sent to the receivers you choose; see [alerts.md](alerts.md#privacy).
 
 ## Pages
 
@@ -214,5 +220,6 @@ email as text, and retention for the audit log arrives with a later milestone.
 | `/account` | signed in | change your password; a card for two-factor sign-in |
 | `/account/totp` | signed in | set up, replace or turn off the authenticator; new recovery codes (each asks for your password) |
 | `/admin/hosts` | admin | all hosts including revoked ones; register, rotate, revoke, delete (type the name to confirm) |
+| `/admin/alerts` | admin | alert targets, banners that say why alerts may not go out, recent deliveries; add, edit, send test, rotate the signing key, delete (see [alerts.md](alerts.md)). Viewers see no menu item and get 403 |
 
 Revoked hosts are not on the fleet page, because their state is frozen.

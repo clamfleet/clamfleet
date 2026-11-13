@@ -50,6 +50,8 @@ const (
 	PurposeTOTP = "totp"
 	// PurposeTOTPPending seals the secret of an enrolment in progress (ids: user id, session id).
 	PurposeTOTPPending = "totp-pending"
+	// PurposeAlertTarget seals a webhook alert target's URL and signing key (ids: target id).
+	PurposeAlertTarget = "alert-target"
 
 	blobVersion = 1
 	kidBytes    = 8
@@ -142,7 +144,8 @@ func Parse(r io.Reader) (*Keyring, error) {
 	return &ring, nil
 }
 
-// LoadFile reads and checks the key file at path.
+// openProtected opens path for reading after the permission checks shared by
+// the key file and every other secret file (smtp.password_file, --url-file).
 //
 // Rule: the file must be a regular file (not a symlink: Lstat, open with
 // O_NOFOLLOW, then Fstat and compare, so it cannot be swapped between the
@@ -150,34 +153,87 @@ func Parse(r io.Reader) (*Keyring, error) {
 // owner root and group clamfleet-server with 0640, or the server user with
 // 0600. A missing file returns an error for which errors.Is(err, os.ErrNotExist)
 // holds, so the caller can tell "absent" from "present and wrong".
-func LoadFile(path string) (*Keyring, error) {
+func openProtected(path, what string) (*os.File, error) {
 	li, err := os.Lstat(path)
 	if err != nil {
-		return nil, fmt.Errorf("key file: %w", err)
+		return nil, fmt.Errorf("%s: %w", what, err)
 	}
 	if !li.Mode().IsRegular() {
-		return nil, fmt.Errorf("key file %s is not a regular file (symbolic links are refused)", path)
+		return nil, fmt.Errorf("%s %s is not a regular file (symbolic links are refused)", what, path)
 	}
 	f, err := os.OpenFile(path, os.O_RDONLY|noFollow, 0)
 	if err != nil {
-		return nil, fmt.Errorf("key file: %w", err)
+		return nil, fmt.Errorf("%s: %w", what, err)
 	}
-	defer f.Close()
 	fi, err := f.Stat()
 	if err != nil {
-		return nil, fmt.Errorf("key file: %w", err)
+		f.Close()
+		return nil, fmt.Errorf("%s: %w", what, err)
 	}
 	if !os.SameFile(li, fi) || !fi.Mode().IsRegular() {
-		return nil, fmt.Errorf("key file %s changed while it was being opened", path)
+		f.Close()
+		return nil, fmt.Errorf("%s %s changed while it was being opened", what, path)
 	}
 	if perm := fi.Mode().Perm(); perm&0o027 != 0 {
-		return nil, fmt.Errorf("key file %s has mode %04o: it must not be readable by others or writable by its group (use 0640 root:clamfleet-server or 0600)", path, perm)
+		f.Close()
+		return nil, fmt.Errorf("%s %s has mode %04o: it must not be readable by others or writable by its group (use 0640 root:clamfleet-server or 0600)", what, path, perm)
 	}
+	return f, nil
+}
+
+// LoadFile reads and checks the key file at path (see openProtected for the rule).
+func LoadFile(path string) (*Keyring, error) {
+	f, err := openProtected(path, "key file")
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
 	ring, err := Parse(f)
 	if err != nil {
 		return nil, fmt.Errorf("key file %s: %w", path, err)
 	}
 	return ring, nil
+}
+
+// ReadProtectedFileExact is ReadProtectedFile for a password: only a trailing
+// line end ("\n" or "\r\n") is removed, so leading and trailing spaces that
+// are part of the password survive. An empty result is an error.
+func ReadProtectedFileExact(path, what string) (string, error) {
+	f, err := openProtected(path, what)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	b, err := io.ReadAll(io.LimitReader(f, maxKeyFile))
+	if err != nil {
+		return "", fmt.Errorf("%s: %w", what, err)
+	}
+	v := strings.TrimSuffix(strings.TrimSuffix(string(b), "\n"), "\r")
+	if v == "" {
+		return "", fmt.Errorf("%s %s is empty", what, path)
+	}
+	return v, nil
+}
+
+// ReadProtectedFile reads a small secret file (an SMTP password, a webhook URL)
+// under the permission rule of the key file. what names the file in errors
+// ("smtp.password_file"). At most 64 KiB are read; leading and trailing
+// whitespace, including the final newline, is trimmed. An empty file is an error.
+func ReadProtectedFile(path, what string) (string, error) {
+	f, err := openProtected(path, what)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	b, err := io.ReadAll(io.LimitReader(f, maxKeyFile))
+	if err != nil {
+		return "", fmt.Errorf("%s: %w", what, err)
+	}
+	v := strings.TrimSpace(string(b))
+	if v == "" {
+		return "", fmt.Errorf("%s %s is empty", what, path)
+	}
+	return v, nil
 }
 
 // Len is the number of keys.

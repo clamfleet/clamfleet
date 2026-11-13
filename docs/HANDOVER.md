@@ -86,7 +86,7 @@ Prefer the standard library. Add a dependency only where listed.
 | Migrations | `pressly/goose` |
 | Templates | `html/template` |
 | Front end | htmx, vendored and embedded, no build step |
-| Email | `wneessen/go-mail` |
+| Email | `net/smtp` (stdlib) plus a small in-repo client layer (LOGIN auth, MIME). Decision: M4 plan, decision 11. |
 | Metrics | `prometheus/client_golang` |
 | Config | YAML (`gopkg.in/yaml.v3`) with environment variable overrides |
 | Logging | `log/slog`, JSON output |
@@ -270,10 +270,10 @@ Two roles: `viewer` (read only) and `admin`. For `ldap` and `oidc`, roles are ma
 
 - Sources: rows in `state_changes` and new rows in `events`.
 - Alerts fire on transitions only, including recovery to OK.
-- Cooldown per host and target, default 15 minutes, so a flapping host does not flood targets. Detection events are never suppressed.
+- Cooldown per host and target, default 15 minutes, so a flapping host does not flood targets. Changes inside the cooldown are coalesced: at the end of the window one alert reports the current state if it differs from the last one sent, so a recovery is delayed by at most one cooldown and never lost. Detection events are never suppressed.
 - Each target has a minimum severity and an optional tag filter.
-- Email: SMTP with STARTTLS. Plain text body.
-- Webhook: HTTP POST with JSON payload below. Optional HMAC-SHA256 signature header using a per-target secret. Retry with exponential backoff, up to 5 attempts. Every attempt is written to `alert_log`.
+- Email: SMTP with STARTTLS (default, port 587, mandatory once chosen) or implicit TLS (port 465). Plaintext SMTP only to a relay on a loopback or private address, and credentials only over TLS or to loopback (section 13). PLAIN or LOGIN auth; the password is read from a protected file. One message per recipient. Plain text body, quoted-printable.
+- Webhook: HTTP POST with JSON payload below. Optional HMAC-SHA256 signature header using a per-target secret. Retry with exponential backoff, up to 5 attempts. Every attempt is written to `alert_log`. Email deliveries use the same schedule (5 attempts over about 81 minutes). An email counts as delivered at the server's positive reply to the end of DATA.
 
 ```json
 {
@@ -300,8 +300,9 @@ tls: {cert: /etc/clamfleet/tls.crt, key: /etc/clamfleet/tls.key}
 db_path: /var/lib/clamfleet/clamfleet.db
 retention: {reports_days: 30, events_days: 365, state_changes_days: 365}
 health: {stale_factor: 3, daily_warn_hours: 24, daily_crit_hours: 72, behind_warn: 2}
-alert: {cooldown: 15m}
-smtp: {host: smtp.example, port: 587, from: clamfleet@example}
+public_url: https://clamfleet.example   # links in alerts
+alert: {cooldown: 15m, webhook: {timeout: 10s, allow_private: true, allow_loopback: false}}
+smtp: {host: smtp.example, port: 587, tls: starttls, from: clamfleet@example, username: clamfleet, password_file: /etc/clamfleet/smtp.pass}
 auth: {mode: local}   # or ldap / oidc, see section 10
 ```
 
@@ -326,7 +327,7 @@ Every setting can be overridden by an environment variable (`CLAMFLEET_` prefix)
 
 - Server handles 100 agents at a 5-minute interval on 1 vCPU and 512 MB RAM.
 - Agent resident memory under 30 MB. Agent CPU negligible between reports.
-- TLS 1.2 minimum on all connections. Tokens and secrets never logged.
+- TLS 1.2 minimum on every connection to a public address. Plaintext is allowed only to loopback and private addresses (the reverse proxy in front of the server, alert receivers, an SMTP relay), and the console marks such alert targets as unencrypted. Tokens and secrets never logged.
 - Structured JSON logs. Security-relevant actions (login, token change, acknowledgement, alert target change) logged with the acting user.
 - The server keeps working and keeps alerting if SMTP or a webhook target is down.
 
@@ -337,7 +338,7 @@ Every setting can be overridden by an environment variable (`CLAMFLEET_` prefix)
 | 1 | `internal/proto`, agent collectors, `collect --dry-run` | Dry run prints a valid report on Debian 12 and RHEL 9 with ClamAV installed. Unit tests parse real CVD and CLD headers and a recorded clamd socket session. |
 | 2 | Server ingest API, SQLite schema, migrations, token auth | Agent reports are stored. Bad token returns 401. Unknown payload fields are accepted. |
 | 3 | Health evaluator, `state_changes`, fleet page | Stopping clamd turns the host CRIT within one interval. Stopping the agent turns it STALE after 3 intervals. |
-| 4 | Email and webhook alerting | One alert per transition, recovery alert sent, cooldown respected, failures recorded in `alert_log`. |
+| 4 | Email and webhook alerting | Each transition yields at most one logical alert per target (changes within the cooldown are coalesced into one); a recovery alert is sent; the cooldown is respected; delivery is at least once (receivers deduplicate on the alert id); every attempt and every failure is recorded in `alert_log`. |
 | 5 | Detection events, spool, events page, acknowledgement | EICAR test file produces an alert within 30 seconds. Event survives server downtime via spool. |
 | 6 | Packaging, LDAP and OIDC login, `/metrics`, retention job, backup command | .deb and .rpm install and start cleanly. Old rows are removed per config. |
 
@@ -364,7 +365,7 @@ These are not decided. The agent must ask before implementing anything that depe
 
 1. Licence: Apache-2.0 or MIT (permissive), or GPL-2.0 (matches ClamAV itself). Must be decided before the first public commit.
 2. Final project name. Check for conflicts on GitHub, package registries and the ClamAV trademark before publishing.
-3. Whether to add syslog or SIEM forwarding (for example CEF or JSON over syslog) as a built-in alert target.
+3. Decided (M4 decision 17): not in v1; webhook JSON to a collector, and one JSON log line per alert for journald forwarders.
 4. Whether to support a container image for the server in v1, in addition to .deb and .rpm.
 5. Supported distribution list for the agent beyond Debian 12 and RHEL 9.
 

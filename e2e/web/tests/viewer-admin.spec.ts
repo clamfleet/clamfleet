@@ -12,6 +12,7 @@ test('a viewer gets no admin controls and a 403 on every admin route', async ({ 
   await login(page, fx.viewer);
   await expect(page.getByTestId('fleet-table')).toBeVisible();
   await expect(page.getByTestId('nav-admin')).toHaveCount(0);
+  await expect(page.getByTestId('nav-alerts')).toHaveCount(0);
 
   // Host page: the admin block is absent.
   await page.getByTestId('fleet-link-ok01').click();
@@ -25,6 +26,10 @@ test('a viewer gets no admin controls and a 403 on every admin route', async ({ 
   await expect(page.getByTestId('error-page')).toHaveAttribute('data-status', '403');
   await expect(page.getByTestId('admin-hosts-page')).toHaveCount(0);
 
+  const alerts = await page.goto('/admin/alerts');
+  expect(alerts!.status()).toBe(403);
+  await expect(page.getByTestId('admin-alerts-page')).toHaveCount(0);
+
   // Direct writes with a valid session and a valid CSRF token: only the role stops them.
   await page.goto('/');
   const csrf = await page.locator('meta[name="csrf-token"]').getAttribute('content');
@@ -32,6 +37,7 @@ test('a viewer gets no admin controls and a 403 on every admin route', async ({ 
   const headers = { 'X-CSRF-Token': csrf! };
   for (const path of [
     '/admin/hosts',
+    '/admin/alerts/seeded-hook/test',
     '/admin/hosts/ok01/rotate-token',
     '/admin/hosts/ok01/revoke-token',
     '/admin/hosts/ok01/delete',

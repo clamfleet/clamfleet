@@ -72,8 +72,8 @@ func TestMigrateEmptyThenNoop(t *testing.T) {
 func TestMigrateUpDownUp(t *testing.T) {
 	ctx := context.Background()
 	s := openTemp(t)
-	// MigrateDown reverts one migration at a time: 00003 first, then 00002, then 00001.
-	for range 2 {
+	// MigrateDown reverts one migration at a time: 00004 and 00003 first, then 00002, then 00001.
+	for range 3 {
 		if err := s.MigrateDown(ctx); err != nil {
 			t.Fatal(err)
 		}

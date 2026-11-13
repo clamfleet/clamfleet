@@ -8,6 +8,8 @@
   no eval (hx-on and js: values are off), no script tags in swapped HTML, no
   injected indicator stylesheet, and no history snapshots in sessionStorage
   (a snapshot would keep fleet data and one-time tokens in the browser).
+  responseHandling is htmx's default except that a 429 is swapped too: the
+  rate-limited test send explains itself in its fragment.
   The CSRF token for htmx requests rides on <body hx-headers>; forms carry it as
   a hidden field. The masked token differs on every rendering by design.
 */}}
@@ -16,7 +18,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="htmx-config" content='{"includeIndicatorStyles":false,"allowEval":false,"allowScriptTags":false,"historyCacheSize":0,"refreshOnHistoryMiss":true}'>
+<meta name="htmx-config" content='{"includeIndicatorStyles":false,"allowEval":false,"allowScriptTags":false,"historyCacheSize":0,"refreshOnHistoryMiss":true,"responseHandling":[{"code":"204","swap":false},{"code":"[23]..","swap":true},{"code":"429","swap":true,"error":false},{"code":"[45]..","swap":false,"error":true}]}'>
 {{if .Principal}}<meta name="csrf-token" content="{{.CSRF}}">{{end}}
 <title>{{.Title}} - ClamFleet</title>
 <link rel="stylesheet" href="/static/app.css">
@@ -28,7 +30,8 @@
   {{if .Principal}}
   <nav class="inline">
     <a href="/" data-testid="nav-fleet"{{if eq .Nav "fleet"}} class="current"{{end}}>Fleet</a>
-    {{if eq .Principal.Role "admin"}}<a href="/admin/hosts" data-testid="nav-admin"{{if eq .Nav "admin"}} class="current"{{end}}>Hosts</a>{{end}}
+    {{if eq .Principal.Role "admin"}}<a href="/admin/hosts" data-testid="nav-admin"{{if eq .Nav "admin"}} class="current"{{end}}>Hosts</a>
+    <a href="/admin/alerts" data-testid="nav-alerts"{{if eq .Nav "alerts"}} class="current"{{end}}>Alerts</a>{{end}}
     <a href="/account" data-testid="nav-account"{{if eq .Nav "account"}} class="current"{{end}}>Account</a>
   </nav>
   <span class="spacer"></span>

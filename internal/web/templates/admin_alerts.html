@@ -1,0 +1,53 @@
+{{/* SPDX-License-Identifier: AGPL-3.0-only */}}
+{{/* SPDX-FileCopyrightText: The ClamFleet Authors */}}
+{{/*
+  admin_alerts.html: alert targets, the banners that say why alerts may not go out,
+  and the recent deliveries. Body: web.alertsBody. Admin class only.
+  "Send test" is the one htmx action here: hx-post to the target's test route,
+  the answer fragment replaces the content of the row's result cell.
+*/}}
+{{define "content"}}
+<h1>Alerts</h1>
+<div data-testid="admin-alerts-page">
+{{if .Body.EmailOff}}<div class="warning" data-testid="alert-banner-email-off">Email is not configured: set <code>smtp.host</code> and <code>smtp.from</code> in the server configuration to send email alerts. Email targets cannot be created and existing ones fail.</div>{{end}}
+{{if .Body.NoPublicURL}}<div class="warning" data-testid="alert-banner-no-public-url"><code>public_url</code> is not set: alerts carry no link back to the console.</div>{{end}}
+{{if .Body.Unrouted}}<div class="warning" data-testid="alert-banner-unrouted">{{.Body.Unrouted}} detection{{if .Body.UnroutedPlural}}s{{end}} in the last 7 days matched no alert target (no target takes detections for those hosts' tags). The detection{{if .Body.UnroutedPlural}}s are{{else}} is{{end}} recorded and shown on the host pages.</div>{{end}}
+{{range .Body.Targets}}{{if .Unreadable}}<div class="warning" data-testid="alert-banner-unreadable-{{.Name}}">The secret of <strong>{{.Name}}</strong> cannot be opened with the loaded secret key (the key file is missing or the key it was sealed with was retired). Its alerts fail until you <a href="/admin/alerts/{{.Name}}">enter the URL again</a>, which also issues a new signing key.</div>{{end}}{{end}}
+
+<p>
+  <a class="button" href="/admin/alerts/new?type=webhook" data-testid="alert-add-webhook">Add webhook target</a>
+  <a class="button" href="/admin/alerts/new?type=email" data-testid="alert-add-email">Add email target</a>
+</p>
+
+{{if .Body.Targets}}
+<table data-testid="alerts-table">
+  <thead><tr><th>Name</th><th>Type</th><th>Destination</th><th>Min. severity</th><th>Tags</th><th>Sends</th><th>Last result</th><th>Actions</th></tr></thead>
+  <tbody>
+  {{range .Body.Targets}}
+  <tr data-testid="alert-row-{{.Name}}">
+    <td><a href="/admin/alerts/{{.Name}}">{{.Name}}</a>{{if not .Enabled}} <span class="revoked" data-testid="alert-disabled-{{.Name}}">(disabled)</span>{{end}}</td>
+    <td>{{.Type}}</td>
+    <td><span data-testid="alert-destination-{{.Name}}">{{.Destination}}</span>{{if .Unencrypted}} <span class="badge WARN" data-testid="alert-unencrypted-{{.Name}}" title="The connection is not encrypted: the payload{{if eq .Type "webhook"}} and the URL{{end}} travel in clear on the network">unencrypted</span>{{end}}</td>
+    <td>{{.MinSeverity}}</td>
+    <td>{{range .Tags}}<span class="tag">{{.}}</span>{{else}}all hosts{{end}}</td>
+    <td>{{.Kinds}}</td>
+    <td>
+      {{if .LastStatus}}<span class="{{.LastResultClass}}" data-testid="alert-last-{{.Name}}">{{.LastStatus}}{{if .LastCode}} ({{.LastCode}}){{end}}</span> <span title="{{.LastAbs}}">{{.LastAgo}}</span>{{else}}<span data-testid="alert-last-{{.Name}}">never</span>{{end}}
+      <div id="test-result-{{.Name}}" data-testid="alert-test-result-{{.Name}}" aria-live="polite"></div>
+    </td>
+    <td>
+      <a href="/admin/alerts/{{.Name}}" data-testid="alert-edit-{{.Name}}">Edit</a>
+      <button type="button" data-testid="alert-test-{{.Name}}" hx-post="/admin/alerts/{{.Name}}/test" hx-target="#test-result-{{.Name}}" hx-swap="innerHTML">Send test</button>
+    </td>
+  </tr>
+  {{end}}
+  </tbody>
+</table>
+{{else}}
+<p data-testid="alerts-empty">No alert targets yet.</p>
+{{end}}
+
+<h2>Recent deliveries</h2>
+{{template "alert_log" .Body.Log}}
+</div>
+{{end}}

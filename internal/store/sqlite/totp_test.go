@@ -558,12 +558,12 @@ func TestResealCompareAndSwap(t *testing.T) {
 	if err := s.EnableTOTP(ctx, store.EnableTOTP{UserID: b.ID, ExpectedVersion: b.AuthVersion, Sealed: []byte("sealed-b2"), Step: 9}, t0, cliAudit); err != nil {
 		t.Fatal(err)
 	}
-	n, err := s.ResealTOTPSecrets(ctx, []store.Reseal{
+	n, conflicts, err := s.ResealTOTPSecrets(ctx, []store.Reseal{
 		{UserID: a.ID, Old: []byte("sealed-1"), New: []byte("resealed-a")},
 		{UserID: b.ID, Old: []byte("sealed-1"), New: []byte("resealed-b")},
 	}, t0, cliAudit)
-	if err != nil || n != 1 {
-		t.Fatalf("applied %d, %v; want 1", n, err)
+	if err != nil || n != 1 || len(conflicts) != 1 || conflicts[0] != b.ID {
+		t.Fatalf("applied %d, conflicts %v, %v; want 1 applied and b's id as the conflict", n, conflicts, err)
 	}
 	if st, _ := s.UserTOTP(ctx, b.ID); string(st.Sealed) != "sealed-b2" {
 		t.Fatalf("a changed secret was overwritten: %q", st.Sealed)
@@ -572,7 +572,7 @@ func TestResealCompareAndSwap(t *testing.T) {
 		t.Fatalf("%d audit rows", n)
 	}
 	// Idempotent: nothing left to apply writes nothing.
-	if n, err := s.ResealTOTPSecrets(ctx, []store.Reseal{{UserID: a.ID, Old: []byte("sealed-1"), New: []byte("z")}}, t0, cliAudit); err != nil || n != 0 {
+	if n, _, err := s.ResealTOTPSecrets(ctx, []store.Reseal{{UserID: a.ID, Old: []byte("sealed-1"), New: []byte("z")}}, t0, cliAudit); err != nil || n != 0 {
 		t.Fatalf("%d %v", n, err)
 	}
 	if n := count(t, s, `SELECT count(*) FROM audit_log WHERE action='secrets.reencrypt'`); n != 1 {

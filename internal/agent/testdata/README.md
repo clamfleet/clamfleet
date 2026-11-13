@@ -11,6 +11,9 @@ covered by AGPL-3.0-only, copyright The ClamFleet Authors**, except that the 512
 `cvd/*/*.hdr` files are the unmodified headers of ClamAV signature databases published by
 Cisco; they hold no signatures, only a version, a count, a time and a signature blob.
 
+The same statement covers the hand-written golden files in `internal/alert/testdata`, `internal/proto/testdata` and
+any other `testdata` directory that holds JSON (the alert ones have their own README).
+
 ## Captured, do not edit by hand
 
 Recorded by `deploy/test/capture-fixtures.sh` (`make fixtures`) from the `clamfleet-test`

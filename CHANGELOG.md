@@ -10,6 +10,21 @@ All notable changes are listed here. The format follows Keep a Changelog; versio
 ## Unreleased
 
 ### Added
+- Milestone 4, alerting by email and webhook (see `docs/alerts.md`). A host's state change, recovery included, and a
+  detection become alerts for the targets that take them: each target has a minimum severity (a drop below it is
+  sent once as "resolved for this target"), an optional any-of tag filter, and switches for state changes and
+  detections. `alert.cooldown` (default 15m) holds changes inside the window and sends one summary at its end if
+  the host's state differs from what the target was last told, so a recovery is delayed by at most a cooldown and
+  never lost. Alerts are queued in the database before anything is sent: 5 attempts over about 81 minutes,
+  `Retry-After` honoured, every attempt in the alert log (90-day prune), delivery at least once (receivers
+  deduplicate on the alert id), an email per recipient. Webhooks are signed in the Standard Webhooks format with
+  a per-target key shown once; the URL and key are encrypted with the secret key file. The destination policy
+  blocks loopback (unless allowed), link-local, cloud metadata and other special addresses at connection time,
+  with no redirects and no proxy; `http://` and `smtp.tls: none` only reach loopback or private addresses.
+  Admins manage targets under Alerts in the console (add, edit, send test, rotate key, delete) or with
+  `clamfleet-server alert list|log|add-webhook|add-email|test|delete` (the URL comes from stdin or a protected
+  file, never an argument). New config keys `public_url`, `alert.*` and `smtp.*`, and `key check`. No new
+  dependency (stdlib `net/smtp`; HANDOVER section 5 no longer lists go-mail).
 - Milestone 3b, TOTP two-factor sign-in for local accounts. A user sets up an authenticator app under Account
   (password required for every change; the key is shown as text and an `otpauth://` URI, no QR code), gets 10
   one-time recovery codes, and then signs in in two steps; a pending login is a separate record and cookie,
@@ -57,6 +72,13 @@ All notable changes are listed here. The format follows Keep a Changelog; versio
   (a per-user `auth_version`; this was the known limit of Milestone 3).
 
 ### Changed
+- **`key reencrypt` exits 1 when it is incomplete** (a row changed between its read and its write: an admin
+  rotated a webhook key, a user re-enrolled) and prints `incomplete: N re-sealed, M changed meanwhile; run key
+  reencrypt again`. It now covers webhook secrets as well and re-seals everything in one transaction. The
+  documented rotation gains a step: `key check` must exit 0 before the old key line is deleted.
+- **Upgrade note, migration `00004` (additive).** Stop the server and copy the database first; an M3b binary
+  refuses a database at this version. Existing state changes and detections are not alerted on: only changes
+  recorded after the upgrade are.
 - New server key `trusted_proxies` (env `CLAMFLEET_SERVER_TRUSTED_PROXIES`): the logged client IP comes from `X-Forwarded-For` (rightmost address that is not a trusted proxy) only when the direct peer is a trusted proxy. Default empty.
 - The server defaults to plaintext on `127.0.0.1:8443` (reverse-proxy deployment); `tls.cert` and `tls.key` enable direct TLS.
 - The server's state directory defaults to `/var/lib/clamfleet-server/` and it runs as its own user

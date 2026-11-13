@@ -19,11 +19,11 @@ tls:
 # Empty: the logged address is the TCP peer. Logging only, never authentication.
 trusted_proxies: []
 db_path: /var/lib/clamfleet-server/clamfleet.db   # local disk only: SQLite WAL does not work on network filesystems
-# The key that protects secrets stored in the database (TOTP secrets now, webhook secrets later).
+# The key that protects secrets stored in the database (TOTP secrets and webhook alert targets: their URL and signing key).
 # Create it once, as root: `clamfleet-server key generate`, then `chgrp clamfleet-server` it and chmod 0640.
 # The server refuses a file that others can read or the group can write. Keep it OUT of the state
 # directory and back it up separately from database backups: a backup holding both protects nothing.
-# Absent is fine until someone uses TOTP; present but invalid stops the server from starting.
+# Absent is fine until someone uses TOTP or adds a webhook target; present but invalid stops the server from starting.
 secret_key_file: /etc/clamfleet/server-secret.key
 
 # Health rules (spec 9) and how often they are re-evaluated. The values shown are the defaults.
@@ -50,3 +50,32 @@ auth:
   session_max_age: 12h     # absolute lifetime: a session ends this long after sign-in, however active (5m..720h)
   session_idle: 1h         # ends after this long without any request (at least 1m); an open fleet tab counts as active
   cookie_secure: true      # false ONLY for plain-HTTP development (SSH tunnel): drops Secure and the __Host- prefix, logs a warning
+
+# Alerting (docs/alerts.md). The values shown are the defaults. Environment:
+# CLAMFLEET_SERVER_ALERT_<KEY>, e.g. CLAMFLEET_SERVER_ALERT_COOLDOWN.
+# How the console is reached by people, for the links in alerts. Empty: alert links are null.
+public_url: ""            # e.g. https://clamfleet.example (absolute http(s) URL, no query or fragment)
+alert:
+  cooldown: 15m           # at most one state alert per host per target per window; changes inside it are
+                          # held and summarised at its end (a recovery is delayed by at most this, never lost). 0 = no holds
+  webhook:
+    timeout: 10s          # 1s to 30s per attempt
+    allow_private: true   # RFC 1918, 100.64.0.0/10 and fc00::/7 (and plaintext http:// to them). Set false on a cloud host
+    allow_loopback: false # 127.0.0.0/8, ::1, localhost: for a receiver on this machine
+    deny_networks: []     # extra CIDRs that are never allowed, e.g. ["10.9.0.0/16"]
+    ca_file: ""           # extra CA bundle (PEM) added to the system roots, for a receiver with a private CA
+                          # Link-local, cloud metadata, multicast and unspecified addresses are always blocked.
+# Email alerts. Empty host = email is off (creating an email target is refused).
+smtp:
+  host: ""                # e.g. smtp.example
+  port: 587
+  tls: starttls           # starttls (default, mandatory once chosen: no fallback to plaintext), tls (implicit TLS, port 465),
+                          # or none: ONLY for a relay on a loopback or private address, and never with a username
+                          # unless the relay is loopback
+  from: ""                # required when host is set, e.g. clamfleet@example.org
+  username: ""
+  password_file: ""       # absolute path, required with username; mode 0640 root:clamfleet-server or 0600. The password is
+                          # never read from this file or the environment. Works with systemd LoadCredential= paths
+  helo: ""                # name announced in EHLO; empty = the host of public_url, else the machine's host name
+  ca_file: ""             # extra CA bundle (PEM) for the relay
+  timeout: 30s            # 5s to 120s for a whole mail session

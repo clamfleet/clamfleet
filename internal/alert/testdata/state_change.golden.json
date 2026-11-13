@@ -1,0 +1,1 @@
+{"schema":1,"id":"6f1c0e8b2d4a4f7e9a3b5c7d9e1f2a3b","kind":"state_change","target":"ops-webhook","host":"app01","tags":["prod","web"],"ts":"2031-03-04T12:00:00Z","url":"https://clamfleet.example/hosts/app01","from":"OK","to":"CRIT","reason":["clamd not responding: connection refused"],"reason_codes":["clamd_down"],"resolved":false,"changes":1}

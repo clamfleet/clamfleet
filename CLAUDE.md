@@ -30,10 +30,11 @@ Central management for ClamAV on Linux fleets. Spec: `docs/HANDOVER.md`. Current
   agent neither reads nor warns about it, and the server likewise ignores `CLAMFLEET_AGENT_`. The decisions are in `docs/plans/milestone-1.md` sections 10 and 11
   (`docs/plans` is local and gitignored, so it is not in a fresh clone).
 - Payload structs in `internal/proto` and config keys are public interfaces. Do not change them without a schema bump.
+- The alert payload (`internal/alert/payload.go`, pinned by `internal/alert/testdata/*.golden.json`, documented in `docs/alerts.md`) is a public interface: changes need a schema decision.
 - Time goes through an injected clock, never `time.Now()` inside a collector.
 - The agent never starts clamd: it does not touch the clamd socket while the clamd unit is not active (socket activation).
 - Bind nothing to non-loopback addresses in tests or tools.
 - No org-specific hostnames in fixtures; scrub them to `mirror.example`.
-- The agent never imports `internal/store`, `internal/server` or the SQLite and goose modules (a test pins it).
+- The agent never imports `internal/store`, `internal/server`, `internal/alert`, `net/smtp` or the SQLite and goose modules (a test pins it).
 - Agent credentials live only in `internal/agentauth` and `hosts.token_hash`; web-console users (later) get their own package and tables. Routes are registered only in `server.NewHandler` (table `server.Routes`).
 - Admin commands of `clamfleet-server` run as the server user (`sudo -u clamfleet-server`), not as root, for audit attribution and least privilege. Creating the database as root (`sudo clamfleet-server migrate` on a fresh install) leaves a root-owned file the server user cannot open, so `migrate` and `serve` refuse to create it when the effective user does not own its directory.

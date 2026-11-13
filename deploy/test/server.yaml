@@ -16,3 +16,16 @@ health:
   daily_warn_hours: 100000
   daily_crit_hours: 200000
   eval_interval: 2s
+# Alerting (M4). cooldown 0 because the cooldown is proven with an injected clock in the unit tests; the
+# container proves wiring and real delivery. The sink (hack/alertsink, started by the alert scenarios) listens
+# on 127.0.0.1 inside the container: a webhook on 9100 and plaintext SMTP on 2525 (tls: none is allowed because
+# the relay is loopback).
+alert:
+  cooldown: 0s
+  webhook:
+    allow_loopback: true
+smtp:
+  host: 127.0.0.1
+  port: 2525
+  tls: none
+  from: clamfleet@test.example

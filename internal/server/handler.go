@@ -88,6 +88,18 @@ func Routes() []Route {
 		{"POST", "/account/totp/confirm", AuthUser},
 		{"POST", "/account/totp/recovery-codes", AuthUser},
 		{"POST", "/account/totp/disable", AuthUser},
+		// Alert targets (M4). Admin only, pages included: recipient addresses and
+		// receiver hosts are configuration, and a test send makes the server connect
+		// out. The literal /admin/alerts/new beats the {name} wildcard (Go 1.22 mux:
+		// the more specific pattern wins) and "new" is a reserved target name.
+		{"GET", "/admin/alerts", AuthAdmin},
+		{"GET", "/admin/alerts/new", AuthAdmin},
+		{"POST", "/admin/alerts", AuthAdmin},
+		{"GET", "/admin/alerts/{name}", AuthAdmin},
+		{"POST", "/admin/alerts/{name}", AuthAdmin},
+		{"POST", "/admin/alerts/{name}/test", AuthAdmin},
+		{"POST", "/admin/alerts/{name}/rotate-secret", AuthAdmin},
+		{"POST", "/admin/alerts/{name}/delete", AuthAdmin},
 	}
 }
 
@@ -114,6 +126,9 @@ type Deps struct {
 	// Keys protects TOTP secrets at rest (internal/secrets); nil when the server
 	// has no key file, which makes TOTP unavailable.
 	Keys *secrets.Keyring
+	// Alerts is what the alert pages need (server.BuildAlerts); nil means a strict
+	// policy, no email and no test send.
+	Alerts *Alerts
 }
 
 // NewHandlerFromConfig is NewHandler with the config-derived settings
@@ -155,6 +170,7 @@ func NewHandler(d Deps) http.Handler {
 		Store: d.Store, Auth: sessions, Hasher: d.Hasher, Throttle: webauth.NewThrottle(d.Now), TOTPThrottle: webauth.NewThrottle(d.Now), Keys: d.Keys, Now: d.Now, Log: d.Log,
 		ClientIP:     func(r *http.Request) string { return api.ClientIP(r, d.TrustedProxies) },
 		LocalEnabled: d.Console.Local.Enabled, TOTPRequired: d.Console.Local.TOTPRequired, Version: d.Version,
+		Alerts: alertDeps(d.Alerts),
 	})
 
 	handlers := map[string]http.HandlerFunc{
@@ -218,4 +234,12 @@ func storeLookup(s store.Store) agentauth.Lookup {
 		}
 		return agentauth.Identity{HostID: ref.ID, HostName: ref.Name}, nil
 	}
+}
+
+// alertDeps converts the server's alert settings for the console.
+func alertDeps(a *Alerts) web.AlertDeps {
+	if a == nil {
+		return web.AlertDeps{}
+	}
+	return web.AlertDeps{Dispatcher: a.Dispatcher, Policy: a.Policy, EmailEnabled: a.EmailEnabled, SMTPPlaintext: a.SMTPPlaintext, PublicURL: a.PublicURL}
 }

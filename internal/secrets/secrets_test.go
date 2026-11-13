@@ -233,3 +233,85 @@ func TestErrorsLeakNothing(t *testing.T) {
 		}
 	}
 }
+
+// The alert-target purpose seals with the target id as AAD: a blob copied to
+// another target's row does not open (mutation 33: AAD without the id).
+func TestAlertTargetPurposeRoundTripAndRowBinding(t *testing.T) {
+	r, _ := newRing(t, 1)
+	blob, err := r.Seal(PurposeAlertTarget, []byte(`{"url":"https://hooks.example/T","signing_key":"whsec_x"}`), 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := r.Open(PurposeAlertTarget, blob, 7); err != nil || !strings.Contains(string(got), "hooks.example") {
+		t.Fatalf("%q %v", got, err)
+	}
+	if _, err := r.Open(PurposeAlertTarget, blob, 8); !errors.Is(err, ErrDecrypt) {
+		t.Fatalf("another target id: %v", err)
+	}
+	if _, err := r.Open(PurposeTOTP, blob, 7); !errors.Is(err, ErrDecrypt) {
+		t.Fatalf("another purpose: %v", err)
+	}
+	if bytes.Contains(blob, []byte("hooks.example")) {
+		t.Fatal("the URL is in the blob in clear")
+	}
+}
+
+func writeSecretFile(t *testing.T, mode os.FileMode, content string) string {
+	t.Helper()
+	p := filepath.Join(t.TempDir(), "secret")
+	if err := os.WriteFile(p, []byte(content), mode); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(p, mode); err != nil { // umask must not weaken the test
+		t.Fatal(err)
+	}
+	return p
+}
+
+func TestReadProtectedFilePermissions(t *testing.T) {
+	for mode, ok := range map[os.FileMode]bool{0o600: true, 0o640: true, 0o644: false, 0o660: false, 0o666: false} {
+		got, err := ReadProtectedFile(writeSecretFile(t, mode, "hunter2\n"), "smtp.password_file")
+		if (err == nil) != ok {
+			t.Errorf("mode %04o: err=%v, want ok=%v", mode, err, ok)
+		}
+		if err == nil && got != "hunter2" {
+			t.Errorf("mode %04o: got %q, the trailing newline must be trimmed", mode, got)
+		}
+		if err != nil && (!strings.Contains(err.Error(), "smtp.password_file") || strings.Contains(err.Error(), "hunter2")) {
+			t.Errorf("mode %04o: error %q", mode, err)
+		}
+	}
+}
+
+func TestReadProtectedFileRefusesSymlinkMissingAndEmpty(t *testing.T) {
+	real := writeSecretFile(t, 0o600, "x")
+	link := filepath.Join(t.TempDir(), "link")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReadProtectedFile(link, "f"); err == nil || !strings.Contains(err.Error(), "not a regular file") {
+		t.Errorf("symlink: %v", err)
+	}
+	if _, err := ReadProtectedFile(filepath.Join(t.TempDir(), "none"), "f"); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("missing: %v", err)
+	}
+	if _, err := ReadProtectedFile(writeSecretFile(t, 0o600, " \n"), "f"); err == nil {
+		t.Error("an empty file was accepted")
+	}
+}
+
+// An SMTP password may begin or end with spaces: only the final line end goes.
+func TestReadProtectedFileExactKeepsSpaces(t *testing.T) {
+	for in, want := range map[string]string{" pw \n": " pw ", "pw\r\n": "pw", "pw": "pw", "  \n": "  ", "a\n\n": "a\n"} {
+		got, err := ReadProtectedFileExact(writeSecretFile(t, 0o600, in), "smtp.password_file")
+		if err != nil || got != want {
+			t.Errorf("%q: %q %v, want %q", in, got, err, want)
+		}
+	}
+	if _, err := ReadProtectedFileExact(writeSecretFile(t, 0o600, "\n"), "f"); err == nil {
+		t.Error("an empty password was accepted")
+	}
+	if _, err := ReadProtectedFileExact(writeSecretFile(t, 0o644, "pw"), "f"); err == nil {
+		t.Error("permissions are not checked")
+	}
+}

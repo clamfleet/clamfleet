@@ -1,0 +1,1 @@
+{"schema":1,"id":"0a1b2c3d4e5f60718293a4b5c6d7e8f9","kind":"detection","target":"ops-webhook","host":"app01","tags":["prod","web"],"ts":"2031-03-04T12:00:00Z","url":"https://clamfleet.example/hosts/app01","path":"/home/alice/eicar.com","signature":"Win.Test.EICAR_HDB-1","source":"clamonacc","received_at":"2031-03-04T12:00:03Z"}

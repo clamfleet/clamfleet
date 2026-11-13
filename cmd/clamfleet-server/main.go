@@ -79,7 +79,20 @@ commands:
                                               lock and end their sessions (needs no key file)
   key generate [--file PATH] [--add]          create the secret key file (as root; default: secret_key_file);
                                               --add puts a new key on top of an existing file (rotation)
-  key reencrypt                               re-seal stored secrets with the active key (after key generate --add)
+  key reencrypt                               re-seal stored secrets (TOTP and webhook targets) with the active key
+                                              (after key generate --add); exit 1 when incomplete: run it again
+  key check                                   open every stored secret; exit 0 only when all open with the ACTIVE key
+                                              (run it before deleting an old key line)
+  alert list [--json]                         list alert targets
+  alert log [--target NAME] [--limit N] [--json]
+                                              recent alert deliveries and attempts
+  alert add-webhook NAME (--url-stdin | --url-file PATH) [--min-severity S] [--tags a,b] [--no-state-changes] [--no-detections]
+                                              add a webhook target; the URL is read from stdin or a protected file, NEVER
+                                              an argument; prints the signing key (whsec_...) once
+  alert add-email NAME --to a@x,b@y [--min-severity S] [--tags a,b] [--no-state-changes] [--no-detections]
+                                              add an email target (needs smtp.host)
+  alert test NAME                             send a test message; exit 1 when it fails
+  alert delete NAME --yes                     delete the target and its pending alerts
   version                                     print the version
 
 Host and user commands and migrate take --config FILE too (default: $CLAMFLEET_SERVER_CONFIG or ` + server.DefaultConfigPath + `).
@@ -106,6 +119,8 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return a.user(ctx, args[1:])
 	case "key":
 		return a.key(ctx, args[1:])
+	case "alert":
+		return a.alert(ctx, args[1:])
 	case "-h", "--help", "help":
 		fmt.Fprint(stdout, usage)
 		return exitOK
@@ -207,7 +222,18 @@ func (a *app) serve(ctx context.Context, args []string) int {
 	// Host after each report, the loop below notices hosts that went silent.
 	// Its start time is the restart-grace reference (see health.Evaluate).
 	ev := health.New(st, a.now, cfg.Health.Thresholds(), log)
-	h, err := server.NewHandlerFromConfig(cfg, server.Deps{Store: st, Now: a.now, Log: log, AfterReport: ev.Host, Keys: keys})
+	// Alerting: files named in the configuration (smtp.password_file, CA bundles)
+	// are read here, so a bad one refuses the start with its reason.
+	alerts, err := server.BuildAlerts(cfg, st, keys, a.now, log)
+	if err != nil {
+		log.Error("invalid alert configuration", "error", err.Error())
+		return exitError
+	}
+	if err := alerts.Dispatcher.Start(ctx); err != nil {
+		log.Error("alerting", "error", err.Error())
+		return exitError
+	}
+	h, err := server.NewHandlerFromConfig(cfg, server.Deps{Store: st, Now: a.now, Log: log, AfterReport: ev.Host, Keys: keys, Alerts: alerts})
 	if err != nil {
 		log.Error("invalid configuration", "error", err.Error())
 		return exitError
@@ -218,7 +244,8 @@ func (a *app) serve(ctx context.Context, args []string) int {
 	loopCtx, stopLoop := context.WithCancel(ctx)
 	tick := time.NewTicker(cfg.Health.EvalInterval)
 	cleanTick := time.NewTicker(time.Hour)
-	loopDone := make(chan struct{}, 2)
+	alertTick := time.NewTicker(alertInterval)
+	loopDone := make(chan struct{}, 3)
 	go func() {
 		defer func() { loopDone <- struct{}{} }()
 		ev.Run(loopCtx, tick.C)
@@ -227,12 +254,18 @@ func (a *app) serve(ctx context.Context, args []string) int {
 		defer func() { loopDone <- struct{}{} }()
 		webauth.RunCleanup(loopCtx, st, a.now, cfg.Auth.SessionIdle, log, cleanTick.C)
 	}()
+	go func() {
+		defer func() { loopDone <- struct{}{} }()
+		alerts.Dispatcher.Run(loopCtx, alertTick.C)
+	}()
 	err = server.Serve(ctx, cfg, h, log)
 	// Wait for the loops before the deferred st.Close(): an evaluation cut off by
 	// a closing database would log a spurious error at every shutdown.
 	stopLoop()
 	tick.Stop()
 	cleanTick.Stop()
+	alertTick.Stop()
+	<-loopDone
 	<-loopDone
 	<-loopDone
 	if err != nil {
@@ -241,6 +274,10 @@ func (a *app) serve(ctx context.Context, args []string) int {
 	}
 	return exitOK
 }
+
+// alertInterval is how often the dispatcher looks for work besides being woken
+// by a finished send: it is what notices a due retry or a hold whose window ended.
+const alertInterval = 5 * time.Second
 
 func (a *app) migrate(ctx context.Context, args []string) int {
 	fs, cfgFlag := newFlags("migrate", a.stderr)

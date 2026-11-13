@@ -11,8 +11,8 @@ import (
 
 const insertEvent = `-- name: InsertEvent :execrows
 
-INSERT INTO events (host_id, ts, received_at, path, signature, source)
-VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+INSERT INTO events (host_id, ts, received_at, path, signature, source, alert_pending)
+VALUES (?1, ?2, ?3, ?4, ?5, ?6, 1)
 ON CONFLICT (host_id, ts, path, signature) DO NOTHING
 `
 
@@ -27,6 +27,9 @@ type InsertEventParams struct {
 
 // SPDX-License-Identifier: AGPL-3.0-only
 // SPDX-FileCopyrightText: The ClamFleet Authors
+// alert_pending = 1 only ever lands on a NEW row: a duplicate retry from the
+// agent hits ON CONFLICT DO NOTHING and leaves the existing row (and its flag)
+// alone, so a retried POST never alerts twice.
 func (q *Queries) InsertEvent(ctx context.Context, arg InsertEventParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, insertEvent,
 		arg.HostID,

@@ -8,6 +8,64 @@ import (
 	"database/sql"
 )
 
+type AlertDelivery struct {
+	ID            int64
+	AlertID       string
+	TargetID      int64
+	HostID        int64
+	Recipient     string
+	StateChangeID sql.NullInt64
+	EventID       sql.NullInt64
+	Kind          string
+	Payload       string
+	Status        string
+	Attempts      int64
+	NextAttemptAt sql.NullInt64
+	ClaimToken    []byte
+	CreatedAt     int64
+	FinishedAt    sql.NullInt64
+}
+
+type AlertLog struct {
+	ID            int64
+	Ts            int64
+	TargetID      sql.NullInt64
+	TargetName    string
+	DeliveryID    sql.NullInt64
+	Recipient     sql.NullString
+	HostName      sql.NullString
+	StateChangeID sql.NullInt64
+	EventID       sql.NullInt64
+	Attempt       sql.NullInt64
+	Status        string
+	Code          sql.NullString
+	Error         sql.NullString
+	DurationMs    sql.NullInt64
+}
+
+type AlertNotifyState struct {
+	TargetID  int64
+	HostID    int64
+	LastState string
+	LastAt    int64
+	HeldCount int64
+}
+
+type AlertTarget struct {
+	ID               int64
+	Name             string
+	Type             string
+	Config           string
+	Secret           []byte
+	MinSeverity      string
+	TagFilter        string
+	SendStateChanges int64
+	SendDetections   int64
+	Enabled          int64
+	CreatedAt        int64
+	UpdatedAt        int64
+}
+
 type AuditLog struct {
 	ID         int64
 	Ts         int64
@@ -20,15 +78,16 @@ type AuditLog struct {
 }
 
 type Event struct {
-	ID         int64
-	HostID     int64
-	Ts         int64
-	ReceivedAt int64
-	Path       string
-	Signature  string
-	Source     string
-	AckBy      sql.NullString
-	AckAt      sql.NullInt64
+	ID           int64
+	HostID       int64
+	Ts           int64
+	ReceivedAt   int64
+	Path         string
+	Signature    string
+	Source       string
+	AckBy        sql.NullString
+	AckAt        sql.NullInt64
+	AlertPending int64
 }
 
 type Host struct {
@@ -65,12 +124,13 @@ type Report struct {
 }
 
 type StateChange struct {
-	ID        int64
-	HostID    int64
-	Ts        int64
-	FromState sql.NullString
-	ToState   string
-	Reason    string
+	ID           int64
+	HostID       int64
+	Ts           int64
+	FromState    sql.NullString
+	ToState      string
+	Reason       string
+	AlertPending int64
 }
 
 type User struct {

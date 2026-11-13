@@ -7,6 +7,7 @@ import (
 	"context"
 	"database/sql"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -103,11 +104,9 @@ func TestMigration00002OnExistingData(t *testing.T) {
 	}
 
 	// Down removes exactly what 00002 added and keeps the hosts; up restores it.
-	// 00003 sits on top of it now, so it is reverted first.
-	for range 2 {
-		if err := s.MigrateDown(ctx); err != nil {
-			t.Fatal(err)
-		}
+	// 00003 and 00004 sit on top of it, so they are reverted first.
+	if _, err := s.prov.DownTo(ctx, 1); err != nil {
+		t.Fatal(err)
 	}
 	cols := columns(t, s.w, "hosts")
 	for _, c := range []string{"state", "state_reason", "state_since", "daily_version", "daily_built", "clamd_version"} {
@@ -209,7 +208,7 @@ func TestMigration00003OnExistingData(t *testing.T) {
 		}
 	}
 
-	if err := s.MigrateDown(ctx); err != nil {
+	if _, err := s.prov.DownTo(ctx, 2); err != nil { // 00004 sits on top of 00003
 		t.Fatal(err)
 	}
 	for table, cols := range map[string][]string{
@@ -266,3 +265,131 @@ func TestM3BinaryRefusesAMigration00003Database(t *testing.T) {
 		t.Fatalf("an M3 binary must refuse the database: %v", err)
 	}
 }
+
+// 00004 on a database that holds M3b state changes and events: the old rows
+// get alert_pending 0 (upgrading must not alert on history), a planning pass
+// right after the upgrade has nothing to do, and down/up round-trips.
+func TestMigration00004OnExistingData(t *testing.T) {
+	ctx := context.Background()
+	s, err := Open(ctx, filepath.Join(t.TempDir(), "t.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if _, err := s.prov.UpTo(ctx, 3); err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range []string{
+		`INSERT INTO hosts (id, name, token_hash, created_at) VALUES (1, 'a', x'01', 100)`,
+		`INSERT INTO state_changes (host_id, ts, from_state, to_state, reason) VALUES (1, 5, NULL, 'CRIT', '[]')`,
+		`INSERT INTO events (host_id, ts, received_at, path, signature, source) VALUES (1, 5, 6, '/x', 'Eicar', 'clamonacc')`,
+	} {
+		if _, err := s.w.Exec(q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for _, tb := range []string{"state_changes", "events"} {
+		if n := count(t, s, `SELECT count(*) FROM `+tb+` WHERE alert_pending = 0`); n != 1 {
+			t.Fatalf("%s: the old row must have alert_pending 0 (no alert for history), got %d such rows", tb, n)
+		}
+		if n := count(t, s, `SELECT count(*) FROM `+tb+` WHERE alert_pending = 1`); n != 0 {
+			t.Fatalf("%s: %d old rows flagged for alerting", tb, n)
+		}
+	}
+	for _, tb := range []string{"alert_targets", "alert_notify_state", "alert_deliveries", "alert_log"} {
+		if !tableExists(t, s.w, tb) {
+			t.Errorf("table %s missing", tb)
+		}
+	}
+
+	if _, err := s.prov.DownTo(ctx, 3); err != nil {
+		t.Fatal(err)
+	}
+	for _, tb := range []string{"alert_targets", "alert_notify_state", "alert_deliveries", "alert_log"} {
+		if tableExists(t, s.w, tb) {
+			t.Errorf("table %s survived the down migration", tb)
+		}
+	}
+	for _, tb := range []string{"state_changes", "events"} {
+		if columns(t, s.w, tb)["alert_pending"] {
+			t.Errorf("%s.alert_pending survived the down migration", tb)
+		}
+	}
+	if n := count(t, s, `SELECT count(*) FROM state_changes`) + count(t, s, `SELECT count(*) FROM events`); n != 2 {
+		t.Fatalf("history lost by down: %d rows", n)
+	}
+	if err := s.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if n := count(t, s, `SELECT count(*) FROM state_changes WHERE alert_pending = 0`); n != 1 {
+		t.Fatalf("state change after down/up: %d", n)
+	}
+}
+
+// The cascades of 4.1: a host delete removes its deliveries, notify state and
+// the log rows tied to its history; a target delete keeps its log rows with a
+// NULL target id and the name snapshot.
+func TestMigration00004Cascades(t *testing.T) {
+	s := openTemp(t)
+	h := addHost(t, s, "web01")
+	for _, q := range []string{
+		`INSERT INTO state_changes (id, host_id, ts, from_state, to_state, reason, alert_pending) VALUES (1, ` + itoa(h.ID) + `, 1, NULL, 'CRIT', '[]', 1)`,
+		`INSERT INTO alert_targets (id, name, type, config, created_at, updated_at) VALUES (1, 't', 'webhook', '{}', 1, 1)`,
+		`INSERT INTO alert_notify_state (target_id, host_id, last_state, last_at) VALUES (1, ` + itoa(h.ID) + `, 'CRIT', 1)`,
+		`INSERT INTO alert_deliveries (id, alert_id, target_id, host_id, state_change_id, kind, payload, status, created_at) VALUES (1, 'a', 1, ` + itoa(h.ID) + `, 1, 'state_change', '{}', 'pending', 1)`,
+		`INSERT INTO alert_log (ts, target_id, target_name, delivery_id, host_name, state_change_id, status) VALUES (1, 1, 't', 1, 'web01', 1, 'attempting')`,
+		`INSERT INTO alert_log (ts, target_id, target_name, host_name, status) VALUES (1, 1, 't', NULL, 'test_sent')`,
+	} {
+		if _, err := s.w.Exec(q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := s.w.Exec(`DELETE FROM alert_targets WHERE id = 1`); err != nil {
+		t.Fatal(err)
+	}
+	if n := count(t, s, `SELECT count(*) FROM alert_deliveries`) + count(t, s, `SELECT count(*) FROM alert_notify_state`); n != 0 {
+		t.Fatalf("target delete left %d deliveries/notify rows", n)
+	}
+	if n := count(t, s, `SELECT count(*) FROM alert_log WHERE target_id IS NULL AND target_name = 't' AND delivery_id IS NULL`); n != 2 {
+		t.Fatalf("target delete must keep log rows with the name snapshot: %d", n)
+	}
+	if _, err := s.w.Exec(`DELETE FROM hosts WHERE id = ?`, h.ID); err != nil {
+		t.Fatal(err)
+	}
+	if n := count(t, s, `SELECT count(*) FROM alert_log`); n != 1 { // the test-send row has no host
+		t.Fatalf("host delete must remove the log rows of its history: %d left", n)
+	}
+}
+
+// Rule: an M3b binary must refuse a 00004 database, because it would never
+// plan or send the queued alerts. The M3b binary is simulated by a provider
+// that knows migrations 1 to 3 only.
+func TestM3bBinaryRefusesAMigration00004Database(t *testing.T) {
+	ctx := context.Background()
+	s := openTemp(t)
+	if v, err := s.SchemaVersion(ctx); err != nil || v < 4 {
+		t.Fatalf("schema version %d, %v: the test needs 00004 applied", v, err)
+	}
+	old := fstest.MapFS{}
+	for _, n := range []string{"00001_init.sql", "00002_health_users.sql", "00003_totp.sql"} {
+		b, err := migrations.SQLite.ReadFile("sqlite/" + n)
+		if err != nil {
+			t.Fatal(err)
+		}
+		old[n] = &fstest.MapFile{Data: b}
+	}
+	prov, err := goose.NewProvider(goose.DialectSQLite3, s.w, old, goose.WithDisableGlobalRegistry(true))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m3b := &Store{path: s.path, w: s.w, r: s.r, prov: prov}
+	err = m3b.checkNotNewer(ctx)
+	if err == nil || !strings.Contains(err.Error(), "newer than this binary supports") {
+		t.Fatalf("an M3b binary must refuse the database: %v", err)
+	}
+}
+
+func itoa(n int64) string { return strconv.FormatInt(n, 10) }

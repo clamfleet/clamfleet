@@ -278,7 +278,7 @@ func TestAgentBinaryHasNoSQLite(t *testing.T) {
 	if !strings.Contains(deps, "github.com/clamfleet/clamfleet/internal/agent") {
 		t.Fatalf("go list did not report the agent's dependencies (the test would be vacuous):\n%s", deps)
 	}
-	for _, banned := range []string{"modernc.org/", "github.com/pressly/goose", "database/sql", "clamfleet/internal/store", "clamfleet/internal/server", "clamfleet/migrations"} {
+	for _, banned := range []string{"modernc.org/", "github.com/pressly/goose", "database/sql", "clamfleet/internal/store", "clamfleet/internal/server", "clamfleet/internal/alert", "net/smtp", "clamfleet/migrations"} {
 		if strings.Contains(deps, banned) {
 			t.Errorf("the agent depends on %s", banned)
 		}
