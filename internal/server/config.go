@@ -53,9 +53,36 @@ type Config struct {
 	// PublicURL is the address of the console as people reach it
 	// ("https://clamfleet.example"), used for links in alerts only (M4 decision
 	// 12). Empty: alert links are null. No path prefix support in the console.
-	PublicURL string `yaml:"public_url"`
-	Alert     Alert  `yaml:"alert"`
-	SMTP      SMTP   `yaml:"smtp"`
+	PublicURL string    `yaml:"public_url"`
+	Alert     Alert     `yaml:"alert"`
+	SMTP      SMTP      `yaml:"smtp"`
+	Retention Retention `yaml:"retention"`
+}
+
+// Retention says how long data is kept. Only events arrive in milestone 5; the
+// report and state-change keys come with the other retention rules in milestone
+// 6 (the strict config decoder refuses keys that do not exist yet).
+type Retention struct {
+	// EventsDays: events (and, by cascade, their receipts, window membership and
+	// alert rows) are deleted this many days after they ARRIVED, by received_at
+	// and not by the agent's ts: a spooled event can be old when it arrives. A
+	// file path is personal data, so this is also how long paths live here.
+	EventsDays int `yaml:"events_days"`
+}
+
+// Bounds of retention.events_days.
+const (
+	MinEventsDays     = 7
+	MaxEventsDays     = 3650
+	DefaultEventsDays = 365
+)
+
+// Validate checks the retention keys.
+func (r Retention) Validate() error {
+	if r.EventsDays < MinEventsDays || r.EventsDays > MaxEventsDays {
+		return fmt.Errorf("retention.events_days must be between %d and %d, got %d", MinEventsDays, MaxEventsDays, r.EventsDays)
+	}
+	return nil
 }
 
 // Alert configures alert delivery (docs/plans/milestone-4.md 4.9).
@@ -327,7 +354,8 @@ func DefaultConfig() Config {
 			Cooldown: 15 * time.Minute,
 			Webhook:  AlertWebhook{Timeout: 10 * time.Second, AllowPrivate: true, DenyNetworks: []string{}},
 		},
-		SMTP: SMTP{Port: 587, TLS: "starttls", Timeout: 30 * time.Second},
+		SMTP:      SMTP{Port: 587, TLS: "starttls", Timeout: 30 * time.Second},
+		Retention: Retention{EventsDays: DefaultEventsDays},
 	}
 }
 
@@ -369,6 +397,9 @@ func (c Config) Validate() error {
 		return err
 	}
 	if err := c.validateAlerting(); err != nil {
+		return err
+	}
+	if err := c.Retention.Validate(); err != nil {
 		return err
 	}
 	if c.Listen == "" {

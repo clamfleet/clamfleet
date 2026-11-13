@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/clamfleet/clamfleet/internal/alert"
+	"github.com/clamfleet/clamfleet/internal/proto"
 	"github.com/clamfleet/clamfleet/internal/secrets"
 	"github.com/clamfleet/clamfleet/internal/store"
 	"github.com/clamfleet/clamfleet/internal/store/sqlite"
@@ -312,5 +313,42 @@ func TestServeWakesTheDispatcherOnANewEvent(t *testing.T) {
 	defer mu.Unlock()
 	if len(hits) != 1 || !strings.Contains(hits[0], `"kind":"detection"`) {
 		t.Fatalf("%v", hits)
+	}
+}
+
+// Mutation: the retention runner not started by serve. An event that arrived 400
+// days ago is gone shortly after start-up (default events_days is 365), and the
+// log names a count, never a path.
+func TestServeRunsTheRetentionPrune(t *testing.T) {
+	tlsb, err := testtls.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	db, _ := newDB(t)
+	ctx := context.Background()
+	st, err := sqlite.Open(ctx, db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h, err := st.CreateHost(ctx, "web01", []byte("0123456789abcdef0123456789abcdef"), time.Now(), testAudit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-400 * 24 * time.Hour)
+	if _, err := st.RecordEvent(ctx, store.EventRecord{HostID: h.ID, ReceivedAt: old,
+		Event: proto.Event{TS: old, Path: "/srv/MARKER-PATH", Signature: "S", Source: "clamd"}}); err != nil {
+		t.Fatal(err)
+	}
+	st.Close()
+	srv := startServe(t, tlsb, db)
+	deadline := time.Now().Add(10 * time.Second)
+	for !strings.Contains(srv.stderr.String(), "old events pruned") {
+		if time.Now().After(deadline) {
+			t.Fatalf("no prune within 10 s of start-up:\n%s", srv.stderr.String())
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if strings.Contains(srv.stderr.String(), "MARKER") {
+		t.Fatal("a path reached the server log")
 	}
 }

@@ -257,7 +257,8 @@ func (a *app) serve(ctx context.Context, args []string) int {
 	tick := time.NewTicker(cfg.Health.EvalInterval)
 	cleanTick := time.NewTicker(time.Hour)
 	alertTick := time.NewTicker(alertInterval)
-	loopDone := make(chan struct{}, 3)
+	retentionTick := time.NewTicker(time.Hour)
+	loopDone := make(chan struct{}, 4)
 	go func() {
 		defer func() { loopDone <- struct{}{} }()
 		ev.Run(loopCtx, tick.C)
@@ -270,6 +271,10 @@ func (a *app) serve(ctx context.Context, args []string) int {
 		defer func() { loopDone <- struct{}{} }()
 		alerts.Dispatcher.Run(loopCtx, alertTick.C)
 	}()
+	go func() {
+		defer func() { loopDone <- struct{}{} }()
+		server.RunRetention(loopCtx, st, a.now, cfg.Retention.EventsDays, log, retentionTick.C)
+	}()
 	err = server.Serve(ctx, cfg, h, log)
 	// Wait for the loops before the deferred st.Close(): an evaluation cut off by
 	// a closing database would log a spurious error at every shutdown.
@@ -277,6 +282,8 @@ func (a *app) serve(ctx context.Context, args []string) int {
 	tick.Stop()
 	cleanTick.Stop()
 	alertTick.Stop()
+	retentionTick.Stop()
+	<-loopDone
 	<-loopDone
 	<-loopDone
 	<-loopDone

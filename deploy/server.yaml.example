@@ -66,6 +66,11 @@ alert:
     deny_networks: []     # extra CIDRs that are never allowed, e.g. ["10.9.0.0/16"]
     ca_file: ""           # extra CA bundle (PEM) added to the system roots, for a receiver with a private CA
                           # Link-local, cloud metadata, multicast and unspecified addresses are always blocked.
+# Retention. Events are deleted this many days after they ARRIVED (not by the agent's detection
+# time: a spooled event can be old when it arrives). A file path is personal data. reports_days
+# and state_changes_days arrive in milestone 6. Environment: CLAMFLEET_SERVER_RETENTION_EVENTS_DAYS.
+retention:
+  events_days: 365        # 7 to 3650
 # Email alerts. Empty host = email is off (creating an email target is refused).
 smtp:
   host: ""                # e.g. smtp.example

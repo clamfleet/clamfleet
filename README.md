@@ -148,6 +148,7 @@ readable by others, or the server refuses to start; keep it out of your database
 | `auth.session_max_age` | `CLAMFLEET_SERVER_AUTH_SESSION_MAX_AGE` | `12h` (5m to 720h) |
 | `auth.session_idle` | `CLAMFLEET_SERVER_AUTH_SESSION_IDLE` | `1h` (at least 1m; not above the max age) |
 | `auth.cookie_secure` | `CLAMFLEET_SERVER_AUTH_COOKIE_SECURE` | `true`; `false` only for plain-HTTP development (drops `Secure` and the `__Host-` prefix, logs a warning) |
+| `retention.events_days` | `CLAMFLEET_SERVER_RETENTION_EVENTS_DAYS` | `365` (7 to 3650; detections are deleted this long after they arrived, daily) |
 | `public_url` | `CLAMFLEET_SERVER_PUBLIC_URL` | empty (links in alerts are null) |
 | `alert.cooldown` | `CLAMFLEET_SERVER_ALERT_COOLDOWN` | `15m` (0 to 24h; 0 = no holds) |
 | `alert.webhook.timeout` | `CLAMFLEET_SERVER_ALERT_WEBHOOK_TIMEOUT` | `10s` (1s to 30s per attempt) |
