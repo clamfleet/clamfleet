@@ -869,7 +869,7 @@ func TestIngestErrorsNeverEchoPath(t *testing.T) {
 		"bad signature":   event(t, func(m map[string]any) { m["path"] = marker; m["signature"] = "" }),
 		"bad ts":          event(t, func(m map[string]any) { m["path"] = marker; m["ts"] = "yesterday" }),
 		"path as number":  event(t, func(m map[string]any) { m["path"] = 5; m["signature"] = marker }),
-		"trailing":        append(event(t, func(m map[string]any) { m["path"] = marker }), []byte(" " + marker)...),
+		"trailing":        append(event(t, func(m map[string]any) { m["path"] = marker }), []byte(" "+marker)...),
 		"oversized (413)": event(t, func(m map[string]any) { m["path"] = marker; m["pad"] = strings.Repeat("x", 70000) }),
 	}
 	for name, body := range bodies {
