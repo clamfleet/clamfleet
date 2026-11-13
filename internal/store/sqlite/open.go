@@ -68,6 +68,10 @@ type Store struct {
 	// ran and before anything is written, to prove a failure leaves no delivery,
 	// no notify row, no log row and the flags still set. Always nil in production.
 	beforeAlertPlanWrite func() error
+	// afterAlertPlanDeliveries is a test hook: PlanAlerts calls it after the
+	// windows and deliveries are written and before the flags are cleared, so a
+	// test can prove that a window is closed together with its summary or not at all.
+	afterAlertPlanDeliveries func() error
 
 	// betweenExpireWrites is a test hook: ExpireLeases calls it between failing a
 	// delivery and writing its 'failed' log row, to prove the two are one

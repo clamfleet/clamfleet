@@ -64,15 +64,9 @@ func (q *Queries) AlertTargetByName(ctx context.Context, name string) (AlertTarg
 
 const alertTargetIDByName = `-- name: AlertTargetIDByName :one
 
-
-
 SELECT id FROM alert_targets WHERE name = ?1
 `
 
-// SPDX-License-Identifier: AGPL-3.0-only
-// SPDX-FileCopyrightText: The ClamFleet Authors
-// Alerting (Milestone 4). Portable SQL only (no RETURNING on UPDATE, no
-// SQLite-only functions), so a PostgreSQL implementation can copy it.
 // ---------------------------------------------------------------- targets
 func (q *Queries) AlertTargetIDByName(ctx context.Context, name string) (int64, error) {
 	row := q.db.QueryRowContext(ctx, alertTargetIDByName, name)
@@ -140,6 +134,23 @@ func (q *Queries) ClearStateChangeFlags(ctx context.Context, maxID int64) error 
 	return err
 }
 
+const closeWindow = `-- name: CloseWindow :exec
+UPDATE alert_detection_windows SET closed_at = ?1, outcome = ?2
+WHERE id = ?3 AND closed_at IS NULL
+`
+
+type CloseWindowParams struct {
+	ClosedAt sql.NullInt64
+	Outcome  sql.NullString
+	ID       int64
+}
+
+// closed_at IS NULL: a window is consumed once. Called in the same transaction as the summary.
+func (q *Queries) CloseWindow(ctx context.Context, arg CloseWindowParams) error {
+	_, err := q.db.ExecContext(ctx, closeWindow, arg.ClosedAt, arg.Outcome, arg.ID)
+	return err
+}
+
 const countPendingDeliveriesOfTarget = `-- name: CountPendingDeliveriesOfTarget :one
 SELECT COUNT(*) FROM alert_deliveries WHERE target_id = ?1 AND status = 'pending'
 `
@@ -155,6 +166,7 @@ const countUnroutedDetections = `-- name: CountUnroutedDetections :one
 SELECT COUNT(*) FROM events e
 WHERE e.received_at >= ?1 AND e.alert_pending = 0
   AND NOT EXISTS (SELECT 1 FROM alert_deliveries d WHERE d.event_id = e.id)
+  AND NOT EXISTS (SELECT 1 FROM alert_window_events m WHERE m.event_id = e.id)
 `
 
 // Events received since a time that have no delivery at all (no target
@@ -589,6 +601,25 @@ func (q *Queries) HasDueHold(ctx context.Context, arg HasDueHoldParams) (bool, e
 	return present, err
 }
 
+const hasDueWindow = `-- name: HasDueWindow :one
+SELECT EXISTS (SELECT 1 FROM alert_detection_windows
+               WHERE closed_at IS NULL AND (window_start + ?1 <= ?2 OR window_start - 60 > ?2)) AS present
+`
+
+type HasDueWindowParams struct {
+	WindowSecs int64
+	Now        int64
+}
+
+// An open detection window is due when its time has passed, or when the clock went
+// back by more than a minute (closing then beats holding it indefinitely).
+func (q *Queries) HasDueWindow(ctx context.Context, arg HasDueWindowParams) (bool, error) {
+	row := q.db.QueryRowContext(ctx, hasDueWindow, arg.WindowSecs, arg.Now)
+	var present bool
+	err := row.Scan(&present)
+	return present, err
+}
+
 const hasExpiredLease = `-- name: HasExpiredLease :one
 SELECT EXISTS (SELECT 1 FROM alert_deliveries WHERE status = 'pending' AND claim_token IS NOT NULL AND next_attempt_at <= ?1) AS present
 `
@@ -700,9 +731,9 @@ func (q *Queries) InsertAlertLog(ctx context.Context, arg InsertAlertLogParams) 
 }
 
 const insertAlertTarget = `-- name: InsertAlertTarget :one
-INSERT INTO alert_targets (name, type, config, min_severity, tag_filter, send_state_changes, send_detections, enabled, created_at, updated_at)
+INSERT INTO alert_targets (name, type, config, min_severity, tag_filter, send_state_changes, send_detections, detection_burst, enabled, created_at, updated_at)
 VALUES (?1, ?2, ?3, ?4, ?5,
-        ?6, ?7, ?8, ?9, ?9)
+        ?6, ?7, ?8, ?9, ?10, ?10)
 RETURNING id
 `
 
@@ -714,6 +745,7 @@ type InsertAlertTargetParams struct {
 	TagFilter        string
 	SendStateChanges int64
 	SendDetections   int64
+	DetectionBurst   int64
 	Enabled          int64
 	Now              int64
 }
@@ -727,6 +759,7 @@ func (q *Queries) InsertAlertTarget(ctx context.Context, arg InsertAlertTargetPa
 		arg.TagFilter,
 		arg.SendStateChanges,
 		arg.SendDetections,
+		arg.DetectionBurst,
 		arg.Enabled,
 		arg.Now,
 	)
@@ -736,9 +769,9 @@ func (q *Queries) InsertAlertTarget(ctx context.Context, arg InsertAlertTargetPa
 }
 
 const insertDelivery = `-- name: InsertDelivery :exec
-INSERT INTO alert_deliveries (alert_id, target_id, host_id, recipient, state_change_id, event_id, kind, payload, status, attempts, next_attempt_at, created_at)
+INSERT INTO alert_deliveries (alert_id, target_id, host_id, recipient, state_change_id, event_id, window_id, kind, payload, status, attempts, next_attempt_at, created_at)
 VALUES (?1, ?2, ?3, ?4, ?5, ?6,
-        ?7, ?8, 'pending', 0, ?9, ?9)
+        ?7, ?8, ?9, 'pending', 0, ?10, ?10)
 `
 
 type InsertDeliveryParams struct {
@@ -748,6 +781,7 @@ type InsertDeliveryParams struct {
 	Recipient     string
 	StateChangeID sql.NullInt64
 	EventID       sql.NullInt64
+	WindowID      sql.NullInt64
 	Kind          string
 	Payload       string
 	Now           sql.NullInt64
@@ -761,10 +795,50 @@ func (q *Queries) InsertDelivery(ctx context.Context, arg InsertDeliveryParams) 
 		arg.Recipient,
 		arg.StateChangeID,
 		arg.EventID,
+		arg.WindowID,
 		arg.Kind,
 		arg.Payload,
 		arg.Now,
 	)
+	return err
+}
+
+const insertWindow = `-- name: InsertWindow :one
+INSERT INTO alert_detection_windows (target_id, host_id, window_start, sent)
+VALUES (?1, ?2, ?3, ?4)
+RETURNING id
+`
+
+type InsertWindowParams struct {
+	TargetID    int64
+	HostID      int64
+	WindowStart int64
+	Sent        int64
+}
+
+func (q *Queries) InsertWindow(ctx context.Context, arg InsertWindowParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, insertWindow,
+		arg.TargetID,
+		arg.HostID,
+		arg.WindowStart,
+		arg.Sent,
+	)
+	var id int64
+	err := row.Scan(&id)
+	return id, err
+}
+
+const insertWindowMember = `-- name: InsertWindowMember :exec
+INSERT INTO alert_window_events (window_id, event_id) VALUES (?1, ?2)
+`
+
+type InsertWindowMemberParams struct {
+	WindowID int64
+	EventID  int64
+}
+
+func (q *Queries) InsertWindowMember(ctx context.Context, arg InsertWindowMemberParams) error {
+	_, err := q.db.ExecContext(ctx, insertWindowMember, arg.WindowID, arg.EventID)
 	return err
 }
 
@@ -795,8 +869,12 @@ func (q *Queries) InterruptAttemptLog(ctx context.Context, arg InterruptAttemptL
 const listAlertLog = `-- name: ListAlertLog :many
 
 SELECT l.id, l.ts, l.target_id, l.target_name, l.delivery_id, l.recipient, l.host_name, l.attempt, l.status, l.code, l.error, l.duration_ms,
-       CAST(CASE WHEN l.event_id IS NOT NULL THEN 'detection' WHEN l.state_change_id IS NOT NULL THEN 'state change' ELSE 'test' END AS TEXT) AS kind
-FROM alert_log l
+       CAST(CASE WHEN d.kind = 'detection_summary' THEN 'detection summary'
+                 WHEN l.event_id IS NOT NULL THEN 'detection'
+                 WHEN l.state_change_id IS NOT NULL THEN 'state change'
+                 WHEN l.status IN ('test_sent', 'test_failed') THEN 'test'
+                 ELSE 'detection' END AS TEXT) AS kind
+FROM alert_log l LEFT JOIN alert_deliveries d ON d.id = l.delivery_id
 WHERE (CAST(?1 AS TEXT) = '' OR l.target_name = CAST(?1 AS TEXT))
 ORDER BY l.id DESC LIMIT ?2
 `
@@ -823,7 +901,10 @@ type ListAlertLogRow struct {
 }
 
 // ------------------------------------------------------------------ reading
-// kind is derived: a detection row has an event, a state-change row a state change, a test send neither.
+// kind comes from the delivery when there is one (a summary has neither an event
+// nor a state change); otherwise it is derived: a row with an event is a
+// detection, with a state change a state change, a test send is a test, and the
+// remaining rows (a discarded burst window) are about held detections.
 func (q *Queries) ListAlertLog(ctx context.Context, arg ListAlertLogParams) ([]ListAlertLogRow, error) {
 	rows, err := q.db.QueryContext(ctx, listAlertLog, arg.TargetName, arg.MaxRows)
 	if err != nil {
@@ -863,7 +944,7 @@ func (q *Queries) ListAlertLog(ctx context.Context, arg ListAlertLogParams) ([]L
 
 const listAlertTargets = `-- name: ListAlertTargets :many
 SELECT t.id, t.name, t.type, t.config, t.secret, t.min_severity, t.tag_filter, t.send_state_changes, t.send_detections,
-       t.enabled, t.created_at, t.updated_at,
+       t.enabled, t.created_at, t.updated_at, t.detection_burst,
        CAST(COALESCE((SELECT l.status FROM alert_log l WHERE l.target_id = t.id AND l.status IN ('sent','retrying','failed','test_sent','test_failed')
          ORDER BY l.id DESC LIMIT 1), '') AS TEXT) AS last_status,
        CAST(COALESCE((SELECT l.ts FROM alert_log l WHERE l.target_id = t.id AND l.status IN ('sent','retrying','failed','test_sent','test_failed')
@@ -886,6 +967,7 @@ type ListAlertTargetsRow struct {
 	Enabled          int64
 	CreatedAt        int64
 	UpdatedAt        int64
+	DetectionBurst   int64
 	LastStatus       string
 	LastTs           int64
 	LastCode         string
@@ -915,6 +997,7 @@ func (q *Queries) ListAlertTargets(ctx context.Context) ([]ListAlertTargetsRow, 
 			&i.Enabled,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.DetectionBurst,
 			&i.LastStatus,
 			&i.LastTs,
 			&i.LastCode,
@@ -1007,12 +1090,142 @@ func (q *Queries) NotifyRowsOfHost(ctx context.Context, hostID int64) ([]AlertNo
 	return items, nil
 }
 
+const openWindowMembers = `-- name: OpenWindowMembers :many
+SELECT m.window_id, e.id AS event_id, e.ts, e.signature
+FROM alert_window_events m
+JOIN events e ON e.id = m.event_id
+JOIN alert_detection_windows w ON w.id = m.window_id
+WHERE w.closed_at IS NULL
+ORDER BY m.window_id, e.id
+`
+
+type OpenWindowMembersRow struct {
+	WindowID  int64
+	EventID   int64
+	Ts        int64
+	Signature string
+}
+
+func (q *Queries) OpenWindowMembers(ctx context.Context) ([]OpenWindowMembersRow, error) {
+	rows, err := q.db.QueryContext(ctx, openWindowMembers)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []OpenWindowMembersRow
+	for rows.Next() {
+		var i OpenWindowMembersRow
+		if err := rows.Scan(
+			&i.WindowID,
+			&i.EventID,
+			&i.Ts,
+			&i.Signature,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const openWindows = `-- name: OpenWindows :many
+
+
+
+SELECT id, target_id, host_id, window_start, sent FROM alert_detection_windows WHERE closed_at IS NULL ORDER BY id
+`
+
+type OpenWindowsRow struct {
+	ID          int64
+	TargetID    int64
+	HostID      int64
+	WindowStart int64
+	Sent        int64
+}
+
+// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-FileCopyrightText: The ClamFleet Authors
+// Alerting (Milestone 4). Portable SQL only (no RETURNING on UPDATE, no
+// SQLite-only functions), so a PostgreSQL implementation can copy it.
+// ---------------------------------------------------------------- detection windows
+func (q *Queries) OpenWindows(ctx context.Context) ([]OpenWindowsRow, error) {
+	rows, err := q.db.QueryContext(ctx, openWindows)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []OpenWindowsRow
+	for rows.Next() {
+		var i OpenWindowsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.TargetID,
+			&i.HostID,
+			&i.WindowStart,
+			&i.Sent,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const openWindowsOfTarget = `-- name: OpenWindowsOfTarget :many
+SELECT w.id, h.name AS host_name,
+       CAST((SELECT count(*) FROM alert_window_events m WHERE m.window_id = w.id) AS INTEGER) AS members
+FROM alert_detection_windows w JOIN hosts h ON h.id = w.host_id
+WHERE w.target_id = ?1 AND w.closed_at IS NULL
+`
+
+type OpenWindowsOfTargetRow struct {
+	ID       int64
+	HostName string
+	Members  int64
+}
+
+func (q *Queries) OpenWindowsOfTarget(ctx context.Context, targetID int64) ([]OpenWindowsOfTargetRow, error) {
+	rows, err := q.db.QueryContext(ctx, openWindowsOfTarget, targetID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []OpenWindowsOfTargetRow
+	for rows.Next() {
+		var i OpenWindowsOfTargetRow
+		if err := rows.Scan(&i.ID, &i.HostName, &i.Members); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const pendingDeliveriesOfTarget = `-- name: PendingDeliveriesOfTarget :many
 
 SELECT d.id, d.recipient, d.kind, d.host_id, d.state_change_id, d.event_id, d.attempts, h.name AS host_name
 FROM alert_deliveries d JOIN hosts h ON h.id = d.host_id
 WHERE d.target_id = ?1 AND d.status = 'pending'
-  AND (CAST(?2 AS TEXT) = '' OR d.kind = CAST(?2 AS TEXT))
+  AND (CAST(?2 AS TEXT) = '' OR d.kind = CAST(?2 AS TEXT)
+       OR (CAST(?2 AS TEXT) = 'detection' AND d.kind = 'detection_summary'))
 `
 
 type PendingDeliveriesOfTargetParams struct {
@@ -1032,7 +1245,8 @@ type PendingDeliveriesOfTargetRow struct {
 }
 
 // ------------------------------------------------- switching off (cancel)
-// Pending deliveries of a target, optionally of one kind (” = every kind).
+// Pending deliveries of a target, optionally of one kind (” = every kind;
+// 'detection' also covers detection summaries).
 func (q *Queries) PendingDeliveriesOfTarget(ctx context.Context, arg PendingDeliveriesOfTargetParams) ([]PendingDeliveriesOfTargetRow, error) {
 	rows, err := q.db.QueryContext(ctx, pendingDeliveriesOfTarget, arg.TargetID, arg.Kind)
 	if err != nil {
@@ -1215,11 +1429,26 @@ func (q *Queries) SetAlertTargetSecret(ctx context.Context, arg SetAlertTargetSe
 	return err
 }
 
+const setWindowSent = `-- name: SetWindowSent :exec
+UPDATE alert_detection_windows SET sent = ?1 WHERE id = ?2
+`
+
+type SetWindowSentParams struct {
+	Sent int64
+	ID   int64
+}
+
+func (q *Queries) SetWindowSent(ctx context.Context, arg SetWindowSentParams) error {
+	_, err := q.db.ExecContext(ctx, setWindowSent, arg.Sent, arg.ID)
+	return err
+}
+
 const updateAlertTarget = `-- name: UpdateAlertTarget :exec
 UPDATE alert_targets SET config = ?1, min_severity = ?2, tag_filter = ?3,
-  send_state_changes = ?4, send_detections = ?5, enabled = ?6,
-  updated_at = ?7
-WHERE id = ?8
+  send_state_changes = ?4, send_detections = ?5,
+  detection_burst = ?6, enabled = ?7,
+  updated_at = ?8
+WHERE id = ?9
 `
 
 type UpdateAlertTargetParams struct {
@@ -1228,6 +1457,7 @@ type UpdateAlertTargetParams struct {
 	TagFilter        string
 	SendStateChanges int64
 	SendDetections   int64
+	DetectionBurst   int64
 	Enabled          int64
 	Now              int64
 	ID               int64
@@ -1240,6 +1470,7 @@ func (q *Queries) UpdateAlertTarget(ctx context.Context, arg UpdateAlertTargetPa
 		arg.TagFilter,
 		arg.SendStateChanges,
 		arg.SendDetections,
+		arg.DetectionBurst,
 		arg.Enabled,
 		arg.Now,
 		arg.ID,

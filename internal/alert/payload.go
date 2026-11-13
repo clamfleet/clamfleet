@@ -38,7 +38,11 @@ const SchemaVersion = 1
 const (
 	KindStateChange = "state_change"
 	KindDetection   = "detection"
-	KindTest        = "test"
+	// KindDetectionSummary reports the detections a target held back in a burst
+	// window as one alert. Adding a kind keeps Schema 1: receivers must ignore
+	// kinds they do not know.
+	KindDetectionSummary = "detection_summary"
+	KindTest             = "test"
 )
 
 // StateChangePayload is the alert for a host's state change.
@@ -88,6 +92,37 @@ type DetectionPayload struct {
 	ReceivedAt string   `json:"received_at"`
 }
 
+// SignatureCount is one entry of a summary's signature list.
+type SignatureCount struct {
+	Signature string `json:"signature"`
+	Count     int    `json:"count"`
+}
+
+// DetectionSummaryPayload is the alert for the detections one target held back
+// for one host in one burst window. It never carries a path: a mass detection
+// can name thousands of files, and the page has them. TS is the server time at
+// which the window closed; WindowStart and WindowEnd are server times;
+// FirstTS and LastTS are the agent's detection times, informational only.
+type DetectionSummaryPayload struct {
+	Schema        int              `json:"schema"`
+	ID            string           `json:"id"`
+	Kind          string           `json:"kind"`
+	Target        string           `json:"target"`
+	Host          string           `json:"host"`
+	Tags          []string         `json:"tags"`
+	TS            string           `json:"ts"`
+	URL           *string          `json:"url"`
+	Count         int              `json:"count"`
+	FirstTS       string           `json:"first_ts"`
+	LastTS        string           `json:"last_ts"`
+	WindowStart   string           `json:"window_start"`
+	WindowEnd     string           `json:"window_end"`
+	WindowSeconds int              `json:"window_seconds"`
+	Signatures    []SignatureCount `json:"signatures"`
+	// MoreSignatures is how many further distinct signatures are not listed.
+	MoreSignatures int `json:"more_signatures"`
+}
+
 // TestPayload is what a test-send delivers. URL is the public_url root, or null.
 type TestPayload struct {
 	Schema int     `json:"schema"`
@@ -119,6 +154,15 @@ func HostURL(publicURL, host string) *string {
 		return nil
 	}
 	u := publicURL + "/hosts/" + host
+	return &u
+}
+
+// EventsURL is the link to a host's detections, nil when publicURL is empty.
+func EventsURL(publicURL, host string) *string {
+	if publicURL == "" {
+		return nil
+	}
+	u := publicURL + "/events?host=" + host
 	return &u
 }
 

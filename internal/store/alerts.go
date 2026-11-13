@@ -35,7 +35,21 @@ const (
 const (
 	DeliveryStateChange = "state_change"
 	DeliveryDetection   = "detection"
+	// DeliveryDetectionSummary is the one alert that reports the detections a
+	// target held back in a burst window. It is a detection for every rule that
+	// distinguishes state alerts from detections (claim order, the reserved
+	// worker, the cooldown), but its own kind for delivery order and the log.
+	DeliveryDetectionSummary = "detection_summary"
 )
+
+// DetectionWindow is the length W of a burst window: per (target, host) the
+// first DetectionBurst detections in W are sent one by one, the rest in W are
+// held and sent as one summary when W ends (milestone 5, decision 10b).
+const DetectionWindow = 10 * time.Minute
+
+// DefaultDetectionBurst is the burst limit of a new alert target; 0 means every
+// detection is sent on its own.
+const DefaultDetectionBurst = 10
 
 // AlertTarget is a configured alert destination.
 type AlertTarget struct {
@@ -53,9 +67,12 @@ type AlertTarget struct {
 	TagFilter        []string // any-of; empty = every host
 	SendStateChanges bool
 	SendDetections   bool
-	Enabled          bool
-	CreatedAt        time.Time
-	UpdatedAt        time.Time
+	// DetectionBurst is how many detections per host and DetectionWindow are sent
+	// one by one before the rest are summarised; 0 = every detection alone.
+	DetectionBurst int
+	Enabled        bool
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
 }
 
 // ClaimLimits bound one claim: the dispatcher's capacity rules (milestone 5,
@@ -137,6 +154,54 @@ type AlertPlanInput struct {
 	Hosts map[int64]PlanHost
 	// Notify holds the rows of those hosts (all targets).
 	Notify []NotifyState
+	// Windows are all open detection windows, with their held members.
+	Windows []PlanWindow
+}
+
+// PlanWindowMember is a detection held in an open window; the summary needs
+// only its signature and the agent's time, never the path.
+type PlanWindowMember struct {
+	EventID   int64
+	TS        time.Time
+	Signature string
+}
+
+// PlanWindow is an open detection window of one (target, host).
+type PlanWindow struct {
+	ID       int64
+	TargetID int64
+	HostID   int64
+	// Start is the server-clock received_at of the event that opened it.
+	Start time.Time
+	// Sent counts the individual alerts already sent in this window.
+	Sent    int
+	Members []PlanWindowMember
+}
+
+// Window outcomes.
+const (
+	WindowSummarised = "summarised"
+	WindowEmpty      = "empty"
+	WindowDiscarded  = "discarded"
+)
+
+// WindowWrite is the planner's final state of one window it touched, written
+// by the store in order (a window that closes comes before the one that
+// replaces it: one open window per (target, host) at all times).
+type WindowWrite struct {
+	// ID is the existing window's id; 0 for a window the plan opens.
+	ID       int64
+	TargetID int64
+	HostID   int64
+	// Start is used for a new window only.
+	Start time.Time
+	// Sent is the new count of individual alerts.
+	Sent int
+	// AddMembers are the event ids held by this plan.
+	AddMembers []int64
+	// Outcome is "" while the window stays open, else a Window* value: the
+	// window is closed in the same transaction as the summary delivery.
+	Outcome string
 }
 
 // NewDelivery is a delivery the planner wants written.
@@ -148,7 +213,10 @@ type NewDelivery struct {
 	Recipient     string
 	StateChangeID *int64
 	EventID       *int64
-	Kind          string // DeliveryStateChange or DeliveryDetection
+	Kind          string // DeliveryStateChange, DeliveryDetection or DeliveryDetectionSummary
+	// WindowRef, for a summary, is 1 + the index in AlertPlanOutput.Windows of
+	// the window it consumes; 0 for every other delivery.
+	WindowRef int
 	// Payload is the JSON body, fixed here: every retry sends the same bytes.
 	Payload []byte
 }
@@ -173,6 +241,8 @@ type AlertPlanOutput struct {
 	Logs   []PlanLog
 	// Unrouted are the ids of the events that no target matched.
 	Unrouted []int64
+	// Windows are the windows the plan opened, changed or closed.
+	Windows []WindowWrite
 }
 
 // Statuses of alert_log rows.
@@ -236,7 +306,10 @@ type NewAlertTarget struct {
 	TagFilter        []string
 	SendStateChanges bool
 	SendDetections   bool
-	Enabled          bool
+	// DetectionBurst is the burst limit; the zero value means every detection
+	// alone, so callers that want the default set DefaultDetectionBurst.
+	DetectionBurst int
+	Enabled        bool
 }
 
 // TargetSnapshot is the part of a target a read-modify-write must still find
@@ -254,7 +327,9 @@ type AlertTargetUpdate struct {
 	TagFilter        []string
 	SendStateChanges bool
 	SendDetections   bool
-	Enabled          bool
+	// DetectionBurst, when set, replaces the burst limit; nil keeps it.
+	DetectionBurst *int
+	Enabled        bool
 	// Expect, when set, makes the update conditional on the stored config and
 	// secret still being these (ErrChangedMeanwhile otherwise).
 	Expect *TargetSnapshot
@@ -264,6 +339,10 @@ type AlertTargetUpdate struct {
 type Cancelled struct {
 	// Deliveries is how many pending deliveries became 'cancelled'.
 	Deliveries int
+	// HeldDetections is how many detections were held in burst windows that were
+	// discarded because detections were switched off or the target disabled:
+	// no summary will be sent for them (decision 15).
+	HeldDetections int
 }
 
 // AlertTargetSummary is a target with the last result recorded for it.
@@ -324,7 +403,7 @@ type AlertLogEntry struct {
 	TargetName string
 	Recipient  string
 	Host       string
-	Kind       string // "state change", "detection" or "test"
+	Kind       string // "state change", "detection", "detection summary" or "test"
 	Attempt    int
 	Status     string
 	Code       string
@@ -396,7 +475,7 @@ type AlertStore interface {
 	CountPendingAlerts(ctx context.Context, name string) (int, error)
 
 	// HasAlertWork is cheap (read pool): is anything flagged, any hold due, any
-	// delivery due or any lease expired? It keeps the 5 s loop from opening a
+	// detection window due to close, any delivery due or any lease expired? It keeps the 5 s loop from opening a
 	// write transaction for nothing.
 	HasAlertWork(ctx context.Context, now time.Time, cooldown time.Duration) (bool, error)
 	// PlanAlerts runs in ONE immediate write transaction: it reads the flagged

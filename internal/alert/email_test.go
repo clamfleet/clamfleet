@@ -174,3 +174,29 @@ func TestEscapeText(t *testing.T) {
 	}
 	_ = json.Valid
 }
+
+// A summary email names the count and the signatures (escaped), points to the
+// events page, and says the paths are not in the mail. A signature with a CR LF
+// cannot start a header or a line.
+func TestEmailDetectionSummary(t *testing.T) {
+	p := DetectionSummaryPayload{
+		Schema: SchemaVersion, ID: "1a2b3c4d5e6f708192a3b4c5d6e7f809", Kind: KindDetectionSummary, Target: "ops", Host: "app01",
+		Tags: []string{"web"}, TS: FormatTime(t0), URL: EventsURL("https://cf.example", "app01"), Count: 321,
+		FirstTS: FormatTime(t0), LastTS: FormatTime(t0), WindowStart: FormatTime(t0), WindowEnd: FormatTime(t0.Add(10 * time.Minute)), WindowSeconds: 600,
+		Signatures:     []SignatureCount{{Signature: "Win.Test.EICAR\r\nBcc: evil@x.example", Count: 300}, {Signature: "Php.Shell", Count: 21}},
+		MoreSignatures: 4,
+	}
+	raw, _ := Marshal(p)
+	m, parsed, body := render(t, raw)
+	if m.Subject != "[ClamFleet] app01: 321 detections" || parsed.Header.Get("Bcc") != "" {
+		t.Fatalf("subject %q bcc %q", m.Subject, parsed.Header.Get("Bcc"))
+	}
+	for _, s := range []string{"321", "https://cf.example/events?host=app01", `Win.Test.EICAR\x0d\x0aBcc: evil@x.example: 300`, "Php.Shell: 21", "4 more signatures", "not sent by email"} {
+		if !strings.Contains(body, s) {
+			t.Errorf("body lacks %q:\n%s", s, body)
+		}
+	}
+	if strings.Contains(body, "\nBcc:") {
+		t.Fatalf("a signature started a header-like line:\n%s", body)
+	}
+}

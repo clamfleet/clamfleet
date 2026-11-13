@@ -1004,3 +1004,51 @@ func TestWakeStartsAPass(t *testing.T) {
 		time.Sleep(5 * time.Millisecond)
 	}
 }
+
+// 15 detections for one host with the default burst of 10: ten go out one by
+// one (in order, one at a time per host), five are held, and at t0 + 10 min one
+// summary of count 5 is delivered, once, whatever further passes run.
+func TestBurstThenSummaryThroughDispatcher(t *testing.T) {
+	e := newDispEnv(t)
+	h := e.host("a")
+	e.webhook("ops", func(n *store.NewAlertTarget) { n.DetectionBurst = 10; n.SendStateChanges = false })
+	for i := range 15 {
+		e.detection(h, fmt.Sprintf("/p%02d", i))
+	}
+	var mu sync.Mutex
+	var kinds []string
+	var summary DetectionSummaryPayload
+	e.wh.fn = func(_ int, _ string, body []byte, _ context.Context) Result {
+		mu.Lock()
+		defer mu.Unlock()
+		k := kindOf(body)
+		kinds = append(kinds, k)
+		if k == KindDetectionSummary {
+			_ = json.Unmarshal(body, &summary)
+		}
+		return Result{Outcome: OutcomeSent, Code: "HTTP 204"}
+	}
+	for range 12 { // one delivery per pass: a host's detections are sent in order
+		e.once()
+	}
+	mu.Lock()
+	if len(kinds) != 10 {
+		t.Fatalf("%d sends before the window ends, want 10: %v", len(kinds), kinds)
+	}
+	mu.Unlock()
+	e.clk.Add(10 * time.Minute)
+	for range 4 {
+		e.once()
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(kinds) != 11 || kinds[10] != KindDetectionSummary || summary.Count != 5 {
+		t.Fatalf("sends %v summary %+v, want 10 detections then one summary of 5", kinds, summary)
+	}
+	if n := e.q(`SELECT count(*) FROM alert_log WHERE status = 'sent'`); n != 11 {
+		t.Fatalf("%d sent log rows", n)
+	}
+	if strings.Contains(e.logs.String(), "/p1") {
+		t.Fatalf("a path reached the server log:\n%s", e.logs.String())
+	}
+}

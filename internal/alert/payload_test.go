@@ -55,6 +55,14 @@ func TestPayloadGolden(t *testing.T) {
 		URL: HostURL("https://clamfleet.example", "app01"), Path: "/home/alice/eicar.com", Signature: "Win.Test.EICAR_HDB-1",
 		Source: "clamonacc", ReceivedAt: FormatTime(t0.Add(3 * time.Second)),
 	})
+	golden(t, "detection_summary.golden.json", DetectionSummaryPayload{
+		Schema: SchemaVersion, ID: "1a2b3c4d5e6f708192a3b4c5d6e7f809", Kind: KindDetectionSummary, Target: "ops-webhook",
+		Host: "app01", Tags: []string{"prod", "web"}, TS: FormatTime(t0.Add(10 * time.Minute)),
+		URL: EventsURL("https://clamfleet.example", "app01"), Count: 4321,
+		FirstTS: FormatTime(t0.Add(-20 * time.Minute)), LastTS: FormatTime(t0.Add(10*time.Minute - 2*time.Second)),
+		WindowStart: FormatTime(t0), WindowEnd: FormatTime(t0.Add(10 * time.Minute)), WindowSeconds: 600,
+		Signatures: []SignatureCount{{"Win.Test.EICAR_HDB-1", 4300}, {"Php.Shell_x", 21}},
+	})
 	golden(t, "test.golden.json", TestPayload{
 		Schema: SchemaVersion, ID: "ffeeddccbbaa99887766554433221100", Kind: KindTest, Target: "ops-webhook",
 		TS: FormatTime(t0), URL: RootURL("https://clamfleet.example"),
@@ -132,5 +140,28 @@ func TestFormatTimeIsUTCWholeSeconds(t *testing.T) {
 	got := FormatTime(time.Date(2031, 3, 4, 13, 0, 0, 999, loc))
 	if got != "2031-03-04T12:00:00Z" {
 		t.Fatal(got)
+	}
+}
+
+// A summary never carries a path: a mass detection can name thousands of files,
+// and the events page has them.
+func TestSummaryPayloadHasNoPathKey(t *testing.T) {
+	b, err := Marshal(DetectionSummaryPayload{Schema: 1, ID: "i", Kind: KindDetectionSummary, Signatures: []SignatureCount{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(b, &m); err != nil {
+		t.Fatal(err)
+	}
+	for _, k := range []string{"path", "paths", "source"} {
+		if _, ok := m[k]; ok {
+			t.Fatalf("summary has a %q key: %s", k, b)
+		}
+	}
+	for _, k := range []string{"url", "signatures", "more_signatures", "count"} {
+		if _, ok := m[k]; !ok {
+			t.Fatalf("summary lacks %q: %s", k, b)
+		}
 	}
 }

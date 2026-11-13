@@ -6,7 +6,7 @@
 //
 //	alert list [--json]
 //	alert log [--target NAME] [--limit N] [--json]
-//	alert add-webhook NAME (--url-stdin | --url-file PATH) [--min-severity S] [--tags a,b] [--no-state-changes] [--no-detections]
+//	alert add-webhook NAME (--url-stdin | --url-file PATH) [--min-severity S] [--tags a,b] [--no-state-changes] [--no-detections] [--detection-burst N]
 //	alert add-email NAME --to a@x,b@y [same flags]
 //	alert test NAME
 //	alert delete NAME --yes
@@ -76,6 +76,7 @@ func (a *app) alert(ctx context.Context, args []string) int {
 	tags := fs.String("tags", "", "comma-separated tags: only hosts with any of them (add-webhook, add-email)")
 	noState := fs.Bool("no-state-changes", false, "do not send state changes (add-webhook, add-email)")
 	noDet := fs.Bool("no-detections", false, "do not send detections (add-webhook, add-email)")
+	burst := fs.Int("detection-burst", store.DefaultDetectionBurst, "detections per host and 10 minutes sent one by one before the rest are summarised; 0 = every detection alone (add-webhook, add-email)")
 	to := fs.String("to", "", "comma-separated recipients (add-email)")
 	// Flags may follow NAME ("alert delete ops --yes"), as for the host commands.
 	var pos []string
@@ -159,8 +160,12 @@ func (a *app) alert(ctx context.Context, args []string) int {
 		fmt.Fprintf(a.stderr, "alert %s: --min-severity must be WARN, CRIT or STALE\n", sub)
 		return exitUsage
 	}
+	if *burst < 0 {
+		fmt.Fprintf(a.stderr, "alert %s: --detection-burst must be 0 or more\n", sub)
+		return exitUsage
+	}
 	nt := store.NewAlertTarget{Name: pos[0], MinSeverity: *minSev, TagFilter: filter,
-		SendStateChanges: !*noState, SendDetections: !*noDet, Enabled: true}
+		SendStateChanges: !*noState, SendDetections: !*noDet, DetectionBurst: *burst, Enabled: true}
 	if sub == "add-email" {
 		return a.addEmail(ctx, log, cfg, st, nt, *to, audit)
 	}

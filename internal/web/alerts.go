@@ -325,7 +325,7 @@ func (w *Web) createTarget(rw http.ResponseWriter, r *http.Request) {
 	}
 
 	nt := store.NewAlertTarget{Name: name, Type: in.typ, MinSeverity: in.minSev, TagFilter: tags,
-		SendStateChanges: in.state, SendDetections: in.detections, Enabled: in.enabled}
+		SendStateChanges: in.state, SendDetections: in.detections, DetectionBurst: store.DefaultDetectionBurst, Enabled: in.enabled}
 	var seal func(id int64) ([]byte, error)
 	var signing string
 	switch in.typ {
