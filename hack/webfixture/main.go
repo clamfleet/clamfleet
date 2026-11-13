@@ -86,6 +86,30 @@ type TOTPLogin struct {
 	RecoveryCodes []string `json:"recovery_codes"` // 10, display form (abcd-efgh-ijkl-mnop)
 }
 
+// AlertsFixture describes what the Alerts pages can be driven with: a webhook
+// receiver on loopback that records requests, and one seeded target. The server
+// runs with alert.cooldown 0s, alert.webhook.allow_loopback true and public_url
+// set to the fixture URL.
+type AlertsFixture struct {
+	// ReceiverURL is the receiver's base (http://127.0.0.1:PORT, plaintext on
+	// purpose: the Alerts page then shows its "unencrypted" warning).
+	ReceiverURL string `json:"receiver_url"`
+	// RequestsURL: GET returns the recorded requests as JSON, DELETE clears them.
+	RequestsURL string `json:"requests_url"`
+	// StatusURL: POST ?code=500 scripts the receiver's answer, ?code=0 resets it.
+	StatusURL string `json:"status_url"`
+	// SeededTarget is the name of a webhook target the fixture created (through
+	// the real CLI) for HookURL, signed with SigningKey. It only takes the hosts
+	// tagged "alerts", so no other seeded host's transitions reach the receiver.
+	SeededTarget string `json:"seeded_target"`
+	HookURL      string `json:"hook_url"`
+	SigningKey   string `json:"signing_key"`
+	// Host is the seeded host that matches the target: post a report with
+	// clamd.up=false and its token and the receiver gets one state_change to
+	// CRIT within about 5 s.
+	Host string `json:"host"`
+}
+
 // Fixture is the content of fixture.json.
 type Fixture struct {
 	URL        string `json:"url"`
@@ -105,6 +129,7 @@ type Fixture struct {
 	TOTPRequired bool            `json:"totp_required"`
 	Forced       *Login          `json:"forced,omitempty"`
 	Hosts        map[string]Host `json:"hosts"`
+	Alerts       AlertsFixture   `json:"alerts"`
 }
 
 func main() {
@@ -164,8 +189,12 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	cfg := filepath.Join(tmp, "server.yaml")
 	db := filepath.Join(tmp, "clamfleet.db")
 	keyFile := filepath.Join(tmp, "secret.key") // inside the private temp dir, never the developer's /etc key
-	yaml := fmt.Sprintf("listen: 127.0.0.1:%d\ntls:\n  cert: %s\n  key: %s\ndb_path: %s\nsecret_key_file: %s\nhealth:\n  eval_interval: %s\n",
-		*port, tlsb.Cert, tlsb.Key, db, keyFile, *evalEvery)
+	// alert.cooldown 0s: no holds, so a spec sees every transition at once (the
+	// cooldown is proven with an injected clock in the unit tests). Loopback is allowed because the
+	// receiver below is on loopback; public_url makes the alert links point at this fixture.
+	yaml := fmt.Sprintf("listen: 127.0.0.1:%d\ntls:\n  cert: %s\n  key: %s\ndb_path: %s\nsecret_key_file: %s\nhealth:\n  eval_interval: %s\n"+
+		"public_url: https://127.0.0.1:%d\nalert:\n  cooldown: 0s\n  webhook:\n    allow_loopback: true\n",
+		*port, tlsb.Cert, tlsb.Key, db, keyFile, *evalEvery, *port)
 	if *totpRequired {
 		yaml += "auth:\n  local:\n    totp_required: true\n"
 	}
@@ -174,9 +203,12 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	}
 	// A clean environment: the developer's own CLAMFLEET_SERVER_* must not leak in.
 	env := []string{"PATH=" + os.Getenv("PATH"), "CLAMFLEET_SERVER_CONFIG=" + cfg}
-	cli := func(args ...string) (string, error) {
+	cliIn := func(stdin string, args ...string) (string, error) {
 		cmd := exec.CommandContext(ctx, bin, args...)
 		cmd.Env = env
+		if stdin != "" {
+			cmd.Stdin = strings.NewReader(stdin)
+		}
 		var so, se bytes.Buffer
 		cmd.Stdout, cmd.Stderr = &so, &se
 		if err := cmd.Run(); err != nil {
@@ -184,6 +216,12 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		}
 		return strings.TrimSpace(so.String()), nil
 	}
+	cli := func(args ...string) (string, error) { return cliIn("", args...) }
+	rcv, err := startReceiver()
+	if err != nil {
+		return err
+	}
+	defer rcv.Close()
 	if _, err := cli("migrate"); err != nil {
 		return err
 	}
@@ -248,6 +286,17 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 			return fmt.Errorf("seed report of %s: %w", h.name, err)
 		}
 	}
+
+	// The seeded alert target, created after the reports so it never sees the
+	// seeding transitions (and it takes only hosts tagged "alerts" anyway). The URL goes in through
+	// stdin and the printed signing key is the only thing on stdout: the documented CLI flow.
+	hook := rcv.URL() + "/hook/seeded"
+	key, err := cliIn(hook+"\n", "alert", "add-webhook", "seeded-hook", "--url-stdin", "--tags", "alerts")
+	if err != nil {
+		return err
+	}
+	fx.Alerts = AlertsFixture{ReceiverURL: rcv.URL(), RequestsURL: rcv.URL() + "/__requests", StatusURL: rcv.URL() + "/__status",
+		SeededTarget: "seeded-hook", HookURL: hook, SigningKey: key, Host: "alerts01"}
 
 	raw, _ := json.MarshalIndent(fx, "", "  ")
 	for _, p := range []string{filepath.Join(tmp, "fixture.json"), *jsonOut} {
@@ -402,6 +451,7 @@ func hostSeeds() []hostSeed {
 			return r
 		}},
 		{"pending01", "pending", "registered, never reported (becomes STALE after 15 min)", nil},
+		{"alerts01", "OK", "healthy, tag \"alerts\": the only host the seeded alert target takes (Alerts pages)", func(n string, now time.Time) proto.Report { return baseReport(n, now, "alerts") }},
 		{"xss01", "WARN", "hostile agent text in tags, host name and freshclam error: must render inert", func(n string, now time.Time) proto.Report {
 			r := baseReport(n, now, "<b>bold</b>", `"><img src=x onerror=alert(1)>`)
 			r.Host = `"><img src=x onerror=alert(2)>`

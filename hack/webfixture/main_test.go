@@ -9,9 +9,11 @@ import (
 	"crypto/hmac"
 	"crypto/sha1"
 	"encoding/base32"
+	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"html"
 	"io"
 	"net/http"
 	"net/http/cookiejar"
@@ -19,10 +21,15 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/clamfleet/clamfleet/internal/alert"
+	"github.com/clamfleet/clamfleet/internal/proto"
 )
 
 type safeBuf struct {
@@ -333,5 +340,144 @@ func TestFixtureTOTPRequiredSeedsForcedUser(t *testing.T) {
 	resp.Body.Close()
 	if resp.StatusCode != 200 {
 		t.Fatalf("GET / as an enrolled user: %d", resp.StatusCode)
+	}
+}
+
+// The Alerts pages need a receiver the server can reach and a way to read what
+// arrived: the fixture promises both (docs/testing.md). This walks the whole
+// promise with the real server: the seeded target is listed, a clamd-down report
+// of the promised host reaches the receiver as one signed state_change, and the
+// console's test send reaches it as a "test" payload.
+func TestFixtureAlertsReceiverAndSeededTarget(t *testing.T) {
+	fx, newClient := startFixture(t, buildServer(t))
+	a := fx.Alerts
+	if a.SeededTarget != "seeded-hook" || a.Host != "alerts01" || !strings.HasPrefix(a.ReceiverURL, "http://127.0.0.1:") ||
+		!strings.HasPrefix(a.SigningKey, "whsec_") || a.HookURL != a.ReceiverURL+"/hook/seeded" {
+		t.Fatalf("%+v", a)
+	}
+	type rec struct {
+		Path   string              `json:"path"`
+		Header map[string][]string `json:"header"`
+		Body   string              `json:"body"`
+	}
+	requests := func() []rec {
+		resp, err := http.Get(a.RequestsURL)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		var out []rec
+		if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+	if n := len(requests()); n != 0 {
+		t.Fatalf("the receiver holds %d requests before anything was sent: the seeding must not alert", n)
+	}
+
+	c := newClient()
+	if code, _ := post(t, c, fx.URL, "/login", url.Values{"email": {fx.Admin.Email}, "password": {fx.Admin.Password}}); code != 303 {
+		t.Fatal("admin cannot sign in")
+	}
+	get := func(path string) (int, string) {
+		resp, err := c.Get(fx.URL + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		b, _ := io.ReadAll(resp.Body)
+		return resp.StatusCode, string(b)
+	}
+	code, page := get("/admin/alerts")
+	if code != 200 || !strings.Contains(page, `data-testid="alert-row-seeded-hook"`) || !strings.Contains(page, `data-testid="alert-unencrypted-seeded-hook"`) ||
+		strings.Contains(page, "/hook/seeded") || strings.Contains(page, a.SigningKey) {
+		t.Fatalf("Alerts page: %d (the URL path and the key must not be shown)\n%s", code, page)
+	}
+	if strings.Contains(page, "alert-banner-no-public-url") {
+		t.Error("public_url is set in the fixture config: no banner")
+	}
+	if !strings.Contains(page, "alert-banner-email-off") {
+		t.Error("email is off in the fixture: the banner must show")
+	}
+
+	// A clamd-down report of alerts01: one signed CRIT alert within the dispatcher's tick.
+	// A report's timestamp has one-second resolution and a repeated (host, ts) is a duplicate that
+	// changes nothing: the seeding report of alerts01 may be in this very second.
+	time.Sleep(1100 * time.Millisecond)
+	rep := baseReport("alerts01", time.Now().UTC(), "alerts")
+	msg := "ping: timeout"
+	rep.Clamd = proto.Clamd{Up: false, Error: &msg}
+	client, err := httpClient(fx.CACert)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := postReport(context.Background(), client, fx.URL, fx.Hosts["alerts01"].Token, rep); err != nil {
+		t.Fatal(err)
+	}
+	var got []rec
+	for deadline := time.Now().Add(20 * time.Second); time.Now().Before(deadline); time.Sleep(250 * time.Millisecond) {
+		if got = requests(); len(got) >= 1 {
+			break
+		}
+	}
+	if len(got) != 1 || got[0].Path != "/hook/seeded" {
+		log, _ := os.ReadFile(fx.ServerLog)
+		t.Fatalf("the receiver got %d requests: %+v\nserver log:\n%s", len(got), got, log)
+	}
+	var p struct {
+		Kind, Host, To string
+		URL            *string
+	}
+	if err := json.Unmarshal([]byte(got[0].Body), &p); err != nil || p.Kind != "state_change" || p.Host != "alerts01" || p.To != "CRIT" || p.URL == nil || *p.URL != fx.URL+"/hosts/alerts01" {
+		t.Fatalf("%+v %v\n%s", p, err, got[0].Body)
+	}
+	key, _ := base64.StdEncoding.DecodeString(strings.TrimPrefix(a.SigningKey, "whsec_"))
+	ts, _ := strconv.ParseInt(got[0].Header["Webhook-Timestamp"][0], 10, 64)
+	if !alert.VerifySignature(key, got[0].Header["Webhook-Id"][0], ts, []byte(got[0].Body), got[0].Header["Webhook-Signature"][0]) {
+		t.Fatalf("the signature does not verify with the key in fixture.json: %v", got[0].Header)
+	}
+
+	// Test send from the console (htmx): the fragment says delivered and the receiver records kind "test".
+	_, home := get("/admin/alerts")
+	m := regexp.MustCompile(`<meta name="csrf-token" content="([^"]+)">`).FindStringSubmatch(home)
+	if m == nil {
+		t.Fatal("no csrf token")
+	}
+	req, _ := http.NewRequest("POST", fx.URL+"/admin/alerts/seeded-hook/test", nil)
+	req.Header.Set("HX-Request", "true")
+	req.Header.Set("X-CSRF-Token", html.UnescapeString(m[1]))
+	resp, err := c.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != 200 || !strings.Contains(string(body), "Delivered: HTTP 204") {
+		t.Fatalf("test send: %d %s", resp.StatusCode, body)
+	}
+	if n := len(requests()); n != 2 {
+		t.Fatalf("%d requests after the test send, want 2", n)
+	}
+
+	// The receiver's controls: scripted status and clearing.
+	if resp, err := http.Post(a.StatusURL+"?code=503", "", nil); err != nil || resp.StatusCode != 204 {
+		t.Fatalf("%v %v", resp, err)
+	}
+	if resp, err := http.Post(a.ReceiverURL+"/anything", "application/json", strings.NewReader("{}")); err != nil || resp.StatusCode != 503 {
+		t.Fatalf("scripted status: %v %v", resp, err)
+	}
+	if resp, err := http.Post(a.StatusURL+"?code=0", "", nil); err != nil || resp.StatusCode != 204 {
+		t.Fatal(err)
+	}
+	if resp, err := http.Post(a.StatusURL+"?code=99", "", nil); err != nil || resp.StatusCode != 400 {
+		t.Fatalf("a bad code must be refused: %v %v", resp, err)
+	}
+	reqDel, _ := http.NewRequest("DELETE", a.RequestsURL, nil)
+	if resp, err := http.DefaultClient.Do(reqDel); err != nil || resp.StatusCode != 204 {
+		t.Fatalf("%v %v", resp, err)
+	}
+	if n := len(requests()); n != 0 {
+		t.Fatalf("%d requests after DELETE", n)
 	}
 }
