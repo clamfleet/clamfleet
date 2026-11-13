@@ -93,6 +93,7 @@ func (c *Collector) Collect(ctx context.Context) (proto.Report, []Problem, error
 	add(svp...)
 
 	r.Clamd = c.collectClamdGuarded(ctx, r.Services.Clamd, &problems)
+	r.Clamd.VirusEvent = c.collectVirusEvent()
 
 	var sp []Problem
 	r.Sigs, sp = collectSigs(c.Cfg.DBDir)
@@ -155,6 +156,21 @@ func (c *Collector) collectClamdGuarded(ctx context.Context, unitState string, p
 		*problems = append(*problems, Problem{"clamd", fmt.Errorf("%s", *res.Error)})
 	}
 	return res
+}
+
+// collectVirusEvent reports whether clamd.conf wires up `clamfleet-agent event`.
+// Unlike the socket probe it only reads a file, so it runs whatever the clamd
+// unit state is. null when the file cannot be read: an unknown is not "none",
+// so an unreadable file never raises the virusevent_missing warning.
+func (c *Collector) collectVirusEvent() *string {
+	conf, err := readFileLimited(c.Cfg.ClamdConf)
+	if err != nil {
+		// collectClamdGuarded already reports an unreadable clamd.conf when it
+		// got that far; a second problem line for the same file would be noise.
+		return nil
+	}
+	v := ParseVirusEvent(conf)
+	return &v
 }
 
 // maxConfBytes caps clamd.conf reads; real files are a few KB.

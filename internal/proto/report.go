@@ -44,6 +44,15 @@ type Report struct {
 	Services        Services  `json:"services"`
 	// LastScan is null when no scan summary file exists (no scan configured).
 	LastScan *LastScan `json:"last_scan"`
+	// Replay is true for a heartbeat sent from the agent's backlog after an
+	// outage, that is, any report that was not the newest one the agent held
+	// when it sent it. The server stores such a report as history only: it never
+	// changes the host's state, last_seen or tags. The agent sets it at send
+	// time and never stores it on disk. Added after schema 1 was written; the
+	// addition is compatible (servers ignore unknown fields, spec 7.2), so
+	// Schema stays 1. An older server ignores it and falls back to its
+	// ordering rule, which is why the upgrade order is server first.
+	Replay bool `json:"replay"`
 }
 
 // OS identifies the distribution, from os-release(5) ID and VERSION_ID.
@@ -63,7 +72,20 @@ type Clamd struct {
 	Queue *int `json:"queue"`
 	// Error is a short human-readable reason when something failed, else null.
 	Error *string `json:"error"`
+	// VirusEvent says whether clamd.conf runs ClamFleet's event command:
+	// VirusEventClamfleet, VirusEventOther (some other command), VirusEventNone
+	// (no VirusEvent line), or null when clamd.conf could not be read. Added
+	// after the spec example of section 7.3 (decision 6 of milestone 5); the
+	// addition is compatible, so Schema stays 1.
+	VirusEvent *string `json:"virus_event"`
 }
+
+// Values of Clamd.VirusEvent.
+const (
+	VirusEventClamfleet = "clamfleet"
+	VirusEventOther     = "other"
+	VirusEventNone      = "none"
+)
 
 // Sigs holds the three official signature databases. Each is null when the
 // file is missing or its header is invalid.
