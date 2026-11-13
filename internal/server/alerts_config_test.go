@@ -4,6 +4,7 @@
 package server
 
 import (
+	"github.com/clamfleet/clamfleet/internal/alert"
 	"os"
 	"path/filepath"
 	"strings"
@@ -150,4 +151,12 @@ smtp: {host: relay.example, port: 465, tls: tls, from: "ClamFleet <cf@example.or
 		t.Fatal("a smtp.password key must be refused")
 	}
 	var _ config.Options
+}
+
+// The test-send cap must stay below the HTTP write timeout, or its result
+// fragment is lost to a closed connection.
+func TestTestSendCapIsBelowTheWriteTimeout(t *testing.T) {
+	if alert.MaxTestSend >= writeTimeout {
+		t.Fatalf("alert.MaxTestSend %v must be below the write timeout %v", alert.MaxTestSend, writeTimeout)
+	}
 }

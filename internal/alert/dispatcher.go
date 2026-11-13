@@ -53,6 +53,11 @@ const (
 	// pruneEvery is how often the injected clock allows a prune.
 	pruneEvery = 24 * time.Hour
 	pruneBatch = 5000
+	// MaxTestSend caps a synchronous test send. The console answers it inside
+	// one HTTP request whose WriteTimeout is 30 s (internal/server); a send that
+	// outlived it would lose its result fragment, so the cap stays below that
+	// whatever alert.webhook.timeout or smtp.timeout say (up to 120 s).
+	MaxTestSend = 25 * time.Second
 	// testSendGap is the minimum time between two test sends to one target.
 	testSendGap = 10 * time.Second
 )
@@ -114,6 +119,8 @@ type Dispatcher struct {
 	Log    *slog.Logger
 	// Workers is the number of concurrent sends (default 4).
 	Workers int
+	// TestBudget overrides MaxTestSend (tests); zero means MaxTestSend.
+	TestBudget time.Duration
 
 	mu        sync.Mutex
 	inflight  int
@@ -121,6 +128,16 @@ type Dispatcher struct {
 	wg        sync.WaitGroup
 	wake      chan struct{}
 	testing   map[int64]*testState
+}
+
+// testTimeout is the budget of one test send: the target type's own timeout,
+// but never more than the cap.
+func (d *Dispatcher) testTimeout(typ string) time.Duration {
+	cap := MaxTestSend
+	if d.TestBudget > 0 {
+		cap = d.TestBudget
+	}
+	return min(d.timeoutFor(typ), cap)
 }
 
 func (d *Dispatcher) workers() int {
@@ -459,7 +476,7 @@ func (d *Dispatcher) TestSend(ctx context.Context, t store.AlertTarget) ([]store
 	}
 	switch t.Type {
 	case store.TargetTypeWebhook:
-		actx, cancel := context.WithTimeout(ctx, d.timeoutFor(t.Type))
+		actx, cancel := context.WithTimeout(ctx, d.testTimeout(t.Type))
 		defer cancel()
 		sec, res, ok := d.openWebhook(t)
 		if !ok {
@@ -467,7 +484,7 @@ func (d *Dispatcher) TestSend(ctx context.Context, t store.AlertTarget) ([]store
 		}
 		return []store.TestSendRecord{toRecord("", d.Webhook.Send(actx, sec, id, body))}, nil
 	case store.TargetTypeEmail:
-		actx, cancel := context.WithTimeout(ctx, d.timeoutFor(t.Type))
+		actx, cancel := context.WithTimeout(ctx, d.testTimeout(t.Type))
 		defer cancel()
 		to, err := Recipients(t.Config)
 		if err != nil || len(to) == 0 {

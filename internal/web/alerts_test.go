@@ -820,3 +820,25 @@ func TestNoSecretInLogsOrAuditForAlerts(t *testing.T) {
 		t.Fatalf("the delivery was not logged:\n%s", logs)
 	}
 }
+
+// Review finding 1: a test send that stalls must still answer inside the
+// console's write timeout. With smtp.timeout 120 s and a stalled relay, the
+// dispatcher's cap (TestBudget here, MaxTestSend in production) ends the send
+// and the fragment arrives.
+func TestTestSendIsCappedBelowTheWriteTimeout(t *testing.T) {
+	srv := startFakeSMTP(t, testsmtp.Options{Stall: true})
+	e, al, b, tok := alertEnv(t, alertOpts{keys: testKeyring(t), smtp: srv})
+	al.Dispatcher.MailTimeout = 120 * time.Second
+	al.Dispatcher.Mail.(*alert.SMTPSender).Config.Timeout = 120 * time.Second // the sender's own session deadline, as configured
+	al.Dispatcher.TestBudget = 500 * time.Millisecond
+	createEmail(t, b, tok, "mail", "a@x.example")
+	b.c.Timeout = 4 * time.Second // what a browser behind the 30 s write timeout would never wait for
+	start := time.Now()
+	p := b.do("POST", "/admin/alerts/mail/test", map[string]string{"HX-Request": "true", "X-CSRF-Token": tok, "Sec-Fetch-Site": "same-origin"}, url.Values{})
+	if p.status != 200 || !strings.Contains(p.body, "timed out") || time.Since(start) > 3*time.Second {
+		t.Fatalf("%d after %v\n%s", p.status, time.Since(start), p.body)
+	}
+	if e.count(`SELECT count(*) FROM alert_log WHERE status = 'test_failed' AND code = 'timeout'`) != 1 {
+		t.Fatal("the failed test was not logged")
+	}
+}

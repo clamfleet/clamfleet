@@ -90,7 +90,10 @@ integrity, not confidentiality.
 same sender and the same network policy as real alerts. It bypasses the queue, cooldown, filters and retry. The
 page shows the class and our own text ("Delivered: HTTP 204 in 140 ms", "Blocked: ...", "TLS: certificate signed
 by unknown authority") and **never** the response body or the URL. One test per target at a time and one per 10
-seconds. It is logged and audited.
+seconds. A test send is capped at 25 seconds whatever `alert.webhook.timeout` or `smtp.timeout` say (up
+to 120 s for a mail session): the console answers inside one HTTP request with a 30 second write timeout, and
+a longer send would lose its result. A relay that needs longer shows as "timed out" here although real
+alerts, which have the full timeout, may still get through. It is logged and audited.
 
 ## What is sent, and when
 
@@ -331,7 +334,9 @@ Webhook secrets use the same key file as TOTP. The rotation procedure:
 1. `key generate --add` (as root), restart the server.
 2. `key reencrypt`: re-seals TOTP and webhook secrets in **one transaction**. It exits **1** with
    `incomplete: N re-sealed, M changed meanwhile` when a row changed between its read and write (an admin
-   rotated a webhook key meanwhile); run it again until it exits 0.
+   rotated a webhook key meanwhile); run it again until it exits 0. A webhook target whose secret it **cannot
+   open** is skipped: `key reencrypt` logs a warning naming it and still exits **0**. Only `key check` reports
+   such targets (exit 1), so never rely on `key reencrypt`'s exit code alone before deleting the old key line.
 3. `key check` must exit **0**: it opens every stored secret and reports, per purpose, how many use the active
    key, an older key still in the file, or cannot be opened.
 4. Only then delete the old key line and restart.
