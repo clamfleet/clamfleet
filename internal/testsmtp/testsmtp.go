@@ -78,7 +78,7 @@ type Message struct {
 type Server struct {
 	// Addr is the 127.0.0.1:port the server listens on.
 	Addr string
-	opt  Options
+	opt  Options // guarded by mu; read through o(), changed through Update
 	ln   net.Listener
 	wg   sync.WaitGroup
 
@@ -119,6 +119,27 @@ func (s *Server) Close() {
 	s.mu.Unlock()
 	s.ln.Close()
 	s.wg.Wait()
+}
+
+// o returns a snapshot of the options.
+func (s *Server) o() Options {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.opt
+}
+
+// Update changes the scripted behaviour while the server runs; it applies from
+// the next command on. The maps are copied before f sees them, so f may edit
+// them in place.
+func (s *Server) Update(f func(o *Options)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rr := make(map[string]string, len(s.opt.RcptReplies))
+	for k, v := range s.opt.RcptReplies {
+		rr[k] = v
+	}
+	s.opt.RcptReplies = rr
+	f(&s.opt)
 }
 
 // Messages returns the acknowledged messages.
@@ -211,8 +232,8 @@ func orDefault(v, d string) string {
 
 func (s *Server) serve(c net.Conn) {
 	ss := &session{s: s, c: c}
-	if s.opt.Implicit {
-		tc := tls.Server(c, s.opt.TLS)
+	if s.o().Implicit {
+		tc := tls.Server(c, s.o().TLS)
 		if err := tc.Handshake(); err != nil {
 			return
 		}
@@ -222,7 +243,7 @@ func (s *Server) serve(c net.Conn) {
 	if ss.reply("220 testsmtp ready") != nil {
 		return
 	}
-	if s.opt.Stall {
+	if s.o().Stall {
 		io.Copy(io.Discard, ss.c) // until the client gives up or Close
 		return
 	}
@@ -238,13 +259,13 @@ func (s *Server) serve(c net.Conn) {
 			s.event("EHLO")
 			ss.ehlo()
 		case "STARTTLS":
-			if !s.opt.AdvertiseSTARTTLS || s.opt.TLS == nil || ss.tls {
+			if !s.o().AdvertiseSTARTTLS || s.o().TLS == nil || ss.tls {
 				ss.reply("502 not offered")
 				continue
 			}
 			s.event("STARTTLS")
 			ss.reply("220 go ahead")
-			tc := tls.Server(ss.c, s.opt.TLS)
+			tc := tls.Server(ss.c, s.o().TLS)
 			if err := tc.Handshake(); err != nil {
 				return
 			}
@@ -257,11 +278,11 @@ func (s *Server) serve(c net.Conn) {
 		case "MAIL":
 			s.event("MAIL %s", addrOf(arg))
 			ss.from, ss.to = addrOf(arg), nil
-			ss.reply("%s", orDefault(s.opt.MailReply, "250 ok"))
+			ss.reply("%s", orDefault(s.o().MailReply, "250 ok"))
 		case "RCPT":
 			rcpt := strings.ToLower(addrOf(arg))
 			s.event("RCPT %s", rcpt)
-			if r, ok := s.opt.RcptReplies[rcpt]; ok {
+			if r, ok := s.o().RcptReplies[rcpt]; ok {
 				ss.reply("%s", r)
 				continue
 			}
@@ -279,7 +300,7 @@ func (s *Server) serve(c net.Conn) {
 			ss.reply("250 ok")
 		case "QUIT":
 			s.event("QUIT")
-			ss.reply("%s", orDefault(s.opt.QuitReply, "221 bye"))
+			ss.reply("%s", orDefault(s.o().QuitReply, "221 bye"))
 			return
 		default:
 			ss.reply("500 unknown command")
@@ -289,11 +310,11 @@ func (s *Server) serve(c net.Conn) {
 
 func (ss *session) ehlo() {
 	lines := []string{"testsmtp", "8BITMIME"}
-	if ss.s.opt.AdvertiseSTARTTLS && !ss.tls {
+	if ss.s.o().AdvertiseSTARTTLS && !ss.tls {
 		lines = append(lines, "STARTTLS")
 	}
-	if len(ss.s.opt.AuthMechs) > 0 && (ss.tls || !ss.s.opt.AuthAfterTLS) {
-		lines = append(lines, "AUTH "+strings.Join(ss.s.opt.AuthMechs, " "))
+	if len(ss.s.o().AuthMechs) > 0 && (ss.tls || !ss.s.o().AuthAfterTLS) {
+		lines = append(lines, "AUTH "+strings.Join(ss.s.o().AuthMechs, " "))
 	}
 	for i, l := range lines {
 		sep := "-"
@@ -320,7 +341,7 @@ func (ss *session) auth(arg string) bool {
 	mech = strings.ToUpper(mech)
 	ss.s.event("AUTH %s tls=%v", mech, ss.tls)
 	okMech := false
-	for _, m := range ss.s.opt.AuthMechs {
+	for _, m := range ss.s.o().AuthMechs {
 		if m == mech {
 			okMech = true
 		}
@@ -371,7 +392,7 @@ func (ss *session) auth(arg string) bool {
 			return false
 		}
 	}
-	if user == ss.s.opt.Username && pass == ss.s.opt.Password && user != "" {
+	if user == ss.s.o().Username && pass == ss.s.o().Password && user != "" {
 		ss.reply("235 2.7.0 authenticated")
 	} else {
 		ss.reply("535 5.7.8 authentication failed")
@@ -385,7 +406,7 @@ func (ss *session) data() bool {
 		ss.reply("503 no valid recipients")
 		return true
 	}
-	if r := ss.s.opt.DataReply; r != "" && !strings.HasPrefix(r, "354") {
+	if r := ss.s.o().DataReply; r != "" && !strings.HasPrefix(r, "354") {
 		ss.reply("%s", r)
 		return true
 	}
@@ -403,22 +424,22 @@ func (ss *session) data() bool {
 		b.WriteString(line)
 	}
 	m := Message{From: ss.from, To: append([]string(nil), ss.to...), Data: b.String(), TLS: ss.tls}
-	if ss.s.opt.DropAtFinalDot {
+	if ss.s.o().DropAtFinalDot {
 		ss.s.mu.Lock()
 		ss.s.unacked = append(ss.s.unacked, m)
 		ss.s.mu.Unlock()
 		return false
 	}
-	final := orDefault(ss.s.opt.FinalReply, "250 2.0.0 queued")
+	final := orDefault(ss.s.o().FinalReply, "250 2.0.0 queued")
 	if strings.HasPrefix(final, "2") {
 		ss.s.mu.Lock()
 		ss.s.messages = append(ss.s.messages, m)
 		ss.s.mu.Unlock()
-		if ss.s.opt.OnMessage != nil {
-			ss.s.opt.OnMessage(m)
+		if ss.s.o().OnMessage != nil {
+			ss.s.o().OnMessage(m)
 		}
 	}
 	ss.from, ss.to = "", nil
 	ss.reply("%s", final)
-	return !ss.s.opt.DropAfterFinalReply
+	return !ss.s.o().DropAfterFinalReply
 }
