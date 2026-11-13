@@ -278,7 +278,7 @@ func TestReaderHardlink(t *testing.T) {
 	n := itemFileName(ts.Clock, idA, 0)
 	link := filepath.Join(ts.Dir, dirEvents, n)
 	if err := os.Link(outside, link); err != nil {
-		t.Skipf("hard links not permitted here") // precondition of the test, not of the code under test
+		t.Fatalf("hard link inside t.TempDir() must work on Linux: %v", err) // a runtime skip here would hide a broken test setup
 	}
 	// Young: a publish may be in progress, so only skip.
 	now := ts.Clock.Now()
