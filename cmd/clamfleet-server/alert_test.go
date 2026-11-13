@@ -281,3 +281,17 @@ func TestAlertEmailLogTestDelete(t *testing.T) {
 		}
 	}
 }
+
+// An extra positional argument next to --url-stdin is a usage error, and it is
+// not echoed (it could be the URL typed in the wrong place).
+func TestAlertAddWebhookExtraArgumentWithURLStdinIsUsageError(t *testing.T) {
+	_, env := alertCLIEnv(t)
+	const marker = "TOKEN-MARKER"
+	r := runServerStdin(t, env, "https://hooks.example/ok\n", "alert", "add-webhook", "ops", "https://hooks.example/"+marker, "--url-stdin")
+	if r.code != 2 || strings.Contains(r.stdout+r.stderr, marker) || r.stdout != "" {
+		t.Fatalf("%+v", r)
+	}
+	if l := runServer(t, env, "alert", "list", "--json"); strings.TrimSpace(l.stdout) != "[]" {
+		t.Fatalf("a target was created: %s", l.stdout)
+	}
+}

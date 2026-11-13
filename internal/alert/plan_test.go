@@ -427,3 +427,19 @@ func TestPlanEmailWithoutRecipientsIsSkippedNotSilent(t *testing.T) {
 		t.Fatalf("%+v", out)
 	}
 }
+
+// Detections ignore min_severity for every minimum, not only STALE: a WARN or
+// CRIT target still gets one while its host is OK (below the minimum).
+func TestPlanDetectionsIgnoreMinSeverityForEveryMinimum(t *testing.T) {
+	ev := store.PlanEvent{ID: 7, HostID: 1, TS: t0, ReceivedAt: t0, Path: "/p", Signature: "Eicar", Source: "scan"}
+	for _, min := range []string{"WARN", "CRIT", "STALE"} {
+		h := newHarness(t, target(1, "t", min))
+		hh := h.hosts[1]
+		hh.State = ptr("OK")
+		h.hosts[1] = hh
+		out := h.run(t0, nil, []store.PlanEvent{ev})
+		if len(out.Deliveries) != 1 || len(out.Unrouted) != 0 {
+			t.Errorf("min %s: %+v", min, out)
+		}
+	}
+}

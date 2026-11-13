@@ -829,3 +829,37 @@ func TestTestSendEmailOneRecordPerRecipient(t *testing.T) {
 func protoEvent(at time.Time) proto.Event {
 	return proto.Event{Schema: 1, Host: "a", TS: at, Path: "/p", Signature: "S", Source: "scan"}
 }
+
+// The attempt deadline is enforced by the dispatcher itself: a sender that only
+// stops when its context ends is cut off at WebhookTimeout and the attempt
+// becomes a retry, well before the lease.
+func TestAttemptDeadlineCutsOffABlockedSender(t *testing.T) {
+	e := newDispEnv(t)
+	e.host("a")
+	e.webhook("t", nil)
+	e.state("CRIT")
+	e.d.WebhookTimeout = 200 * time.Millisecond
+	var dl time.Duration
+	e.wh.fn = func(_ int, _ string, _ []byte, ctx context.Context) Result {
+		d, ok := ctx.Deadline()
+		if ok {
+			dl = time.Until(d)
+		}
+		<-ctx.Done()
+		return Result{Outcome: OutcomeRetry, Code: "timeout", Text: "the attempt timed out"}
+	}
+	start := time.Now()
+	done := make(chan struct{})
+	go func() { e.once(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the blocked sender was not cut off by the attempt deadline")
+	}
+	if time.Since(start) > 3*time.Second || dl > time.Second || dl <= 0 {
+		t.Fatalf("deadline not applied: took %v, ctx deadline was %v away", time.Since(start), dl)
+	}
+	if e.logRows("retrying") != 1 || e.statuses("pending") != 1 {
+		t.Fatalf("retrying rows %d, pending %d", e.logRows("retrying"), e.statuses("pending"))
+	}
+}
