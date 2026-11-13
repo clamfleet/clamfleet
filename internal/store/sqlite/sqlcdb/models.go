@@ -24,6 +24,17 @@ type AlertDelivery struct {
 	ClaimToken    []byte
 	CreatedAt     int64
 	FinishedAt    sql.NullInt64
+	WindowID      sql.NullInt64
+}
+
+type AlertDetectionWindow struct {
+	ID          int64
+	TargetID    int64
+	HostID      int64
+	WindowStart int64
+	Sent        int64
+	ClosedAt    sql.NullInt64
+	Outcome     sql.NullString
 }
 
 type AlertLog struct {
@@ -64,6 +75,12 @@ type AlertTarget struct {
 	Enabled          int64
 	CreatedAt        int64
 	UpdatedAt        int64
+	DetectionBurst   int64
+}
+
+type AlertWindowEvent struct {
+	WindowID int64
+	EventID  int64
 }
 
 type AuditLog struct {
@@ -88,6 +105,14 @@ type Event struct {
 	AckBy        sql.NullString
 	AckAt        sql.NullInt64
 	AlertPending int64
+	Occurrences  int64
+}
+
+type EventReceipt struct {
+	HostID       int64
+	AgentEventID string
+	EventID      int64
+	ReceivedAt   int64
 }
 
 type Host struct {

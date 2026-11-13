@@ -11,7 +11,7 @@ import (
 )
 
 const alertTargetByID = `-- name: AlertTargetByID :one
-SELECT id, name, type, config, secret, min_severity, tag_filter, send_state_changes, send_detections, enabled, created_at, updated_at
+SELECT id, name, type, config, secret, min_severity, tag_filter, send_state_changes, send_detections, enabled, created_at, updated_at, detection_burst
 FROM alert_targets WHERE id = ?1
 `
 
@@ -31,12 +31,13 @@ func (q *Queries) AlertTargetByID(ctx context.Context, id int64) (AlertTarget, e
 		&i.Enabled,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.DetectionBurst,
 	)
 	return i, err
 }
 
 const alertTargetByName = `-- name: AlertTargetByName :one
-SELECT id, name, type, config, secret, min_severity, tag_filter, send_state_changes, send_detections, enabled, created_at, updated_at
+SELECT id, name, type, config, secret, min_severity, tag_filter, send_state_changes, send_detections, enabled, created_at, updated_at, detection_burst
 FROM alert_targets WHERE name = ?1
 `
 
@@ -56,6 +57,7 @@ func (q *Queries) AlertTargetByName(ctx context.Context, name string) (AlertTarg
 		&i.Enabled,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.DetectionBurst,
 	)
 	return i, err
 }
@@ -846,7 +848,7 @@ func (q *Queries) ListAlertTargets(ctx context.Context) ([]ListAlertTargetsRow, 
 }
 
 const listAllAlertTargets = `-- name: ListAllAlertTargets :many
-SELECT id, name, type, config, secret, min_severity, tag_filter, send_state_changes, send_detections, enabled, created_at, updated_at
+SELECT id, name, type, config, secret, min_severity, tag_filter, send_state_changes, send_detections, enabled, created_at, updated_at, detection_burst
 FROM alert_targets ORDER BY id
 `
 
@@ -872,6 +874,7 @@ func (q *Queries) ListAllAlertTargets(ctx context.Context) ([]AlertTarget, error
 			&i.Enabled,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.DetectionBurst,
 		); err != nil {
 			return nil, err
 		}

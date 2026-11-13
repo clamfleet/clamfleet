@@ -19,11 +19,11 @@ RETURNING id;
 UPDATE alert_targets SET secret = sqlc.arg(secret), updated_at = sqlc.arg(now) WHERE id = sqlc.arg(id);
 
 -- name: AlertTargetByID :one
-SELECT id, name, type, config, secret, min_severity, tag_filter, send_state_changes, send_detections, enabled, created_at, updated_at
+SELECT id, name, type, config, secret, min_severity, tag_filter, send_state_changes, send_detections, enabled, created_at, updated_at, detection_burst
 FROM alert_targets WHERE id = sqlc.arg(id);
 
 -- name: AlertTargetByName :one
-SELECT id, name, type, config, secret, min_severity, tag_filter, send_state_changes, send_detections, enabled, created_at, updated_at
+SELECT id, name, type, config, secret, min_severity, tag_filter, send_state_changes, send_detections, enabled, created_at, updated_at, detection_burst
 FROM alert_targets WHERE name = sqlc.arg(name);
 
 -- name: ListAlertTargets :many
@@ -40,7 +40,7 @@ SELECT t.id, t.name, t.type, t.config, t.secret, t.min_severity, t.tag_filter, t
 FROM alert_targets t ORDER BY t.name;
 
 -- name: ListAllAlertTargets :many
-SELECT id, name, type, config, secret, min_severity, tag_filter, send_state_changes, send_detections, enabled, created_at, updated_at
+SELECT id, name, type, config, secret, min_severity, tag_filter, send_state_changes, send_detections, enabled, created_at, updated_at, detection_burst
 FROM alert_targets ORDER BY id;
 
 -- name: UpdateAlertTarget :exec

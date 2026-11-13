@@ -393,3 +393,132 @@ func TestM3bBinaryRefusesAMigration00004Database(t *testing.T) {
 }
 
 func itoa(n int64) string { return strconv.FormatInt(n, 10) }
+
+// 00005 on a database that holds M4 data: existing targets get burst 10,
+// existing events occurrences 1, nothing is lost, and down/up round-trips.
+func TestMigration00005OnExistingData(t *testing.T) {
+	ctx := context.Background()
+	s, err := Open(ctx, filepath.Join(t.TempDir(), "t.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if _, err := s.prov.UpTo(ctx, 4); err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range []string{
+		`INSERT INTO hosts (id, name, token_hash, created_at) VALUES (1, 'a', x'01', 100)`,
+		`INSERT INTO events (id, host_id, ts, received_at, path, signature, source, alert_pending) VALUES (1, 1, 10, 11, '/p', 'S', 'clamd', 0)`,
+		`INSERT INTO alert_targets (id, name, type, config, created_at, updated_at) VALUES (1, 't', 'webhook', '{}', 1, 1)`,
+		`INSERT INTO alert_deliveries (id, alert_id, target_id, host_id, event_id, kind, payload, status, created_at) VALUES (1, 'a', 1, 1, 1, 'detection', '{}', 'sent', 1)`,
+	} {
+		if _, err := s.w.Exec(q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if n := count(t, s, `SELECT detection_burst FROM alert_targets WHERE id = 1`); n != 10 {
+		t.Fatalf("an existing target must get burst 10, got %d", n)
+	}
+	if n := count(t, s, `SELECT occurrences FROM events WHERE id = 1`); n != 1 {
+		t.Fatalf("an existing event must have occurrences 1, got %d", n)
+	}
+	if n := count(t, s, `SELECT count(*) FROM alert_deliveries WHERE id = 1 AND window_id IS NULL`); n != 1 {
+		t.Fatal("an existing delivery lost or got a window")
+	}
+	for _, tb := range []string{"event_receipts", "alert_detection_windows", "alert_window_events"} {
+		if !tableExists(t, s.w, tb) {
+			t.Errorf("table %s missing", tb)
+		}
+	}
+	// Down removes everything it added, and up again works on the same data.
+	if _, err := s.prov.DownTo(ctx, 4); err != nil {
+		t.Fatal(err)
+	}
+	for _, tb := range []string{"event_receipts", "alert_detection_windows", "alert_window_events"} {
+		if tableExists(t, s.w, tb) {
+			t.Errorf("table %s survived the down migration", tb)
+		}
+	}
+	if columns(t, s.w, "events")["occurrences"] || columns(t, s.w, "alert_targets")["detection_burst"] || columns(t, s.w, "alert_deliveries")["window_id"] {
+		t.Fatal("a column survived the down migration")
+	}
+	if err := s.Migrate(ctx); err != nil {
+		t.Fatalf("up again: %v", err)
+	}
+	if n := count(t, s, `SELECT count(*) FROM events`); n != 1 {
+		t.Fatalf("the event was lost: %d", n)
+	}
+}
+
+// The constraints the planner relies on: one open window per (target, host),
+// and one receipt per (host, agent id). Cascades follow the event and the target.
+func TestMigration00005ConstraintsAndCascades(t *testing.T) {
+	s := openTemp(t)
+	h := addHost(t, s, "web01")
+	hid := itoa(h.ID)
+	for _, q := range []string{
+		`INSERT INTO events (id, host_id, ts, received_at, path, signature, source) VALUES (1, ` + hid + `, 1, 1, '/p', 'S', 'clamd')`,
+		`INSERT INTO alert_targets (id, name, type, config, created_at, updated_at) VALUES (1, 't', 'webhook', '{}', 1, 1)`,
+		`INSERT INTO event_receipts (host_id, agent_event_id, event_id, received_at) VALUES (` + hid + `, 'a', 1, 1)`,
+		`INSERT INTO alert_detection_windows (id, target_id, host_id, window_start) VALUES (1, 1, ` + hid + `, 1)`,
+		`INSERT INTO alert_window_events (window_id, event_id) VALUES (1, 1)`,
+	} {
+		if _, err := s.w.Exec(q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := s.w.Exec(`INSERT INTO event_receipts (host_id, agent_event_id, event_id, received_at) VALUES (` + hid + `, 'a', 1, 2)`); err == nil {
+		t.Fatal("a second receipt for the same host and agent id was accepted")
+	}
+	if _, err := s.w.Exec(`INSERT INTO alert_detection_windows (target_id, host_id, window_start) VALUES (1, ` + hid + `, 5)`); err == nil {
+		t.Fatal("a second open window for the same target and host was accepted")
+	}
+	if _, err := s.w.Exec(`UPDATE alert_detection_windows SET closed_at = 9, outcome = 'summarised' WHERE id = 1`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.w.Exec(`INSERT INTO alert_detection_windows (target_id, host_id, window_start) VALUES (1, ` + hid + `, 5)`); err != nil {
+		t.Fatalf("a new window after the old one closed: %v", err)
+	}
+	if _, err := s.w.Exec(`DELETE FROM events WHERE id = 1`); err != nil {
+		t.Fatal(err)
+	}
+	if n := count(t, s, `SELECT count(*) FROM event_receipts`) + count(t, s, `SELECT count(*) FROM alert_window_events`); n != 0 {
+		t.Fatalf("an event delete left %d receipts/memberships", n)
+	}
+	if _, err := s.w.Exec(`DELETE FROM alert_targets WHERE id = 1`); err != nil {
+		t.Fatal(err)
+	}
+	if n := count(t, s, `SELECT count(*) FROM alert_detection_windows`); n != 0 {
+		t.Fatalf("a target delete left %d windows", n)
+	}
+}
+
+// Rule: an M4 binary must refuse a 00005 database: it would treat replayed
+// reports as live and never summarise held detections.
+func TestM4BinaryRefusesAMigration00005Database(t *testing.T) {
+	ctx := context.Background()
+	s := openTemp(t)
+	if v, err := s.SchemaVersion(ctx); err != nil || v < 5 {
+		t.Fatalf("schema version %d, %v: the test needs 00005 applied", v, err)
+	}
+	old := fstest.MapFS{}
+	for _, n := range []string{"00001_init.sql", "00002_health_users.sql", "00003_totp.sql", "00004_alerting.sql"} {
+		b, err := migrations.SQLite.ReadFile("sqlite/" + n)
+		if err != nil {
+			t.Fatal(err)
+		}
+		old[n] = &fstest.MapFile{Data: b}
+	}
+	prov, err := goose.NewProvider(goose.DialectSQLite3, s.w, old, goose.WithDisableGlobalRegistry(true))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m4 := &Store{path: s.path, w: s.w, r: s.r, prov: prov}
+	err = m4.checkNotNewer(ctx)
+	if err == nil || !strings.Contains(err.Error(), "newer than this binary supports") {
+		t.Fatalf("an M4 binary must refuse the database: %v", err)
+	}
+}
