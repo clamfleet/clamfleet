@@ -65,6 +65,11 @@ type Deps struct {
 	// health state follows the report at once. Its error is logged and never
 	// changes the 202: the report is safe, and the evaluation loop catches up.
 	AfterReport func(ctx context.Context, hostID int64) error
+	// AfterEvent, when set, is called after an event was accepted. stored is
+	// true when it created a new row (a retry or a merged collision is false),
+	// so the alert dispatcher is woken for a new detection only. Called
+	// synchronously and expected to be cheap (a non-blocking signal).
+	AfterEvent func(ctx context.Context, stored bool)
 }
 
 // afterReportTimeout bounds the evaluation that follows a report.
@@ -182,8 +187,25 @@ func validateEvent(e *proto.Event) error {
 		return fmt.Errorf("signature: 1-%d bytes without control characters", maxSigBytes)
 	case len(e.Source) < 1 || len(e.Source) > maxSourceLen || hasControl(e.Source):
 		return fmt.Errorf("source: 1-%d bytes without control characters", maxSourceLen)
+	case e.ID != nil && !validEventID(*e.ID):
+		return errors.New("id: must be null or 32 lowercase hex characters")
 	}
 	return nil
+}
+
+// validEventID reports whether s is the agent's idempotency key: exactly 32
+// lowercase hex characters. Error texts of validateEvent never include the
+// path: it is personal data and must not be echoed or logged.
+func validEventID(s string) bool {
+	if len(s) != 32 {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if c := s[i]; !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 // identity returns the authenticated host. Reaching a handler without one is a
@@ -234,7 +256,11 @@ func (h *Handlers) Report(w http.ResponseWriter, r *http.Request) {
 		h.storeFailed(w, r.Context(), "record report", err)
 		return
 	}
-	if h.d.AfterReport != nil {
+	// Rule: a replayed report (history from the agent's backlog) is stored by
+	// the store as history only, and must not be evaluated either: the host's
+	// state, last_seen and tags did not change, and evaluating after every one
+	// of a long backlog's reports would only add noise.
+	if h.d.AfterReport != nil && !rep.Replay {
 		// Detached from the request context: the report is already stored, and an
 		// agent that hangs up must not leave its host's state one loop behind.
 		ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), afterReportTimeout)
@@ -273,8 +299,9 @@ func (h *Handlers) warnOnSkew(id agentauth.Identity, ts, now time.Time) {
 	}
 }
 
-// Event handles POST /v1/event. A duplicate (same host, ts, path and
-// signature) is a success: the agent may retry after a lost response.
+// Event handles POST /v1/event. A duplicate is a success (202): the agent may
+// retry after a lost response. With an event id a retry is recognised by the
+// id; without one, by (host, ts, path, signature).
 func (h *Handlers) Event(w http.ResponseWriter, r *http.Request) {
 	id, ok := h.identity(w, r)
 	if !ok {
@@ -288,9 +315,13 @@ func (h *Handlers) Event(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if _, err := h.d.Store.RecordEvent(r.Context(), store.EventRecord{HostID: id.HostID, Event: ev, ReceivedAt: h.d.Now()}); err != nil {
+	stored, err := h.d.Store.RecordEvent(r.Context(), store.EventRecord{HostID: id.HostID, Event: ev, ReceivedAt: h.d.Now()})
+	if err != nil {
 		h.storeFailed(w, r.Context(), "record event", err)
 		return
+	}
+	if h.d.AfterEvent != nil {
+		h.d.AfterEvent(r.Context(), stored)
 	}
 	writeJSON(w, http.StatusAccepted, struct{}{})
 }

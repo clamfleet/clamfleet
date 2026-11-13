@@ -117,6 +117,10 @@ type Deps struct {
 	// AfterReport is called after each accepted report (see api.Deps); the
 	// binary passes health.Evaluator.Host. Nil disables it.
 	AfterReport func(ctx context.Context, hostID int64) error
+	// AfterEvent is called after each accepted event (see api.Deps); the binary
+	// passes a function that wakes the alert dispatcher when stored is true, so
+	// a detection alerts within seconds instead of at the next 5 s tick. Nil disables it.
+	AfterEvent func(ctx context.Context, stored bool)
 	// Console holds the sign-in settings; the zero value means DefaultConfig().Auth.
 	Console Auth
 	// Hasher hashes console passwords; nil means a production argon2id Hasher.
@@ -159,7 +163,7 @@ func NewHandler(d Deps) http.Handler {
 	if d.Version == "" {
 		d.Version = version.Version
 	}
-	h := api.New(api.Deps{Store: d.Store, Now: d.Now, Log: d.Log, AfterReport: d.AfterReport})
+	h := api.New(api.Deps{Store: d.Store, Now: d.Now, Log: d.Log, AfterReport: d.AfterReport, AfterEvent: d.AfterEvent})
 	agent := agentauth.Middleware(auth, d.Log)
 
 	sessions := &webauth.Manager{

@@ -59,6 +59,12 @@ func newEnvLevel(t *testing.T, level slog.Level) *env { return newEnvOpts(t, lev
 // newEnvOpts also sets the trusted proxies.
 func newEnvOpts(t *testing.T, level slog.Level, trusted []netip.Prefix) *env {
 	t.Helper()
+	return newEnvDeps(t, level, trusted, nil)
+}
+
+// newEnvDeps also lets a test set hooks on server.Deps (AfterReport, AfterEvent).
+func newEnvDeps(t *testing.T, level slog.Level, trusted []netip.Prefix, mut func(*server.Deps)) *env {
+	t.Helper()
 	path := filepath.Join(t.TempDir(), "api.db")
 	ctx := context.Background()
 	st, err := sqlite.Open(ctx, path)
@@ -70,7 +76,11 @@ func newEnvOpts(t *testing.T, level slog.Level, trusted []netip.Prefix) *env {
 	}
 	logs := &syncBuf{}
 	log := slog.New(slog.NewJSONHandler(logs, &slog.HandlerOptions{Level: level}))
-	h := server.NewHandler(server.Deps{Store: st, Now: func() time.Time { return now }, Log: log, TrustedProxies: trusted})
+	deps := server.Deps{Store: st, Now: func() time.Time { return now }, Log: log, TrustedProxies: trusted}
+	if mut != nil {
+		mut(&deps)
+	}
+	h := server.NewHandler(deps)
 	e := &env{t: t, srv: httptest.NewServer(h), st: st, dbPath: path, logs: logs}
 	t.Cleanup(func() { e.srv.Close(); st.Close() })
 	return e
@@ -760,5 +770,122 @@ func TestClientIPInRequestLog(t *testing.T) {
 		if got != c.want {
 			t.Errorf("%s: client_ip = %v, want %s", c.name, got, c.want)
 		}
+	}
+}
+
+func TestEventIDValidation(t *testing.T) {
+	e := newEnv(t)
+	tok := e.host("app01")
+	for name, id := range map[string]any{
+		"short": "abc", "uppercase": strings.Repeat("A", 32), "non hex": strings.Repeat("g", 32), "33 chars": strings.Repeat("a", 33), "number": 5,
+	} {
+		if r := e.do("POST", "/v1/event", tok, event(t, func(m map[string]any) { m["id"] = id })); r.status != 400 {
+			t.Errorf("%s: status %d", name, r.status)
+		}
+	}
+	for name, id := range map[string]any{"null": nil, "32 hex": strings.Repeat("a", 32)} {
+		if r := e.do("POST", "/v1/event", tok, event(t, func(m map[string]any) { m["id"] = id })); r.status != 202 {
+			t.Errorf("%s: status %d %s", name, r.status, r.body)
+		}
+	}
+}
+
+// With ids, two different detections in one second are both counted (x2) and a
+// retry of one is not; through the real router.
+func TestEventIDsThroughRouter(t *testing.T) {
+	e := newEnv(t)
+	tok := e.host("app01")
+	post := func(id string) {
+		t.Helper()
+		if r := e.do("POST", "/v1/event", tok, event(t, func(m map[string]any) { m["id"] = id })); r.status != 202 {
+			t.Fatalf("%d %s", r.status, r.body)
+		}
+	}
+	post(strings.Repeat("a", 32))
+	post(strings.Repeat("b", 32))
+	post(strings.Repeat("b", 32)) // retry
+	rows, err := e.st.ListEvents(context.Background(), store.EventFilter{Ack: store.AckAll})
+	if err != nil || len(rows) != 1 || rows[0].Occurrences != 2 {
+		t.Fatalf("%+v %v: want one row with occurrences 2", rows, err)
+	}
+}
+
+// AfterEvent reports whether the event is new, so the dispatcher is woken for a
+// new detection only. Without the wiring a detection would wait for the 5 s tick.
+func TestAfterEventIsCalledWithStored(t *testing.T) {
+	var mu sync.Mutex
+	var calls []bool
+	e := newEnvDeps(t, slog.LevelDebug, nil, func(d *server.Deps) {
+		d.AfterEvent = func(_ context.Context, stored bool) { mu.Lock(); calls = append(calls, stored); mu.Unlock() }
+	})
+	tok := e.host("app01")
+	id := strings.Repeat("c", 32)
+	for i := 0; i < 2; i++ {
+		e.do("POST", "/v1/event", tok, event(t, func(m map[string]any) { m["id"] = id }))
+	}
+	e.do("POST", "/v1/event", tok, event(t, func(m map[string]any) { m["signature"] = "" })) // invalid: no call
+	mu.Lock()
+	defer mu.Unlock()
+	if len(calls) != 2 || !calls[0] || calls[1] {
+		t.Fatalf("AfterEvent calls %v, want [true false]", calls)
+	}
+}
+
+// A replayed report is stored but not evaluated; a live one is.
+func TestReplayedReportSkipsEvaluation(t *testing.T) {
+	var mu sync.Mutex
+	evaluated := 0
+	e := newEnvDeps(t, slog.LevelDebug, nil, func(d *server.Deps) {
+		d.AfterReport = func(context.Context, int64) error { mu.Lock(); evaluated++; mu.Unlock(); return nil }
+	})
+	tok := e.host("app01")
+	if r := e.do("POST", "/v1/report", tok, report(t, nil)); r.status != 202 {
+		t.Fatal(r.status)
+	}
+	if r := e.do("POST", "/v1/report", tok, report(t, func(m map[string]any) { m["replay"] = true; m["ts"] = "2026-11-12T09:00:00Z" })); r.status != 202 {
+		t.Fatal(r.status)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if evaluated != 1 {
+		t.Fatalf("%d evaluations, want 1 (the live report only)", evaluated)
+	}
+	if d := e.detail("app01"); d.ReportCount != 2 {
+		t.Fatalf("%d reports stored, want 2", d.ReportCount)
+	}
+}
+
+// The path is personal data: no ingest error text, log line or audit row may
+// contain it, whatever made the request invalid.
+func TestIngestErrorsNeverEchoPath(t *testing.T) {
+	e := newEnv(t)
+	tok := e.host("app01")
+	const marker = "/home/MARKER-PATH"
+	bodies := map[string][]byte{
+		"path too long":   event(t, func(m map[string]any) { m["path"] = marker + strings.Repeat("p", 4100) }),
+		"NUL in path":     event(t, func(m map[string]any) { m["path"] = marker + "\u0000" }),
+		"bad schema":      event(t, func(m map[string]any) { m["path"] = marker; m["schema"] = 2 }),
+		"bad id":          event(t, func(m map[string]any) { m["path"] = marker; m["id"] = "nope" }),
+		"bad signature":   event(t, func(m map[string]any) { m["path"] = marker; m["signature"] = "" }),
+		"bad ts":          event(t, func(m map[string]any) { m["path"] = marker; m["ts"] = "yesterday" }),
+		"path as number":  event(t, func(m map[string]any) { m["path"] = 5; m["signature"] = marker }),
+		"trailing":        append(event(t, func(m map[string]any) { m["path"] = marker }), []byte(" " + marker)...),
+		"oversized (413)": event(t, func(m map[string]any) { m["path"] = marker; m["pad"] = strings.Repeat("x", 70000) }),
+	}
+	for name, body := range bodies {
+		r := e.do("POST", "/v1/event", tok, body)
+		if r.status != 400 && r.status != 413 {
+			t.Errorf("%s: status %d", name, r.status)
+		}
+		if strings.Contains(r.body, "MARKER") {
+			t.Errorf("%s: the response echoes the path: %s", name, r.body)
+		}
+	}
+	if strings.Contains(e.logs.String(), "MARKER") {
+		t.Fatalf("a log line contains the path:\n%s", e.logs.String())
+	}
+	rows, _ := e.st.ListEvents(context.Background(), store.EventFilter{Ack: store.AckAll})
+	if len(rows) != 0 {
+		t.Fatalf("%d events stored from invalid input", len(rows))
 	}
 }
