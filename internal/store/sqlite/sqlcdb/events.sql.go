@@ -193,6 +193,7 @@ func (q *Queries) EventRowByID(ctx context.Context, id int64) (EventRowByIDRow, 
 
 const insertEvent = `-- name: InsertEvent :one
 
+
 INSERT INTO events (host_id, ts, received_at, path, signature, source, alert_pending)
 VALUES (?1, ?2, ?3, ?4, ?5, ?6, 1)
 ON CONFLICT (host_id, ts, path, signature) DO NOTHING
@@ -210,6 +211,16 @@ type InsertEventParams struct {
 
 // SPDX-License-Identifier: AGPL-3.0-only
 // SPDX-FileCopyrightText: The ClamFleet Authors
+// Events queries. Portable SQL (HANDOVER section 8.1) with ONE SQLite-only
+// exception: the signature filter in ListEvents, CountEvents, MaxEventID and
+// AckEventsBulk uses instr(lower(signature), lower(filter)) > 0.
+// Why it stays: a case-insensitive substring match needs either LIKE with an
+// ESCAPE clause (sqlc's SQLite parser rejects LIKE ... ESCAPE) or unescaped LIKE,
+// where the wildcard and escape rules differ between SQLite and PostgreSQL.
+// instr() has no wildcards, so % _ and \ in the filter match themselves.
+// Maintainer decision (Gabriel), recorded as an exception to the portability rule.
+// When a PostgreSQL backend is added, swap it in all four queries for the
+// equivalent form: strpos(lower(signature), lower($n)) > 0.
 // alert_pending = 1 only ever lands on a NEW row: a conflict on the natural key
 // returns no row (sql.ErrNoRows), leaving the existing row and its flag alone,
 // so a retried or merged detection never alerts twice.
