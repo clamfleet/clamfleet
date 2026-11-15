@@ -34,9 +34,9 @@ func TestEnvNamesMatchDocumentedTable(t *testing.T) {
 		"CLAMFLEET_SERVER_DB_PATH",
 		"CLAMFLEET_SERVER_HEALTH_BEHIND_WARN", "CLAMFLEET_SERVER_HEALTH_DAILY_CRIT_HOURS",
 		"CLAMFLEET_SERVER_HEALTH_DAILY_WARN_HOURS", "CLAMFLEET_SERVER_HEALTH_DEFAULT_INTERVAL",
-		"CLAMFLEET_SERVER_HEALTH_EVAL_INTERVAL", "CLAMFLEET_SERVER_HEALTH_SCAN_WARN_HOURS",
+		"CLAMFLEET_SERVER_HEALTH_EVAL_INTERVAL", "CLAMFLEET_SERVER_HEALTH_REQUIRE_VIRUS_EVENT", "CLAMFLEET_SERVER_HEALTH_SCAN_WARN_HOURS",
 		"CLAMFLEET_SERVER_HEALTH_STALE_FACTOR",
-		"CLAMFLEET_SERVER_LISTEN", "CLAMFLEET_SERVER_PUBLIC_URL", "CLAMFLEET_SERVER_SECRET_KEY_FILE",
+		"CLAMFLEET_SERVER_LISTEN", "CLAMFLEET_SERVER_PUBLIC_URL", "CLAMFLEET_SERVER_RETENTION_EVENTS_DAYS", "CLAMFLEET_SERVER_SECRET_KEY_FILE",
 		"CLAMFLEET_SERVER_SMTP_CA_FILE", "CLAMFLEET_SERVER_SMTP_FROM", "CLAMFLEET_SERVER_SMTP_HELO",
 		"CLAMFLEET_SERVER_SMTP_HOST", "CLAMFLEET_SERVER_SMTP_PASSWORD_FILE", "CLAMFLEET_SERVER_SMTP_PORT",
 		"CLAMFLEET_SERVER_SMTP_TIMEOUT", "CLAMFLEET_SERVER_SMTP_TLS", "CLAMFLEET_SERVER_SMTP_USERNAME",
@@ -111,6 +111,9 @@ func TestValidate(t *testing.T) {
 		if tc.c.Auth == (Auth{}) {
 			tc.c.Auth = DefaultConfig().Auth
 		}
+		if tc.c.Retention == (Retention{}) {
+			tc.c.Retention = DefaultConfig().Retention
+		}
 		if tc.c.Alert.Webhook.Timeout == 0 {
 			tc.c.Alert = DefaultConfig().Alert
 		}
@@ -142,13 +145,14 @@ func TestEnvOverridesFile(t *testing.T) {
 	}
 }
 
-// A copy of spec 12 with keys of a later milestone must fail loudly, not be ignored.
+// A copy of spec 12 with keys of a later milestone must fail loudly, not be ignored:
+// retention.events_days exists since milestone 5, reports_days and the others arrive in M6.
 func TestUnknownKeyIsAnError(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "server.yaml")
 	if err := os.WriteFile(p, []byte("listen: 127.0.0.1:1\nretention: {reports_days: 90}\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := LoadConfig(p, true, noEnv()); err == nil || !strings.Contains(err.Error(), "retention") {
+	if _, _, err := LoadConfig(p, true, noEnv()); err == nil || !strings.Contains(err.Error(), "reports_days") {
 		t.Fatalf("err = %v", err)
 	}
 }
@@ -199,11 +203,11 @@ func TestTrustedProxies(t *testing.T) {
 func TestHealthDefaults(t *testing.T) {
 	h := DefaultConfig().Health
 	want := Health{StaleFactor: 3, DefaultInterval: 5 * time.Minute, DailyWarnHours: 24, DailyCritHours: 72,
-		BehindWarn: 2, ScanWarnHours: 48, EvalInterval: 60 * time.Second}
+		BehindWarn: 2, ScanWarnHours: 48, EvalInterval: 60 * time.Second, RequireVirusEvent: true}
 	if h != want {
 		t.Fatalf("%+v", h)
 	}
-	if th := h.Thresholds(); th.StaleFactor != 3 || th.DailyCritHours != 72 || th.DefaultInterval != 5*time.Minute || th.ScanWarnHours != 48 || th.BehindWarn != 2 {
+	if th := h.Thresholds(); th.StaleFactor != 3 || th.DailyCritHours != 72 || th.DefaultInterval != 5*time.Minute || th.ScanWarnHours != 48 || th.BehindWarn != 2 || !th.RequireVirusEvent {
 		t.Fatalf("%+v", th)
 	}
 	if err := DefaultConfig().Validate(); err != nil {
@@ -348,5 +352,22 @@ func TestTOTPAndSecretKeyConfig(t *testing.T) {
 	c, _, err = LoadConfig(p, true, o)
 	if err != nil || c.Auth.Local.TOTPRequired || c.SecretKeyFile != "/other.key" {
 		t.Fatalf("from env: %+v %v", c, err)
+	}
+}
+
+func TestRetentionEventsDaysFromFileAndEnv(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "server.yaml")
+	if err := os.WriteFile(p, []byte("retention: {events_days: 30}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, _, err := LoadConfig(p, true, noEnv())
+	if err != nil || c.Retention.EventsDays != 30 {
+		t.Fatalf("%+v %v", c.Retention, err)
+	}
+	o := noEnv()
+	o.LookupEnv = func(k string) (string, bool) { return "9", k == "CLAMFLEET_SERVER_RETENTION_EVENTS_DAYS" }
+	c, _, err = LoadConfig(p, true, o)
+	if err != nil || c.Retention.EventsDays != 9 {
+		t.Fatalf("the environment must win: %+v %v", c.Retention, err)
 	}
 }

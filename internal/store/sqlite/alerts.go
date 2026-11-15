@@ -77,7 +77,7 @@ func toTarget(r sqlcdb.AlertTarget) store.AlertTarget {
 	return store.AlertTarget{
 		ID: r.ID, Name: r.Name, Type: r.Type, Config: []byte(r.Config), Sealed: r.Secret,
 		MinSeverity: r.MinSeverity, TagFilter: parseTags(r.TagFilter),
-		SendStateChanges: r.SendStateChanges == 1, SendDetections: r.SendDetections == 1, Enabled: r.Enabled == 1,
+		SendStateChanges: r.SendStateChanges == 1, SendDetections: r.SendDetections == 1, DetectionBurst: int(r.DetectionBurst), Enabled: r.Enabled == 1,
 		CreatedAt: time.Unix(r.CreatedAt, 0).UTC(), UpdatedAt: time.Unix(r.UpdatedAt, 0).UTC(),
 	}
 }
@@ -111,8 +111,8 @@ func (s *Store) CreateAlertTarget(ctx context.Context, t store.NewAlertTarget, s
 		}
 		id, err = q.InsertAlertTarget(ctx, sqlcdb.InsertAlertTargetParams{
 			Name: name, Type: t.Type, Config: string(t.Config), MinSeverity: t.MinSeverity, TagFilter: tagsJSON(t.TagFilter),
-			SendStateChanges: boolInt(t.SendStateChanges), SendDetections: boolInt(t.SendDetections), Enabled: boolInt(t.Enabled),
-			Now: unix(now),
+			SendStateChanges: boolInt(t.SendStateChanges), SendDetections: boolInt(t.SendDetections), DetectionBurst: int64(max(t.DetectionBurst, 0)),
+			Enabled: boolInt(t.Enabled), Now: unix(now),
 		})
 		if err != nil {
 			return err
@@ -134,7 +134,7 @@ func (s *Store) CreateAlertTarget(ctx context.Context, t store.NewAlertTarget, s
 	}
 	return store.AlertTarget{
 		ID: id, Name: name, Type: t.Type, Config: t.Config, Sealed: sealed, MinSeverity: t.MinSeverity, TagFilter: t.TagFilter,
-		SendStateChanges: t.SendStateChanges, SendDetections: t.SendDetections, Enabled: t.Enabled,
+		SendStateChanges: t.SendStateChanges, SendDetections: t.SendDetections, DetectionBurst: max(t.DetectionBurst, 0), Enabled: t.Enabled,
 		CreatedAt: time.Unix(unix(now), 0).UTC(), UpdatedAt: time.Unix(unix(now), 0).UTC(),
 	}, nil
 }
@@ -214,6 +214,16 @@ func (s *Store) UpdateAlertTarget(ctx context.Context, name string, u store.Aler
 		if boolInt(u.SendDetections) != old.SendDetections {
 			changed = append(changed, "send_detections")
 		}
+		burst := old.DetectionBurst
+		if u.DetectionBurst != nil {
+			if *u.DetectionBurst < 0 {
+				return fmt.Errorf("detection burst must not be negative")
+			}
+			burst = int64(*u.DetectionBurst)
+		}
+		if burst != old.DetectionBurst {
+			changed = append(changed, "detection_burst")
+		}
 		if boolInt(u.Enabled) != old.Enabled {
 			changed = append(changed, "enabled")
 		}
@@ -225,8 +235,8 @@ func (s *Store) UpdateAlertTarget(ctx context.Context, name string, u store.Aler
 		}
 		if err := q.UpdateAlertTarget(ctx, sqlcdb.UpdateAlertTargetParams{
 			Config: string(u.Config), MinSeverity: u.MinSeverity, TagFilter: tagsJSON(u.TagFilter),
-			SendStateChanges: boolInt(u.SendStateChanges), SendDetections: boolInt(u.SendDetections), Enabled: boolInt(u.Enabled),
-			Now: unix(now), ID: old.ID,
+			SendStateChanges: boolInt(u.SendStateChanges), SendDetections: boolInt(u.SendDetections), DetectionBurst: burst,
+			Enabled: boolInt(u.Enabled), Now: unix(now), ID: old.ID,
 		}); err != nil {
 			return err
 		}
@@ -265,6 +275,15 @@ func (s *Store) UpdateAlertTarget(ctx context.Context, name string, u store.Aler
 				return err
 			}
 		}
+		// Rule (decision 15): detections switched off, or the target disabled, while
+		// a burst window holds detections: discard them, never summarise. It does
+		// what the switch says, and matches the cancelling of pending detection
+		// deliveries above. The detections stay stored and on the events page.
+		if disabling || detOff {
+			if res.HeldDetections, err = discardWindows(ctx, q, old, now); err != nil {
+				return err
+			}
+		}
 		if old.Type == store.TargetTypeEmail && !disabling {
 			keep := recipientsOf(u.Config)
 			n, err := cancelPending(ctx, q, old, "", "recipient removed", now, func(r string) bool { return r != "" && !slices.Contains(keep, r) })
@@ -281,6 +300,34 @@ func (s *Store) UpdateAlertTarget(ctx context.Context, name string, u store.Aler
 		return writeAuditKind(ctx, q, now, a, store.ActionAlertTargetUpdate, store.TargetAlertTarget, name, detail)
 	})
 	return res, err
+}
+
+// discardWindows closes the open detection windows of a target as 'discarded'
+// and writes one 'cancelled' log row per window that held detections. It
+// returns how many held detections were dropped.
+func discardWindows(ctx context.Context, q *sqlcdb.Queries, t sqlcdb.AlertTarget, now time.Time) (int, error) {
+	rows, err := q.OpenWindowsOfTarget(ctx, t.ID)
+	if err != nil {
+		return 0, err
+	}
+	dropped := 0
+	for _, w := range rows {
+		if err := q.CloseWindow(ctx, sqlcdb.CloseWindowParams{ClosedAt: nullInt(now), Outcome: nullStr(store.WindowDiscarded), ID: w.ID}); err != nil {
+			return 0, err
+		}
+		if w.Members == 0 {
+			continue
+		}
+		dropped += int(w.Members)
+		if _, err := q.InsertAlertLog(ctx, sqlcdb.InsertAlertLogParams{
+			Ts: unix(now), TargetID: sql.NullInt64{Int64: t.ID, Valid: true}, TargetName: t.Name, HostName: nullStr(w.HostName),
+			Status: store.AlertLogCancelled,
+			Error:  nullStr(fmt.Sprintf("%d held detections were not summarised: detections switched off for this target", w.Members)),
+		}); err != nil {
+			return 0, err
+		}
+	}
+	return dropped, nil
 }
 
 // snapshotMatches is the compare of the compare-and-swap of updates and rotations.
@@ -348,7 +395,7 @@ func (s *Store) ListAlertTargets(ctx context.Context) ([]store.AlertTargetSummar
 		sum := store.AlertTargetSummary{
 			AlertTarget: toTarget(sqlcdb.AlertTarget{ID: r.ID, Name: r.Name, Type: r.Type, Config: r.Config, Secret: r.Secret,
 				MinSeverity: r.MinSeverity, TagFilter: r.TagFilter, SendStateChanges: r.SendStateChanges, SendDetections: r.SendDetections,
-				Enabled: r.Enabled, CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt}),
+				Enabled: r.Enabled, CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt, DetectionBurst: r.DetectionBurst}),
 			LastStatus: r.LastStatus, LastCode: r.LastCode,
 		}
 		if r.LastStatus != "" {
@@ -377,6 +424,9 @@ func (s *Store) HasAlertWork(ctx context.Context, now time.Time, cooldown time.D
 	checks := []func() (bool, error){
 		func() (bool, error) { return q.HasFlaggedStateChange(ctx) },
 		func() (bool, error) { return q.HasFlaggedEvent(ctx) },
+		func() (bool, error) {
+			return q.HasDueWindow(ctx, sqlcdb.HasDueWindowParams{WindowSecs: int64(store.DetectionWindow / time.Second), Now: unix(now)})
+		},
 		func() (bool, error) {
 			return q.HasDueHold(ctx, sqlcdb.HasDueHoldParams{CooldownSecs: int64(cooldown / time.Second), Now: unix(now)})
 		},
@@ -415,8 +465,26 @@ func (s *Store) PlanAlerts(ctx context.Context, now time.Time, cooldown time.Dur
 		if err != nil {
 			return err
 		}
+		winRows, err := q.OpenWindows(ctx)
+		if err != nil {
+			return err
+		}
+		memRows, err := q.OpenWindowMembers(ctx)
+		if err != nil {
+			return err
+		}
 
 		in := store.AlertPlanInput{Now: now, Cooldown: cooldown, Hosts: map[int64]store.PlanHost{}}
+		winIdx := map[int64]int{}
+		for _, w := range winRows {
+			winIdx[w.ID] = len(in.Windows)
+			in.Windows = append(in.Windows, store.PlanWindow{ID: w.ID, TargetID: w.TargetID, HostID: w.HostID, Start: time.Unix(w.WindowStart, 0).UTC(), Sent: int(w.Sent)})
+		}
+		for _, m := range memRows {
+			if i, ok := winIdx[m.WindowID]; ok {
+				in.Windows[i].Members = append(in.Windows[i].Members, store.PlanWindowMember{EventID: m.EventID, TS: time.Unix(m.Ts, 0).UTC(), Signature: m.Signature})
+			}
+		}
 		for _, t := range targetRows {
 			in.Targets = append(in.Targets, toTarget(t))
 		}
@@ -441,6 +509,9 @@ func (s *Store) PlanAlerts(ctx context.Context, now time.Time, cooldown time.Dur
 		}
 		for _, h := range held {
 			hostIDs[h.HostID] = true
+		}
+		for _, w := range in.Windows {
+			hostIDs[w.HostID] = true
 		}
 
 		ids := make([]int64, 0, len(hostIDs))
@@ -490,15 +561,50 @@ func (s *Store) PlanAlerts(ctx context.Context, now time.Time, cooldown time.Dur
 			}
 		}
 
-		names := map[int64]string{}
-		for _, t := range targetRows {
-			names[t.ID] = t.Name
+		// Windows first, in the planner's order (a window that closes comes before
+		// the one that replaces it, so the one-open-window index is never violated),
+		// then the deliveries that consume them, all in this one transaction: a window
+		// is closed exactly when its summary is written, or neither is.
+		windowIDs := make([]int64, len(out.Windows))
+		for i, w := range out.Windows {
+			id := w.ID
+			if id == 0 {
+				if id, err = q.InsertWindow(ctx, sqlcdb.InsertWindowParams{TargetID: w.TargetID, HostID: w.HostID, WindowStart: unix(w.Start), Sent: int64(w.Sent)}); err != nil {
+					return err
+				}
+			} else if err := q.SetWindowSent(ctx, sqlcdb.SetWindowSentParams{Sent: int64(w.Sent), ID: id}); err != nil {
+				return err
+			}
+			windowIDs[i] = id
+			for _, ev := range w.AddMembers {
+				if err := q.InsertWindowMember(ctx, sqlcdb.InsertWindowMemberParams{WindowID: id, EventID: ev}); err != nil {
+					return err
+				}
+			}
+			// Closed here, before the next window is inserted; still in this
+			// transaction, so a failure of a delivery insert below rolls the close
+			// back with everything else.
+			if w.Outcome != "" {
+				if err := q.CloseWindow(ctx, sqlcdb.CloseWindowParams{ClosedAt: nullInt(now), Outcome: nullStr(w.Outcome), ID: id}); err != nil {
+					return err
+				}
+			}
 		}
 		for _, d := range out.Deliveries {
+			var winID sql.NullInt64
+			if d.WindowRef > 0 {
+				winID = sql.NullInt64{Int64: windowIDs[d.WindowRef-1], Valid: true}
+			}
 			if err := q.InsertDelivery(ctx, sqlcdb.InsertDeliveryParams{
 				AlertID: d.AlertID, TargetID: d.TargetID, HostID: d.HostID, Recipient: d.Recipient,
-				StateChangeID: nullInt64(d.StateChangeID), EventID: nullInt64(d.EventID), Kind: d.Kind, Payload: string(d.Payload), Now: nullInt(now),
+				StateChangeID: nullInt64(d.StateChangeID), EventID: nullInt64(d.EventID), WindowID: winID, Kind: d.Kind, Payload: string(d.Payload), Now: nullInt(now),
 			}); err != nil {
+				return err
+			}
+		}
+
+		if s.afterAlertPlanDeliveries != nil {
+			if err := s.afterAlertPlanDeliveries(); err != nil {
 				return err
 			}
 		}
@@ -602,55 +708,99 @@ func (s *Store) ExpireLeases(ctx context.Context, now time.Time, all bool) (expi
 	return expired, exhausted, err
 }
 
+// dueRow is the common shape of the two due queries' rows.
+type dueRow struct {
+	ID            int64
+	AlertID       string
+	TargetID      int64
+	HostID        int64
+	Recipient     string
+	StateChangeID sql.NullInt64
+	EventID       sql.NullInt64
+	Kind          string
+	Payload       string
+	Attempts      int64
+	HostName      string
+}
+
 // ClaimDeliveries implements store.AlertStore.
-func (s *Store) ClaimDeliveries(ctx context.Context, now time.Time, lease time.Duration, max int) ([]store.ClaimedDelivery, error) {
-	if max <= 0 {
+func (s *Store) ClaimDeliveries(ctx context.Context, now time.Time, lease time.Duration, lim store.ClaimLimits) ([]store.ClaimedDelivery, error) {
+	if lim.Total <= 0 {
 		return nil, nil
 	}
 	var out []store.ClaimedDelivery
 	err := s.inTx(ctx, func(q *sqlcdb.Queries) error {
 		out = nil
-		rows, err := q.DueDeliveries(ctx, sqlcdb.DueDeliveriesParams{Now: nullInt(now), MaxRows: int64(max)})
+		targets := map[int64]sqlcdb.AlertTarget{}
+		claim := func(rows []dueRow) error {
+			for _, r := range rows {
+				token := make([]byte, 16)
+				if _, err := rand.Read(token); err != nil {
+					return err
+				}
+				n, err := q.ClaimDelivery(ctx, sqlcdb.ClaimDeliveryParams{Token: token, LeaseUntil: nullInt(now.Add(lease)), ID: r.ID})
+				if err != nil {
+					return err
+				}
+				if n == 0 {
+					continue
+				}
+				t, ok := targets[r.TargetID]
+				if !ok {
+					if t, err = q.AlertTargetByID(ctx, r.TargetID); err != nil {
+						return err
+					}
+					targets[r.TargetID] = t
+				}
+				attempt := int(r.Attempts) + 1
+				logID, err := q.InsertAlertLog(ctx, sqlcdb.InsertAlertLogParams{
+					Ts: unix(now), TargetID: sql.NullInt64{Int64: t.ID, Valid: true}, TargetName: t.Name,
+					DeliveryID: sql.NullInt64{Int64: r.ID, Valid: true}, Recipient: nullText(r.Recipient), HostName: nullStr(r.HostName),
+					StateChangeID: r.StateChangeID, EventID: r.EventID, Attempt: sql.NullInt64{Int64: int64(attempt), Valid: true},
+					Status: store.AlertLogAttempting,
+				})
+				if err != nil {
+					return err
+				}
+				out = append(out, store.ClaimedDelivery{
+					ID: r.ID, AlertID: r.AlertID, Target: toTarget(t), HostID: r.HostID, HostName: r.HostName, Recipient: r.Recipient,
+					StateChangeID: ptrInt64(r.StateChangeID), EventID: ptrInt64(r.EventID), Kind: r.Kind, Payload: []byte(r.Payload),
+					Attempt: attempt, Token: token, LogID: logID, ClaimedAt: now,
+				})
+			}
+			return nil
+		}
+		// State alerts first: a CRIT must never wait behind detections.
+		states, err := q.DueStateDeliveries(ctx, sqlcdb.DueStateDeliveriesParams{Now: nullInt(now), MaxRows: int64(lim.Total)})
 		if err != nil {
 			return err
 		}
-		targets := map[int64]sqlcdb.AlertTarget{}
-		for _, r := range rows {
-			token := make([]byte, 16)
-			if _, err := rand.Read(token); err != nil {
-				return err
-			}
-			n, err := q.ClaimDelivery(ctx, sqlcdb.ClaimDeliveryParams{Token: token, LeaseUntil: nullInt(now.Add(lease)), ID: r.ID})
-			if err != nil {
-				return err
-			}
-			if n == 0 {
-				continue
-			}
-			t, ok := targets[r.TargetID]
-			if !ok {
-				if t, err = q.AlertTargetByID(ctx, r.TargetID); err != nil {
-					return err
-				}
-				targets[r.TargetID] = t
-			}
-			attempt := int(r.Attempts) + 1
-			logID, err := q.InsertAlertLog(ctx, sqlcdb.InsertAlertLogParams{
-				Ts: unix(now), TargetID: sql.NullInt64{Int64: t.ID, Valid: true}, TargetName: t.Name,
-				DeliveryID: sql.NullInt64{Int64: r.ID, Valid: true}, Recipient: nullText(r.Recipient), HostName: nullStr(r.HostName),
-				StateChangeID: r.StateChangeID, EventID: r.EventID, Attempt: sql.NullInt64{Int64: int64(attempt), Valid: true},
-				Status: store.AlertLogAttempting,
-			})
-			if err != nil {
-				return err
-			}
-			out = append(out, store.ClaimedDelivery{
-				ID: r.ID, AlertID: r.AlertID, Target: toTarget(t), HostID: r.HostID, HostName: r.HostName, Recipient: r.Recipient,
-				StateChangeID: ptrInt64(r.StateChangeID), EventID: ptrInt64(r.EventID), Kind: r.Kind, Payload: []byte(r.Payload),
-				Attempt: attempt, Token: token, LogID: logID, ClaimedAt: now,
-			})
+		rows := make([]dueRow, 0, len(states))
+		for _, r := range states {
+			rows = append(rows, dueRow(r))
 		}
-		return nil
+		if err := claim(rows); err != nil {
+			return err
+		}
+		// Then detections and summaries in what is left, within the reserve and
+		// the per-target cap.
+		detMax := min(lim.Total-len(out), lim.Detections)
+		if detMax <= 0 {
+			return nil
+		}
+		perTarget := int64(lim.PerTarget)
+		if perTarget <= 0 {
+			perTarget = 1 << 30
+		}
+		dets, err := q.DueDetectionDeliveries(ctx, sqlcdb.DueDetectionDeliveriesParams{Now: nullInt(now), PerTarget: perTarget, MaxRows: int64(detMax)})
+		if err != nil {
+			return err
+		}
+		rows = rows[:0]
+		for _, r := range dets {
+			rows = append(rows, dueRow(r))
+		}
+		return claim(rows)
 	})
 	if err != nil {
 		return nil, err

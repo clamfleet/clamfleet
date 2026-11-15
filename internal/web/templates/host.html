@@ -40,10 +40,22 @@
     {{range .Sigs}}<dt>{{.Name}}.cvd</dt><dd>version {{.Version}}, built {{.Built}} ({{.Age}} old), {{.Sigs}} signatures</dd>{{else}}<dt>Signatures</dt><dd><strong>none reported</strong></dd>{{end}}
     <dt>freshclam</dt><dd>{{if .FreshclamOK}}last OK {{.FreshclamOK}}{{else}}no successful update seen{{end}}{{if .FreshclamErr}}; last error {{.FreshclamErr}}{{if .FreshclamMsg}}: {{.FreshclamMsg}}{{end}}{{end}}{{if .Source}} <span class="hint">(from {{.Source}})</span>{{end}}</dd>
     {{range .Services}}<dt>{{.Name}} service</dt><dd>{{.State}}</dd>{{end}}
+    <dt>VirusEvent</dt><dd data-testid="host-virusevent">{{.VirusEvent}}</dd>
     <dt>Last scan</dt><dd>{{with .Scan}}finished <span title="{{.Finished}}">{{.FinishedAgo}}</span>, exit {{.Exit}}, {{.Scanned}} scanned, {{.Infected}} infected, {{.Errors}} errors{{else}}none reported{{end}}</dd>
   </dl>
 </div>
 {{end}}
+
+<div class="card" data-testid="host-events">
+  <h2>Detections <span class="badge {{if .OpenEvents}}CRIT{{else}}pending{{end}}" data-testid="host-events-open">{{.OpenEvents}} open</span></h2>
+  {{if .Recent}}
+  <table>
+    <thead><tr><th>Detected</th><th>Host</th><th>Signature</th><th>Path</th><th></th><th>Source</th><th>Status</th>{{if .IsAdmin}}<th></th>{{end}}</tr></thead>
+    <tbody>{{range .Recent}}{{template "event_row" .}}{{end}}</tbody>
+  </table>
+  <p><a href="/events?host={{.Name}}&amp;ack=all" data-testid="host-events-all">All detections of this host</a></p>
+  {{else}}<p data-testid="host-no-events">No detections reported.</p>{{end}}
+</div>
 
 <div class="card">
   <h2>State history</h2>

@@ -9,6 +9,7 @@
 {{define "fleet_rows"}}
 <div class="counts" data-testid="fleet-counts">
   {{range .Counts}}<span class="badge {{.State}}" data-testid="count-{{.State}}">{{.State}} {{.N}}</span>{{end}}
+  <a href="/events" class="badge {{if .OpenTotal}}CRIT{{else}}pending{{end}}" data-testid="fleet-count-open">{{.OpenTotal}} open detections</a>
 </div>
 {{if eq .Total 0}}
 <div class="card" data-testid="fleet-empty">No hosts are registered yet. An admin can add one on the Hosts page.</div>
@@ -16,7 +17,7 @@
 <div class="card" data-testid="fleet-no-match">No host matches the filter.</div>
 {{else}}
 <table data-testid="fleet-table">
-  <thead><tr><th>Host</th><th>State</th><th>Reasons</th><th>Tags</th><th>Last seen</th><th>clamd</th><th>Daily</th></tr></thead>
+  <thead><tr><th>Host</th><th>State</th><th>Reasons</th><th>Tags</th><th>Last seen</th><th>clamd</th><th>Daily</th><th>Detections</th></tr></thead>
   <tbody>
   {{range .Rows}}
   <tr data-testid="fleet-row-{{.Name}}" data-state="{{.State}}">
@@ -27,6 +28,7 @@
     <td class="num">{{if .LastSeenAgo}}<span title="{{.LastSeenAbs}}">{{.LastSeenAgo}}</span>{{else}}never{{end}}</td>
     <td class="num">{{.Clamd}}</td>
     <td class="num">{{if .DailyVersion}}{{.DailyVersion}} <span class="hint">({{.DailyAge}})</span>{{end}}</td>
+    <td class="num" data-testid="fleet-open-{{.Name}}">{{if .OpenEvents}}<a href="/events?host={{.Name}}">{{.OpenEvents}}</a>{{else}}0{{end}}</td>
   </tr>
   {{end}}
   </tbody>

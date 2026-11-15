@@ -44,6 +44,8 @@ type fleetRowView struct {
 	Clamd        string
 	DailyVersion string
 	DailyAge     string
+	// OpenEvents is the host's unacknowledged detections.
+	OpenEvents int64
 }
 
 type countView struct {
@@ -60,6 +62,8 @@ type fleetBody struct {
 	StateFilter string
 	States      []string
 	Filtered    bool
+	// OpenTotal is the unacknowledged detections of all hosts with a token.
+	OpenTotal int64
 	// Query is the encoded filter, reused by the poll URL.
 	Query string
 }
@@ -92,9 +96,11 @@ func (w *Web) buildFleet(rows []store.FleetRow, tag, state string) fleetBody {
 	tagSet := map[string]bool{}
 	counts := map[string]int{}
 	var views []fleetRowView
+	var openTotal int64
 	for _, r := range rows {
 		st := stateText(r.State)
 		counts[st]++
+		openTotal += r.OpenEvents
 		for _, t := range r.Tags {
 			tagSet[t] = true
 		}
@@ -104,7 +110,7 @@ func (w *Web) buildFleet(rows []store.FleetRow, tag, state string) fleetBody {
 		if tag != "" && !contains(r.Tags, tag) {
 			continue
 		}
-		v := fleetRowView{Name: r.Name, Tags: r.Tags, State: st, Reasons: decodeReasons(r.StateReason), Clamd: r.ClamdVersion}
+		v := fleetRowView{Name: r.Name, Tags: r.Tags, State: st, Reasons: decodeReasons(r.StateReason), Clamd: r.ClamdVersion, OpenEvents: r.OpenEvents}
 		if r.LastSeen != nil {
 			v.LastSeenAgo, v.LastSeenAbs = ago(now, *r.LastSeen), abs(*r.LastSeen)
 		}
@@ -141,7 +147,7 @@ func (w *Web) buildFleet(rows []store.FleetRow, tag, state string) fleetBody {
 	}
 	return fleetBody{
 		Rows: views, Counts: cv, Total: len(rows), Tags: tags, TagFilter: tag, StateFilter: state,
-		States: stateOrder, Filtered: tag != "" || state != "", Query: q.Encode(),
+		States: stateOrder, Filtered: tag != "" || state != "", Query: q.Encode(), OpenTotal: openTotal,
 	}
 }
 

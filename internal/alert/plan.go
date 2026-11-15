@@ -16,7 +16,16 @@
 // cooldown are held; when the window ends one alert reports the host's CURRENT
 // state if its view differs from what the target was last told, and its "from"
 // is the state the target was last told, so receivers see a consistent chain.
-// Detections are never held and ignore the minimum severity.
+// Detections ignore the minimum severity and the cooldown; what limits a mass
+// detection is the burst window, below.
+//
+// Burst windows (milestone 5, decision 10b). Per (target, host) a window opens
+// at the server-clock received_at of a detection. The first DetectionBurst
+// detections whose received_at falls in [start, start+W) are sent one by one;
+// the rest are held (membership rows) and sent as ONE summary when the window
+// ends. Only the server clock is used (never the agent's ts, which a spooled
+// event can have days old). A window is closed in the same transaction that
+// writes its summary, so a crash can neither lose nor repeat a summary.
 //
 // Dependencies: internal/store (types only).
 package alert
@@ -158,13 +167,15 @@ func (p Planner) Plan(in store.AlertPlanInput) store.AlertPlanOutput {
 		p.resolveHold(&out, in, t, host, n, set)
 	}
 
+	ws := newWindowSet(in)
 	for _, ev := range in.Events {
 		host, ok := in.Hosts[ev.HostID]
 		if !ok {
 			continue
 		}
-		p.planDetection(&out, targets, host, ev)
+		p.planDetection(&out, in, ws, targets, host, ev)
 	}
+	p.closeDueWindows(&out, in, ws, byID)
 
 	keysOut := make([]pairKey, 0, len(touched))
 	for k := range touched {
@@ -313,7 +324,45 @@ func (p Planner) fanOut(out *store.AlertPlanOutput, t store.AlertTarget, host st
 	}
 }
 
-func (p Planner) planDetection(out *store.AlertPlanOutput, targets []store.AlertTarget, host store.PlanHost, ev store.PlanEvent) {
+// winState is the planner's working copy of one open window.
+type winState struct {
+	idx        int // index in out.Windows, -1 until the window is touched
+	id         int64
+	target     int64
+	host       int64
+	start      time.Time
+	sent       int
+	members    []store.PlanWindowMember
+	heldLogged bool
+}
+
+// windowSet holds the open windows by (target, host).
+type windowSet struct {
+	open map[pairKey]*winState
+}
+
+func newWindowSet(in store.AlertPlanInput) *windowSet {
+	ws := &windowSet{open: map[pairKey]*winState{}}
+	for _, w := range in.Windows {
+		ws.open[pairKey{w.TargetID, w.HostID}] = &winState{
+			idx: -1, id: w.ID, target: w.TargetID, host: w.HostID, start: w.Start, sent: w.Sent,
+			members: append([]store.PlanWindowMember(nil), w.Members...), heldLogged: len(w.Members) > 0,
+		}
+	}
+	return ws
+}
+
+// touch makes sure the window has an entry in out.Windows and returns it.
+func (w *winState) touch(out *store.AlertPlanOutput) *store.WindowWrite {
+	if w.idx < 0 {
+		w.idx = len(out.Windows)
+		out.Windows = append(out.Windows, store.WindowWrite{ID: w.id, TargetID: w.target, HostID: w.host, Start: w.start})
+	}
+	out.Windows[w.idx].Sent = w.sent
+	return &out.Windows[w.idx]
+}
+
+func (p Planner) planDetection(out *store.AlertPlanOutput, in store.AlertPlanInput, ws *windowSet, targets []store.AlertTarget, host store.PlanHost, ev store.PlanEvent) {
 	id := p.NewID()
 	routed := false
 	for _, t := range targets {
@@ -321,6 +370,9 @@ func (p Planner) planDetection(out *store.AlertPlanOutput, targets []store.Alert
 			continue
 		}
 		routed = true
+		if t.DetectionBurst > 0 && !p.admit(out, in, ws, t, host, ev) {
+			continue // held in the window: the summary will report it
+		}
 		pl := DetectionPayload{
 			Schema: SchemaVersion, ID: id, Kind: KindDetection, Target: t.Name, Host: host.Name,
 			Tags: SortedTags(host.Tags), TS: FormatTime(ev.TS), URL: HostURL(p.PublicURL, host.Name),
@@ -334,5 +386,132 @@ func (p Planner) planDetection(out *store.AlertPlanOutput, targets []store.Alert
 	}
 	if !routed {
 		out.Unrouted = append(out.Unrouted, ev.ID)
+	}
+}
+
+// admit applies the burst rules to a detection for a target with burst B > 0 and
+// says whether it is sent individually (true) or held in the window (false). The
+// clock is ev.ReceivedAt, the server's.
+func (p Planner) admit(out *store.AlertPlanOutput, in store.AlertPlanInput, ws *windowSet, t store.AlertTarget, host store.PlanHost, ev store.PlanEvent) bool {
+	k := pairKey{t.ID, host.ID}
+	w := ws.open[k]
+	// 1. No open window, or the event is at or after the window's end (the boundary
+	// is exclusive: received_at == start+W opens a new window): close the old one
+	// first, which writes its summary, then open a new one.
+	if w != nil && !ev.ReceivedAt.Before(w.start.Add(store.DetectionWindow)) {
+		p.closeWindow(out, in, t, host, w)
+		delete(ws.open, k)
+		w = nil
+	}
+	if w == nil {
+		w = &winState{idx: -1, target: t.ID, host: host.ID, start: ev.ReceivedAt}
+		ws.open[k] = w
+	}
+	// 2. An event with received_at before the window's start (the server clock went
+	// back) simply counts in the open window: a window is never stretched or
+	// reopened backwards.
+	if w.sent < t.DetectionBurst {
+		w.sent++
+		w.touch(out)
+		return true
+	}
+	// 4. Beyond the burst: held.
+	wr := w.touch(out)
+	wr.AddMembers = append(wr.AddMembers, ev.ID)
+	w.members = append(w.members, store.PlanWindowMember{EventID: ev.ID, TS: ev.TS, Signature: ev.Signature})
+	if !w.heldLogged {
+		w.heldLogged = true
+		out.Logs = append(out.Logs, store.PlanLog{TargetID: t.ID, TargetName: t.Name, HostName: host.Name, EventID: i64p(ev.ID), Status: store.AlertLogHeld,
+			Error: fmt.Sprintf("holding detections beyond %d until %s", t.DetectionBurst, FormatTime(w.start.Add(store.DetectionWindow)))})
+	}
+	return false
+}
+
+// closeWindow ends a window: with members it writes one summary delivery per
+// recipient (not subject to the state-change cooldown: summaries are
+// detections), without it the window just closes.
+func (p Planner) closeWindow(out *store.AlertPlanOutput, in store.AlertPlanInput, t store.AlertTarget, host store.PlanHost, w *winState) {
+	wr := w.touch(out)
+	if len(w.members) == 0 {
+		wr.Outcome = store.WindowEmpty
+		return
+	}
+	wr.Outcome = store.WindowSummarised
+	id := p.NewID()
+	first, last := w.members[0].TS, w.members[0].TS
+	counts := map[string]int{}
+	for _, m := range w.members {
+		if m.TS.Before(first) {
+			first = m.TS
+		}
+		if m.TS.After(last) {
+			last = m.TS
+		}
+		counts[m.Signature]++
+	}
+	sigs := make([]SignatureCount, 0, len(counts))
+	for sig, n := range counts {
+		sigs = append(sigs, SignatureCount{Signature: sig, Count: n})
+	}
+	sort.Slice(sigs, func(i, j int) bool {
+		if sigs[i].Count != sigs[j].Count {
+			return sigs[i].Count > sigs[j].Count
+		}
+		return sigs[i].Signature < sigs[j].Signature
+	})
+	more := 0
+	if len(sigs) > maxSummarySignatures {
+		more = len(sigs) - maxSummarySignatures
+		sigs = sigs[:maxSummarySignatures]
+	}
+	raw, err := Marshal(DetectionSummaryPayload{
+		Schema: SchemaVersion, ID: id, Kind: KindDetectionSummary, Target: t.Name, Host: host.Name,
+		Tags: SortedTags(host.Tags), TS: FormatTime(in.Now), URL: EventsURL(p.PublicURL, host.Name),
+		Count: len(w.members), FirstTS: FormatTime(first), LastTS: FormatTime(last),
+		WindowStart: FormatTime(w.start), WindowEnd: FormatTime(w.start.Add(store.DetectionWindow)),
+		WindowSeconds: int(store.DetectionWindow / time.Second), Signatures: sigs, MoreSignatures: more,
+	})
+	if err != nil {
+		panic(err)
+	}
+	p.fanOut(out, t, host, id, store.NewDelivery{Kind: store.DeliveryDetectionSummary, WindowRef: w.idx + 1}, raw)
+}
+
+// maxSummarySignatures is how many signatures a summary lists.
+const maxSummarySignatures = 10
+
+// closeDueWindows closes every window whose time has come: now >= start+W, or
+// now < start-1min (the clock went back by more than a minute: close now rather
+// than hold indefinitely). A window of a target that stopped sending detections
+// is discarded, never summarised (the store discards them at the switch; this
+// is the defence in depth).
+func (p Planner) closeDueWindows(out *store.AlertPlanOutput, in store.AlertPlanInput, ws *windowSet, byID map[int64]store.AlertTarget) {
+	keys := make([]pairKey, 0, len(ws.open))
+	for k := range ws.open {
+		keys = append(keys, k)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if keys[i].target != keys[j].target {
+			return keys[i].target < keys[j].target
+		}
+		return keys[i].host < keys[j].host
+	})
+	for _, k := range keys {
+		w := ws.open[k]
+		due := !in.Now.Before(w.start.Add(store.DetectionWindow)) || in.Now.Before(w.start.Add(-time.Minute))
+		if !due {
+			continue
+		}
+		t, tok := byID[k.target]
+		host, hok := in.Hosts[k.host]
+		if !tok || !hok {
+			continue // cascade removes them; nothing to send to
+		}
+		if !t.Enabled || !t.SendDetections {
+			w.touch(out).Outcome = store.WindowDiscarded
+		} else {
+			p.closeWindow(out, in, t, host, w)
+		}
+		delete(ws.open, k)
 	}
 }

@@ -73,11 +73,7 @@ func freshServer(t *testing.T) string {
 	// must exist before serve starts, which reads it only at start.
 	sh(t, "/usr/local/bin/clamfleet-server key generate 2>/dev/null; chgrp clamfleet-server /etc/clamfleet/server-secret.key; chmod 0640 /etc/clamfleet/server-secret.key")
 
-	// Default (info) level: the journal must already hold the successful request lines.
-	sh(t, "systemd-run --quiet --collect --unit="+serverUnit+" --uid=clamfleet-server "+
-		"/usr/local/bin/clamfleet-server serve")
-	sh(t, "for _ in $(seq 1 30); do journalctl -u "+serverUnit+" -o cat --no-pager -q | grep -q '\"msg\":\"listening\"' && exit 0; sleep 1; done; "+
-		"journalctl -u "+serverUnit+" --no-pager >&2; echo server did not start >&2; exit 1")
+	startServerUnit(t)
 
 	tok := srvCLI(t, "host", "add", hostName)
 	if !strings.HasPrefix(tok, "cfa_") || len(tok) != 47 {
@@ -85,6 +81,21 @@ func freshServer(t *testing.T) string {
 	}
 	writeToken(t, tok)
 	return tok
+}
+
+// startServerUnit starts the server as its transient unit and waits for its
+// "listening" line. It is also how a scenario brings the server back after
+// stopping it: the unit name is reusable once the unit has stopped (--collect).
+func startServerUnit(t *testing.T) {
+	t.Helper()
+	// Default (info) level: the journal must already hold the successful request lines.
+	// A restart appends to the journal of the same unit name: the "listening" lines are
+	// counted BEFORE the start, so a line of the previous run is not taken for the new one.
+	count := "journalctl -u " + serverUnit + " -o cat --no-pager -q | grep -c '\"msg\":\"listening\"' || true"
+	sh(t, "n=$("+count+"); "+
+		"systemd-run --quiet --collect --unit="+serverUnit+" --uid=clamfleet-server /usr/local/bin/clamfleet-server serve; "+
+		"for _ in $(seq 1 30); do [ \"$("+count+")\" -gt \"$n\" ] && exit 0; sleep 1; done; "+
+		"journalctl -u "+serverUnit+" --no-pager >&2; echo server did not start >&2; exit 1")
 }
 
 // srvCLI runs the admin CLI as the server user and returns its stdout.

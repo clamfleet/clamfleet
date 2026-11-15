@@ -125,9 +125,24 @@ changes show as `held` rows in the log and as `skipped` when the host went back 
 12:15  window ends        one alert: from CRIT to OK, changes 3, resolved for a WARN target
 ```
 
-**Detections** (`kind: detection`) are never held and ignore the minimum severity: one alert per detection per
-target (and per recipient for email). A detection no target takes (tags, switches) is still stored and shown on
-the host page; the Alerts page says "N detections in the last 7 days matched no alert target".
+**Detections** (`kind: detection`) are never held by the cooldown and ignore the minimum severity: one alert per
+detection per target (and per recipient for email), **up to the burst limit** below. A detection no target
+takes (tags, switches) is still stored and shown on the Detections page; the Alerts page says "N detections in
+the last 7 days matched no alert target".
+
+**Bursts and summaries** (`detection_burst`, default 10; 0 = every detection on its own; a setting of each
+target). A worm or a mass scan can produce thousands of detections for one host. Per target and host, the
+first N detections in a 10 minute window are sent one by one; the rest of that window are **held** and sent as
+one `detection_summary` alert when the window ends. The window opens at the arrival of its first detection
+and is measured only on the **server's** clock (the agent's time of a spooled event can be days old). The
+boundary is exclusive: a detection arriving exactly 10 minutes after the window opened starts a new window.
+The window and its held detections are stored in the database, and it is closed in the same transaction that
+writes its summary: a crash before the commit leaves it open and the next pass makes exactly one summary, and
+a closed window is never summarised again. **A summary is a detection**: the state-change cooldown does not hold
+it. It carries a count, the agent's first and last time, the server's window, the top ten signatures and **no
+paths** (the Detections page has them). **Switching detections off, or disabling the target, while a window
+holds detections discards it** (one `cancelled` log row says how many were not summarised); that matches how
+switching a kind off cancels pending alerts, and the detections stay stored.
 
 **Switching a kind off** (or disabling the target, or removing a recipient) **cancels** the pending alerts of
 that kind, and drops the cooldown state; the page says how many were cancelled. Switching it back on starts
@@ -136,6 +151,14 @@ fresh: nothing is sent for the current state until it changes.
 **Upgrading** does not alert on history: only changes recorded after the upgrade are alerted.
 
 ## Delivery, retries and the log
+
+**Claim rules.** Up to 4 workers send at once. A pass claims **state alerts first**, then detections and
+summaries on the workers that remain, and **one worker is always kept for state alerts**: detections and
+summaries together use at most 3. At most **2 detection sends are in flight to one target**, so a dead receiver
+(every send hanging to its 10 s deadline) cannot occupy every worker or delay a CRIT, and its backlog cannot
+hide another target's deliveries. Order is kept per target, host, recipient **and kind**: a retrying CRIT does
+not hold back a detection for that host, nor the reverse. A new detection and every health evaluation wake
+the dispatcher at once; the 5 s tick still catches due retries and windows.
 
 - Every alert is a row in the database before anything is sent, so a restart, an SMTP outage or a webhook
   outage loses nothing. The server keeps working and keeps alerting if SMTP or a webhook target is down.
@@ -190,7 +213,7 @@ and golden files pin it. Keys are always present for their kind; an unknown valu
 |---|---|---|
 | `schema` | number | Always `1` for this format. |
 | `id` | string | The alert id (128 random bits, hex). One per alert, shared by its targets, recipients and **retries**. Deduplicate on it. Also the `webhook-id` header. |
-| `kind` | string | `state_change`, `detection` or `test`. **Ignore kinds you do not know.** |
+| `kind` | string | `state_change`, `detection`, `detection_summary` or `test`. **Ignore kinds you do not know.** |
 | `target` | string | The target's name. |
 | `host` | string | The **registered** host name (admin-assigned), never the name in the agent's report. |
 | `tags` | array of strings | The host's tags when the alert was planned, sorted. |
@@ -210,6 +233,24 @@ A **detection** has the keys `schema`, `id`, `kind`, `target`, `host`, `tags`, `
 {"schema":1,"id":"0a1b2c3d4e5f60718293a4b5c6d7e8f9","kind":"detection","target":"ops-webhook","host":"app01","tags":["prod","web"],"ts":"2031-03-04T12:00:00Z","url":"https://clamfleet.example/hosts/app01","path":"/home/alice/eicar.com","signature":"Win.Test.EICAR_HDB-1","source":"clamonacc","received_at":"2031-03-04T12:00:03Z"}
 ```
 
+A **detection summary** (`kind: detection_summary`) has `schema`, `id`, `kind`, `target`, `host`, `tags`, `ts` (the
+server time at which the window closed), `url` (`public_url` + `/events?host=` + the host, or `null`) and:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `count` | number | Detections held in the window and reported here (the individually sent ones are not counted). |
+| `first_ts`, `last_ts` | string | The agent's detection times of the held ones (informational only). |
+| `window_start`, `window_end` | string | The server's times: when the window opened, and `window_start` + `window_seconds`. |
+| `window_seconds` | number | `600`. |
+| `signatures` | array | Up to 10 `{"signature", "count"}`, most frequent first (ties by name). |
+| `more_signatures` | number | How many further distinct signatures are not listed. |
+
+```json
+{"schema":1,"id":"1a2b3c4d5e6f708192a3b4c5d6e7f809","kind":"detection_summary","target":"ops-webhook","host":"app01","tags":["prod","web"],"ts":"2031-03-04T12:10:00Z","url":"https://clamfleet.example/events?host=app01","count":4321,"first_ts":"2031-03-04T11:40:00Z","last_ts":"2031-03-04T12:09:58Z","window_start":"2031-03-04T12:00:00Z","window_end":"2031-03-04T12:10:00Z","window_seconds":600,"signatures":[{"signature":"Win.Test.EICAR_HDB-1","count":4300},{"signature":"Php.Shell_x","count":21}],"more_signatures":0}
+```
+
+A summary never carries a path. Its `signature` texts are controlled by the monitored host like any other.
+
 A **test** has `schema`, `id`, `kind`, `target`, `ts` and `url` (the root of `public_url`, or `null`).
 
 **Rules.**
@@ -220,6 +261,9 @@ A **test** has `schema`, `id`, `kind`, `target`, `ts` and `url` (the root of `pu
   an agent report or an admin. Treat them as untrusted: escape them before putting them in HTML or markdown
   (chat bridges), never in a shell or SQL.
 - The same `id` can arrive more than once: deduplicate.
+
+A detection alert's `path` is in the **agent's encoding** (see `docs/detections.md`): a backslash is doubled and a
+byte that is not valid UTF-8 is `\xNN`.
 
 Emails carry the same facts as plain text (quoted-printable). Headers hold only the admin-assigned host name
 and fixed words; reasons, paths and signatures appear in the body with control characters shown as `\xNN`,
@@ -310,7 +354,7 @@ operating-system user.
 ```
 clamfleet-server alert list [--json]
 clamfleet-server alert log [--target NAME] [--limit N] [--json]
-clamfleet-server alert add-webhook NAME (--url-stdin | --url-file PATH) [--min-severity S] [--tags a,b] [--no-state-changes] [--no-detections]
+clamfleet-server alert add-webhook NAME (--url-stdin | --url-file PATH) [--min-severity S] [--tags a,b] [--no-state-changes] [--no-detections] [--detection-burst N]
 clamfleet-server alert add-email NAME --to a@x.example,b@x.example [same options]
 clamfleet-server alert test NAME
 clamfleet-server alert delete NAME --yes

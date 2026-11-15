@@ -13,6 +13,7 @@ Central management for ClamAV on Linux fleets. Spec: `docs/HANDOVER.md`. Current
 - `make check`: `go vet`, `staticcheck`, `sqlc diff`, `go test ./...` and `scripts-test` (the shell tests of `deploy/test`, fake ssh; no container needed).
 - `make e2e`: runs the agent inside the `clamfleet-test` Incus container. Read `docs/testing.md` first.
 - `make webfixture`: builds `bin/webfixture`, a throwaway console on 127.0.0.1 with seeded users and hosts for browser tests (see `docs/testing.md`, "Browser fixture").
+- `make e2e-apparmor`: the detection path on the VM `clamfleet-aa` (Debian 13, AppArmor enforcing); part of milestone 5 acceptance, together with `make e2e`. Needs `CFA_EXEC` and `CFA_HOST`; it fails, never skips (see `docs/testing.md`).
 - `make e2e-web`: Playwright browser tests of the console (`e2e/web`, `@playwright/test` 1.63.0 on Chromium 1243 from `/opt/playwright/browsers`); run from a fresh shell so `/opt/env.sh` is loaded.
 - Tests in `cmd/*` and `hack/webfixture` build binaries that `go test` caching cannot see: use `-count=1` when changing code they cover.
 - `make fixtures`: re-records `internal/agent/testdata` from the container. Never hand-edit recorded files.
@@ -37,4 +38,7 @@ Central management for ClamAV on Linux fleets. Spec: `docs/HANDOVER.md`. Current
 - No org-specific hostnames in fixtures; scrub them to `mirror.example`.
 - The agent never imports `internal/store`, `internal/server`, `internal/alert`, `net/smtp` or the SQLite and goose modules (a test pins it).
 - Agent credentials live only in `internal/agentauth` and `hosts.token_hash`; web-console users (later) get their own package and tables. Routes are registered only in `server.NewHandler` (table `server.Routes`).
+- Spooled items are untrusted input: clamd's group can write `spool/events`, so the reader opens only regular files, compares inodes, bounds every read, and **validates and re-encodes before sending** (`internal/agent/validate.go`); the request body is never the bytes from disk.
+- `clamfleet-agent event` runs as clamd's user with only `PATH` and two variables: no network, no token, no environment of ours, and the config is read with no fallback (an unreadable config spools nothing and says so). It only writes the spool; `run` sends.
+- Detection paths are personal data: never in a log line, an audit row, a URL or a summary payload (marker tests pin it). The page shows them only through `displayPath`.
 - Admin commands of `clamfleet-server` run as the server user (`sudo -u clamfleet-server`), not as root, for audit attribution and least privilege. Creating the database as root (`sudo clamfleet-server migrate` on a fresh install) leaves a root-owned file the server user cannot open, so `migrate` and `serve` refuse to create it when the effective user does not own its directory.

@@ -38,6 +38,8 @@ func postReport(t *testing.T, e *env, token string, mut func(m map[string]any)) 
 	}
 	// Fresh signatures and a running freshclam: the baseline is OK.
 	m["services"].(map[string]any)["freshclam"] = "active"
+	// The golden report comes from a host without a VirusEvent line; the baseline here is healthy.
+	m["clamd"].(map[string]any)["virus_event"] = "clamfleet"
 	m["ts"] = e.clock().Add(-10 * time.Second).UTC().Format(time.RFC3339)
 	if mut != nil {
 		mut(m)

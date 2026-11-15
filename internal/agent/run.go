@@ -3,11 +3,13 @@
 
 // run.go: the agent's service loop (`run`) and its single pass (`run --once`).
 //
-// There is no spool yet (Milestone 5): a failed send is logged with its class
-// and the next tick tries again, so one heartbeat is lost, never the loop.
-// The loop never exits on a send error; only cancelling the context stops it.
-// The loop sends one report immediately and then one per interval, driven by
-// an injected tick channel so tests do not wait for real time.
+// The service loop collects a report immediately and then once per interval,
+// driven by an injected tick channel so tests do not wait for real time, and
+// writes it to the spool; the Drainer (drain.go) sends from there, so a server
+// outage loses nothing within the spool's limits. The loop never exits on a
+// collect, spool or send error; only cancelling the context stops it.
+// `run --once` is unchanged: it sends one report directly and never touches the
+// spool.
 package agent
 
 import (
@@ -35,6 +37,13 @@ type Runner struct {
 	// Tick, when set, replaces the real ticker (tests).
 	Tick <-chan time.Time
 	Log  *slog.Logger
+	// Queue and Drain are used by Loop only: reports are written to Queue and
+	// Drain sends them (and the events the event command spooled).
+	Queue *Queue
+	Drain *Drainer
+	// Now is the clock for the hourly "spool full" warning.
+	Now        func() time.Time
+	lastFullAt time.Time
 }
 
 // Once collects and sends one report. It returns the send error (a *SendError
@@ -68,8 +77,9 @@ func (r *Runner) LogFailure(err error) {
 	r.Log.Error("report not sent", "class", "collect", "error", err.Error())
 }
 
-// Loop runs Once immediately and then on every tick until ctx is cancelled.
-// It returns nil on cancellation.
+// Loop collects a report now and then on every tick, writing each to the
+// spool, while the Drainer's two lanes send. It returns nil on cancellation,
+// after the lanes have stopped.
 func (r *Runner) Loop(ctx context.Context) error {
 	tick := r.Tick
 	if tick == nil {
@@ -77,19 +87,44 @@ func (r *Runner) Loop(ctx context.Context) error {
 		defer t.Stop()
 		tick = t.C
 	}
+	lanes, stopLanes := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() { r.Drain.Run(lanes); close(done) }()
+	defer func() { stopLanes(); <-done }()
 	for {
-		if err := r.Once(ctx); err != nil {
-			if ctx.Err() != nil {
-				return nil
-			}
-			r.LogFailure(err)
-		} else {
-			r.Log.Debug("report sent")
-		}
+		r.spoolReport(ctx)
 		select {
 		case <-ctx.Done():
 			return nil
 		case <-tick:
 		}
+	}
+}
+
+// spoolReport collects one report and puts it in the spool. A collection or
+// spool failure is logged and the loop carries on: the next tick tries again.
+func (r *Runner) spoolReport(ctx context.Context) {
+	report, problems, err := r.Collect(ctx)
+	if err != nil {
+		if ctx.Err() == nil {
+			r.LogFailure(err)
+		}
+		return
+	}
+	for _, p := range problems {
+		r.Log.Warn("collection problem", "source", p.Source, "error", p.Err.Error())
+	}
+	switch err := r.Queue.PutReport(report); {
+	case err == nil:
+		r.Drain.WakeReports()
+	case errors.Is(err, ErrSpoolFull):
+		// Events fill the cap. Say so once an hour: the heartbeat is dropped,
+		// the host will look STALE, and that is the signal to look at the spool.
+		if now := r.Now(); now.Sub(r.lastFullAt) >= time.Hour {
+			r.lastFullAt = now
+			r.Log.Error("spool full: heartbeat not spooled (events fill the cap; raise spool.max_mb or check the server)")
+		}
+	default:
+		r.Log.Error("cannot spool the report", "error", err.Error())
 	}
 }

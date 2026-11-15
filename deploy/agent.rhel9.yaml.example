@@ -15,5 +15,5 @@ freshclam_log: /var/log/freshclam.log
 # NOT probed (probing could start a socket-activated clamd). Set it to "" ONLY if
 # clamd is not managed by systemd (started by hand or another supervisor).
 units: {clamd: clamd@scan, freshclam: clamav-freshclam, clamonacc: clamav-clamonacc}
-spool: {dir: /var/lib/clamfleet/spool, max_mb: 50}
+spool: {dir: /var/lib/clamfleet/spool, max_mb: 50, max_event_days: 365}  # set in this file only: see agent.yaml.example
 scan: {paths: [/srv, /home], summary: /var/lib/clamfleet/last_scan.json}

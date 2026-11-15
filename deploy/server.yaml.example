@@ -36,6 +36,7 @@ health:
   daily_crit_hours: 72     # CRIT; must be greater than daily_warn_hours
   behind_warn: 2           # WARN when the daily version trails the fleet's newest by more than this
   scan_warn_hours: 48      # WARN when the last scan finished longer ago; 0 switches the rule off
+  require_virus_event: true  # WARN (virusevent_missing) when clamd.conf has no VirusEvent line
   eval_interval: 60s       # 1s to 60s: how often silent (STALE) hosts are noticed
 
 # Web console sign-in. The values shown are the defaults. Users are managed with
@@ -65,6 +66,11 @@ alert:
     deny_networks: []     # extra CIDRs that are never allowed, e.g. ["10.9.0.0/16"]
     ca_file: ""           # extra CA bundle (PEM) added to the system roots, for a receiver with a private CA
                           # Link-local, cloud metadata, multicast and unspecified addresses are always blocked.
+# Retention. Events are deleted this many days after they ARRIVED (not by the agent's detection
+# time: a spooled event can be old when it arrives). A file path is personal data. reports_days
+# and state_changes_days arrive in milestone 6. Environment: CLAMFLEET_SERVER_RETENTION_EVENTS_DAYS.
+retention:
+  events_days: 365        # 7 to 3650
 # Email alerts. Empty host = email is off (creating an email target is refused).
 smtp:
   host: ""                # e.g. smtp.example

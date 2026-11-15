@@ -3,10 +3,10 @@
 
 // Command clamfleet-agent reports ClamAV health to a ClamFleet server.
 //
-// Registered commands: "collect --dry-run", "run [--once]" and "version". The
-// other subcommands of the spec (event, scan) are added by the milestones that
-// implement them, so the usage text never advertises something that does not
-// exist.
+// Registered commands: "collect --dry-run", "run [--once]", "event" and
+// "version". The other subcommand of the spec (scan) is added by the milestone
+// that implements it, so the usage text never advertises something that does
+// not exist.
 //
 // Output contract: the report JSON goes to stdout and nothing else does, so
 // "clamfleet-agent collect --dry-run | jq" works. Logs and collection
@@ -51,6 +51,8 @@ commands:
   collect --dry-run [--config FILE]   print the report JSON, send nothing
   run [--once] [--config FILE]        send a report now and then every interval
                                       (--once: send one report, exit 0 on success, 1 otherwise)
+  event [--config FILE]               spool one detection; run by clamd's VirusEvent, not by hand
+                                      (reads CLAM_VIRUSEVENT_FILENAME and CLAM_VIRUSEVENT_VIRUSNAME)
   version                             print the agent version
 `
 
@@ -68,6 +70,8 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return runCollect(ctx, args[1:], stdout, stderr)
 	case "run":
 		return runRun(ctx, args[1:], stderr)
+	case "event":
+		return runEvent(args[1:], stderr)
 	case "-h", "--help", "help":
 		fmt.Fprint(stdout, usage)
 		return exitOK
@@ -188,10 +192,73 @@ func runRun(ctx context.Context, args []string, stderr io.Writer) int {
 		log.Info("report sent", "server", cfg.Server)
 		return exitOK
 	}
-	log.Info("agent started", "server", cfg.Server, "interval", cfg.Interval.String(), "version", version.Version)
+	// The service owns the spool: it refuses to start on a spool it cannot trust
+	// (missing, a symlink, not ours, world-writable) and takes the single-instance
+	// lock, so two services never drain the same directory.
+	for _, k := range []string{"SPOOL_DIR", "SPOOL_MAX_MB", "SPOOL_MAX_EVENT_DAYS"} {
+		if _, ok := os.LookupEnv(agent.EnvPrefix + k); ok {
+			// The event command runs as clamd's user with no such variable, so it
+			// would use the file's value while this service used the override.
+			log.Warn(agent.EnvPrefix + k + " is set in the environment, but the event command run by clamd cannot see it: set the spool keys in the config file")
+		}
+	}
+	queue, err := agent.OpenSpoolForRun(agent.SpoolOptions{
+		Dir: cfg.Spool.Dir, MaxBytes: int64(cfg.Spool.MaxMB) << 20,
+		MaxEventAge: time.Duration(cfg.Spool.MaxEventDays) * 24 * time.Hour,
+		AgentUID:    os.Getuid(), Now: time.Now, Log: log,
+	})
+	if err != nil {
+		log.Error("cannot open the spool", "dir", cfg.Spool.Dir, "error", err.Error())
+		return exitError
+	}
+	defer queue.Close()
+	r.Queue, r.Now = queue, time.Now
+	r.Drain = &agent.Drainer{
+		Q: queue, Send: sender.Send, Now: time.Now, Log: log,
+		MaxEventAge: time.Duration(cfg.Spool.MaxEventDays) * 24 * time.Hour,
+	}
+	log.Info("agent started", "server", cfg.Server, "interval", cfg.Interval.String(), "version", version.Version, "spool", cfg.Spool.Dir)
 	if err := r.Loop(ctx); err != nil {
 		log.Error("agent stopped", "error", err.Error())
 		return exitError
 	}
 	return exitOK
+}
+
+// runEvent is the VirusEvent command. clamd ignores the exit status (it
+// waits and discards it), so the code is for people and tests; what matters
+// is that every failure writes exactly one JSON line to stderr, which clamd
+// passes to its journal. That line holds the reason, the signature and the
+// spool directory, never the file path.
+func runEvent(args []string, stderr io.Writer) int {
+	fs := flag.NewFlagSet("event", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	cfgFlag := fs.String("config", "", "config file (default: "+agent.DefaultConfigPath+")")
+	if err := fs.Parse(args); err != nil {
+		return exitUsage
+	}
+	if fs.NArg() > 0 {
+		fmt.Fprintf(stderr, "event: unexpected argument %q\n", fs.Arg(0))
+		return exitUsage
+	}
+	res := agent.RunEvent(agent.EventDeps{
+		Getenv:     os.LookupEnv,
+		Now:        time.Now,
+		Hostname:   os.Hostname,
+		ConfigPath: *cfgFlag,
+		ReadFile:   os.ReadFile,
+		FS:         nil, // the real filesystem
+	})
+	if res.Exit != agent.EventSpooled {
+		log := slog.New(slog.NewJSONHandler(stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
+		attrs := []any{}
+		if res.Signature != "" {
+			attrs = append(attrs, "signature", res.Signature)
+		}
+		if res.SpoolDir != "" {
+			attrs = append(attrs, "spool", res.SpoolDir)
+		}
+		log.Error(res.Message, attrs...)
+	}
+	return int(res.Exit)
 }

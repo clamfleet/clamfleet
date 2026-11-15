@@ -45,6 +45,9 @@ type reportView struct {
 	Source       string
 	Services     []struct{ Name, State string }
 	Scan         *scanView
+	// VirusEvent says whether clamd.conf runs our event command: "set up",
+	// "another command", "not set" or "unknown" (older agent, or unreadable clamd.conf).
+	VirusEvent string
 }
 
 type historyView struct {
@@ -71,6 +74,10 @@ type hostBody struct {
 	ReportCount  int64
 	Report       *reportView
 	History      []historyView
+	// OpenEvents and Recent are the Detections card: the open count and the 10
+	// newest events, any state.
+	OpenEvents int64
+	Recent     []eventRowView
 	// Admin-only: left empty for a viewer by the handler, not only hidden in the template.
 	IsAdmin      bool
 	TokenCreated string
@@ -92,7 +99,17 @@ func buildReport(now time.Time, raw json.RawMessage) *reportView {
 	if json.Unmarshal(raw, &r) != nil {
 		return nil
 	}
-	v := &reportView{ReceivedFrom: r.Host, ReportTime: abs(r.TS), ClamdUp: r.Clamd.Up}
+	v := &reportView{ReceivedFrom: r.Host, ReportTime: abs(r.TS), ClamdUp: r.Clamd.Up, VirusEvent: "unknown"}
+	if ve := r.Clamd.VirusEvent; ve != nil {
+		switch *ve {
+		case proto.VirusEventClamfleet:
+			v.VirusEvent = "set up (clamfleet-agent event)"
+		case proto.VirusEventOther:
+			v.VirusEvent = "another command (a wrapper must call clamfleet-agent event)"
+		case proto.VirusEventNone:
+			v.VirusEvent = "not set: detections on this host are not reported"
+		}
+	}
 	if r.Clamd.Version != nil {
 		v.ClamdVersion = *r.Clamd.Version
 	}
@@ -147,6 +164,11 @@ func (w *Web) host(rw http.ResponseWriter, r *http.Request) {
 		Name: d.Name, State: stateText(d.State), Reasons: decodeReasons(d.StateReason),
 		Tags: d.Tags, HasToken: d.HasToken, ReportCount: d.ReportCount, ReportedName: d.ReportedName,
 		AgentVersion: d.AgentVersion, Report: buildReport(now, d.LastReport), IsAdmin: p.IsAdmin(),
+	}
+	b.OpenEvents = d.OpenEvents
+	ret := "/hosts/" + d.Name
+	for _, e := range d.RecentEvents {
+		b.Recent = append(b.Recent, w.eventRow(now, e, b.IsAdmin, ret, p.CSRFToken()))
 	}
 	b.Since, b.SinceAbs = optTime(now, d.StateSince)
 	_, b.FirstSeen = optTime(now, d.FirstSeen)

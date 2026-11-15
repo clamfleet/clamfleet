@@ -326,3 +326,38 @@ func TestUnreadableReport(t *testing.T) {
 		t.Fatalf("%+v", got)
 	}
 }
+
+// virusevent_missing fires only for an explicit "none": null (clamd.conf not
+// readable, or an agent from before milestone 5) and "other" (a wrapper we
+// cannot see into) stay quiet, and the switch turns it off.
+func TestVirusEventMissing(t *testing.T) {
+	for _, c := range []struct {
+		name    string
+		value   *string
+		require bool
+		want    []string
+	}{
+		{"none fires", ptr(proto.VirusEventNone), true, []string{RuleVirusEventMissing}},
+		{"clamfleet is fine", ptr(proto.VirusEventClamfleet), true, nil},
+		{"other is not judged", ptr(proto.VirusEventOther), true, nil},
+		{"null is not judged", nil, true, nil},
+		{"switched off", ptr(proto.VirusEventNone), false, nil},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			r := healthy()
+			r.Clamd.VirusEvent = c.value
+			th := DefaultThresholds()
+			th.RequireVirusEvent = c.require
+			res := Evaluate(input(r), th)
+			if got := rules(res); !reflect.DeepEqual(got, c.want) {
+				t.Fatalf("rules = %v, want %v", got, c.want)
+			}
+			if len(c.want) > 0 && res.State != StateWarn {
+				t.Fatalf("state %s, want WARN", res.State)
+			}
+		})
+	}
+	if !DefaultThresholds().RequireVirusEvent {
+		t.Fatal("the rule is on by default")
+	}
+}

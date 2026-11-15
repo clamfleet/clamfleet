@@ -114,6 +114,74 @@ nothing redelivered, and a `sent` row per delivery in `alert log --json`. `TestA
 points a target at a closed loopback port and expects `retrying` rows with `connection refused` while ingest
 keeps working.
 
+The detection scenarios (`e2e/event_e2e_test.go`, milestone 5 acceptance) wire the container's real clamd to the real
+`clamfleet-agent event` with a `VirusEvent` line (added to `clamd.conf` only in this file's tests; the snapshot
+reset restores it), run the agent as a service with the spool that `prepare-agent.sh` creates
+(`/var/lib/clamfleet` `clamfleet:clamav 0750`, `spool/` `2750`), and use the alert sink. The EICAR string is built
+at run time from two halves and never committed.
+
+- `TestEICARAlertWithin30s`: `clamdscan` of an EICAR file returns in under 5 s, and a signed `detection` reaches
+  the sink within 30 s with the real path and a signature containing EICAR, `source: clamd`; the spool is empty,
+  `event_count` is 1 and the next report carries `virus_event: clamfleet`. It logs the measured latency.
+- `TestEventSurvivesServerDowntime`: with the server stopped the event is spooled (owner `clamav:clamav`, mode
+  0640, `spool/events` `3770`), stays 10 s with a `network` failure in the agent journal and no path, and after
+  the restart exactly one alert arrives with `ts` before the restart and `received_at` after it.
+  `TestEventSurvivesAgentAndServerDowntime` stops both.
+- `TestEICARDuringBacklog`: 300 detections spooled during an outage, then one fresh one alerts within 30 s of its
+  scan; all 301 arrive.
+- `TestDetectionBurst`: 200 detections in one `--multiscan`: all stored within 60 s, exactly 10 sent one by one
+  (the summary is proven with the injected clock in the unit tests; the 10 minute window is not shortened
+  here), the agent's peak RSS (`VmHWM`) under 30 MB. It logs the scan time and the per-detection cost.
+- `TestEventFullStorage` (a 256 KiB tmpfs under the spool, mounted before the agent starts), `TestEventWithoutSpoolAccess`
+  (`spool/events` without its sticky bit) and `TestEventUnreadableConfig` (`agent.yaml` mode 0600): the scan returns
+  in under 5 s, clamd still answers, clamd's journal holds exactly one `event not spooled` line without the path,
+  and nothing is half written.
+
+`deploy/test/server.yaml` sets `health.require_virus_event: false`: most scenarios run a clamd with no `VirusEvent`
+line, which would add a second WARN reason next to the baseline the health scenarios assert.
+
+**Why the container cannot test AppArmor.** It has no `apparmor` package and clamd runs unconfined there, so a
+profile that refuses `VirusEvent` on a stock Debian host would pass every scenario above. That is what the VM is for.
+
+### The AppArmor VM (`make e2e-apparmor`)
+
+Part of the milestone 5 acceptance (decision 7): `make e2e` and `make e2e-apparmor` both green. It needs a
+throwaway **Debian 13 VM** with AppArmor enforcing (`aa-status`: `/usr/sbin/clamd` in enforce mode), ClamAV 1.4.3
+from the distribution, `apparmor-utils` (`aa-exec`), freshclam disabled, the signatures copied in, at least
+2 GiB of RAM (clamd needs well over 1 GB), and a snapshot named `clean`. Two settings with no default:
+`CFA_EXEC` (the command prefix that runs a command in the VM, for example `ssh <incus-host> sudo incus exec <vm> --`)
+and `CFA_HOST` (the ssh target of the Incus host that holds it). Set them in the environment or in `local.mk`
+(see `local.mk.example`). Without them the target **fails** with a pointer here; it never skips.
+
+The Makefile points the container suite's own variables at the VM (`CFT_EXEC=$CFA_EXEC`, `INCUS_HOST=$CFA_HOST`,
+`CT=clamfleet-aa`, `SNAP=clean`) and runs the scenarios of `e2e/apparmor_e2e_test.go` (build tags `e2e e2e_apparmor`).
+Each starts with `deploy/test/reset.sh` restoring the VM's `clean` snapshot (the VM reboots; the script waits
+until `incus exec` works and clamd can scan), `prepare-agent.sh` and `prepare-server.sh`, then
+`deploy/test/aa-prepare.sh`: both AppArmor files from `deploy/apparmor/`, the `VirusEvent` line, a check that it
+survives `dpkg-reconfigure clamav-daemon`, `apparmor_parser -r` of both profiles, a clamd restart. The suite ends
+with one more reset, so the VM finishes as it started. EICAR files live in `/tmp/e2e` (Debian's clamd profile allows
+`/tmp/**`, nothing under `/srv`).
+
+- Preconditions, asserted first: `aa-status --json` lists `clamfleet-agent-event` and `/usr/sbin/clamd` in enforce
+  mode, and `/proc/<clamd pid>/attr/current` reads `/usr/sbin/clamd (enforce)`.
+- `TestAppArmorEICARAlert`: the alert arrives within 30 s, clamd's journal holds no line from our command, and the
+  kernel log (`journalctl -k`) holds no `apparmor="DENIED"` line since the scan, except the stock one for clamd's read of
+  `/etc/hostname` (Debian's profile denies it on every detection, with or without our line: checked with `VirusEvent` removed).
+- `TestAppArmorTransitionFromClamd`: `VirusEvent` set to the agent with the token as its config file: the DENIED
+  line for the token names `profile="clamfleet-agent-event"`. With `ix` instead of `Px` it would name
+  `/usr/sbin/clamd`; unconfined there would be no line, only a YAML error.
+- `TestAppArmorEventProfileDenies`: as the user clamd runs as (`clamav`) under `aa-exec -p clamfleet-agent-event`, with the files' modes loosened first
+  (the kernel's own permission check comes before AppArmor and would refuse clamd's user without a line in the kernel
+  log; root does not work either, because without capability rules in the profile a root process is refused before
+  any file rule is reached), so only the profile can refuse: the token as config gives "permission denied" and a DENIED line; a
+  `spool.dir` of `spool/reports` or `spool/quarantine` that holds a real `events/` with the right owner and mode (the
+  command's own checks pass) is refused by the profile and no file appears; `run --once` cannot even create an inet
+  socket (a DENIED `class="net"` line).
+- `TestClamdOnlyExecsTheAgent`: a `VirusEvent` of `/usr/bin/touch /tmp/e2e/touched` gets a DENIED `exec` line under
+  clamd's profile and no file.
+
+If clamd runs out of memory in the VM, the run fails: the VM is not resized by the suite.
+
 Unknown JSON fields and body limits are not repeated here: they are tested through the real router
 and listener at functional level, and the container may not have curl.
 
@@ -253,6 +321,48 @@ and `/admin/alerts/<name>`): `alert-form-page`, `alert-form`, `alert-name`, `ale
 `alert-rotate-submit`, `alert-delete-open`, `alert-delete-confirm`, `alert-delete-submit`; on the key page:
 `secret-page`, `secret-notice`, `secret-value`, `secret-done`. Rotate and delete are inside `<details>`
 elements: click the `*-open` summary first.
+
+### Detections in the fixture
+
+The fixture posts 12 detections through the real `POST /v1/event` with the hosts' tokens, **before** the alert
+target exists and after the dispatcher has planned them (with no target they match none), so no seeded
+detection is ever delivered to the receiver. `ok01`'s two are then acknowledged by `admin@fixture.example`
+straight in the store. `fixture.json` has an `events` object:
+
+| Key | Content |
+|---|---|
+| `open_count` | 9: the number in the nav badge at the start (and the rows of the default Open filter) |
+| `ids_by_host` | event ids per host, oldest first (a merged duplicate counts once) |
+| `acked_ids`, `acked_by` | the two acknowledged events of `ok01` and the admin's email |
+
+| Host | Seeded detections |
+|---|---|
+| `crit01` | 2 open EICAR detections (`/srv/eicar/a.com`, `b.com`): the acknowledgement flow clicks one, then `fleet-open-crit01` reads 1 |
+| `xss01` | 5 open: a path with markup and a real U+202E (`/srv/<img src=x onerror=alert(1)>/` + RLO + `txt.exe`) and a signature with HTML; a path with the literal text `\u{202E}`; a path with a real U+2028; a file name with a real backslash (`back\slash.txt`, the agent sends it doubled); a path with a raw non-UTF-8 byte (`\xff`) |
+| `warn01` | 1 row shown "x2": one detection posted twice with two ids and the same key |
+| `alerts01` | 1 open detection |
+| `ok01` | 2 acknowledged detections, detected 3 h before they arrived ("received 3h later, spooled") |
+
+Selectors added for the Detections pages: `nav-events` and `nav-events-count` (every signed-in user); on
+`/events`: `events-page`, `events-filter`, `events-filter-host`, `events-filter-sig`, `events-filter-ack`,
+`events-filter-submit`, `events-count` ("N matching"), `events-table`, `events-empty` (no detection exists),
+`events-no-match` (the filters match none), `events-older`, `events-newest`, and, **for admins only**,
+`events-bulk-open` (a `<details>`: click it first), `events-bulk-expected` (the count the admin is shown) and
+`events-bulk-submit`; per row `event-row-<id>` (with `data-ack="true|false"`), `event-sig-<id>`,
+`event-path-<id>`, `event-occurrences-<id>` (only when more than one), `event-late-<id>`, `event-status-<id>`,
+`event-ackby-<id>` (once acknowledged), and, admins only and only while open, `event-ack-<id>`. On the fleet
+page: `fleet-open-<host>` and `fleet-count-open`; on a host page: `host-events`, `host-events-open`,
+`host-events-all`, `host-no-events` and `host-virusevent`; on the alert target form: `alert-detection-burst`.
+
+How the path is shown: an escape is `<span class="esc" title="...">\u{202E}</span>` (an invisible or
+direction-changing character, or `\xNN` for a non-UTF-8 byte), and literal text is plain text, so a spec can
+tell a real U+202E (an `.esc` element) from a file literally named `\u{202E}` (text). The raw characters
+(U+202E, U+2028) must never appear in the HTML.
+
+**Acknowledging.** As admin, `event-ack-<id>` is an htmx form: the row swaps to "Acknowledged by
+admin@fixture.example" without a page load and with no console or CSP error; a reload keeps it, `nav-events-count`
+is one lower and `fleet-open-<host>` follows. A viewer's page has no `event-ack-*` or `events-bulk-*` at all,
+and a `POST /events/<id>/ack` from the page context with the CSRF token answers 403.
 
 ## Re-recording fixtures (`make fixtures`)
 

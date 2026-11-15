@@ -830,7 +830,7 @@ func TestUIRouteTable(t *testing.T) {
 	e.addUser("adm@example.com", "admin", goodPW, false)
 	registerHost(t, e, "web01")
 
-	concrete := strings.NewReplacer("{$}", "", "{file}", "app.css", "{name}", "web01")
+	concrete := strings.NewReplacer("{$}", "", "{file}", "app.css", "{name}", "web01", "{id}", "1")
 	unauth := e.browser()
 	viewer := e.browser()
 	viewer.login("view@example.com", goodPW)

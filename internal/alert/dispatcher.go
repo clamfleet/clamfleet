@@ -5,7 +5,9 @@
 //
 // A pass: (1) if anything is flagged, held, due or expired, (2) release expired
 // leases, (3) plan, (4) claim AS MANY due deliveries as there are idle workers
-// and start each at once. Nothing is claimed that is not already being sent, so
+// and start each at once: state alerts first, then detections and summaries on
+// the workers that remain, never more than workers-1 of them at a time (one
+// worker is reserved for state alerts) and at most two per target. Nothing is claimed that is not already being sent, so
 // there are no queued claims that burn attempts without being tried and none to
 // lose in a crash.
 //
@@ -45,6 +47,9 @@ import (
 const (
 	// DefaultWorkers is the number of concurrent sends.
 	DefaultWorkers = 4
+	// MaxDetectionsPerTarget caps detection sends in flight to one target, so a
+	// dead receiver cannot occupy every worker (milestone 5, section 4.12).
+	MaxDetectionsPerTarget = 2
 	// leaseMargin is added to an attempt's hard deadline to form its lease.
 	leaseMargin = 30 * time.Second
 	// Retention is the fixed age after which finished deliveries and log rows are
@@ -124,6 +129,7 @@ type Dispatcher struct {
 
 	mu        sync.Mutex
 	inflight  int
+	inflightD int // of inflight, detections and summaries (the reserve counts these)
 	lastPrune time.Time
 	wg        sync.WaitGroup
 	wake      chan struct{}
@@ -221,6 +227,17 @@ func (d *Dispatcher) RunOnce(ctx context.Context) error {
 	return err
 }
 
+// Wake asks Run for a pass now, without waiting for the next tick. It never
+// blocks and is safe from any goroutine: ingest calls it after a new
+// detection, and the binary after each health evaluation, so an alert starts
+// within milliseconds of its cause.
+func (d *Dispatcher) Wake() {
+	select {
+	case d.wakeCh() <- struct{}{}:
+	default:
+	}
+}
+
 // Wait blocks until every started send has finished (tests).
 func (d *Dispatcher) Wait() { d.wg.Wait() }
 
@@ -255,17 +272,28 @@ func (d *Dispatcher) Pass(ctx context.Context) error {
 
 	d.mu.Lock()
 	idle := d.workers() - d.inflight
+	// Rule: one worker is kept for state alerts. Detections and summaries may
+	// hold at most workers-1 workers, whatever is idle, so a flood of detections
+	// (or a dead detection receiver hanging to its deadline) never delays a CRIT
+	// by more than the next pass, which a state transition's wake starts at once.
+	detections := max(d.workers()-1-d.inflightD, 0)
 	d.mu.Unlock()
 	if idle <= 0 {
 		return nil
 	}
-	claimed, err := d.Store.ClaimDeliveries(ctx, now, d.Lease(), idle)
+	claimed, err := d.Store.ClaimDeliveries(ctx, now, d.Lease(), store.ClaimLimits{
+		Total: idle, Detections: detections, PerTarget: MaxDetectionsPerTarget,
+	})
 	if err != nil {
 		return fmt.Errorf("claim alert deliveries: %w", err)
 	}
 	for _, c := range claimed {
+		detection := c.Kind != store.DeliveryStateChange
 		d.mu.Lock()
 		d.inflight++
+		if detection {
+			d.inflightD++
+		}
 		d.mu.Unlock()
 		d.wg.Add(1)
 		go func() {
@@ -273,6 +301,9 @@ func (d *Dispatcher) Pass(ctx context.Context) error {
 			defer func() {
 				d.mu.Lock()
 				d.inflight--
+				if detection {
+					d.inflightD--
+				}
 				d.mu.Unlock()
 				select { // a worker is idle: let Run claim again
 				case d.wakeCh() <- struct{}{}:

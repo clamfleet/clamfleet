@@ -58,3 +58,8 @@ dl.facts dd { margin: 0; }
 textarea { width: 100%; padding: .45rem; border: 1px solid var(--line); border-radius: 4px; font: inherit; }
 label.check { display: inline-block; font-weight: 400; margin: 0; }
 a.button { text-decoration: none; color: inherit; display: inline-block; }
+
+/* Detections (M5). .esc marks a character that is invisible or changes text direction, shown as
+   an escape so a hostile file name cannot hide what it is. */
+.esc { font-family: ui-monospace, monospace; font-size: 12px; background: #fff1c2; border: 1px solid #d4a72c; border-radius: 3px; padding: 0 .2rem; }
+td.path { word-break: break-all; font-family: ui-monospace, monospace; font-size: 13px; }

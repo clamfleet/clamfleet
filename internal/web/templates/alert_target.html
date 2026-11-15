@@ -42,6 +42,10 @@
 
     <p><label class="check"><input type="checkbox" name="state_changes" value="1"{{if .Body.State}} checked{{end}} data-testid="alert-state-changes"> Send state changes</label></p>
     <p><label class="check"><input type="checkbox" name="detections" value="1"{{if .Body.Detections}} checked{{end}} data-testid="alert-detections"> Send detections</label></p>
+    <p><label for="detection_burst">Summarise detections beyond</label>
+      <input type="text" id="detection_burst" name="detection_burst" value="{{.Body.Burst}}" size="5" maxlength="4" inputmode="numeric" autocomplete="off" data-testid="alert-detection-burst">
+      per host per 10 minutes (0 = send every detection on its own)</p>
+    <p class="hint">The first detections of a host in a 10 minute window are sent one by one; the rest of that window arrive as one summary alert at its end. Every detection stays on the Detections page. Summaries are not held by the state-change cooldown. Switching detections off while a summary is waiting discards it.</p>
     <p><label class="check"><input type="checkbox" name="enabled" value="1"{{if .Body.Enabled}} checked{{end}} data-testid="alert-enabled"> Enabled</label></p>
     {{if not .Body.Create}}<p class="hint" data-testid="alert-switchoff-hint">Switching a kind off, or disabling the target, cancels its pending alerts of that kind; switching it back on starts fresh (nothing is sent for the current state until it changes).{{if .Body.Pending}} <strong data-testid="alert-pending">{{.Body.Pending}} alert{{if ne .Body.Pending 1}}s are{{else}} is{{end}} pending now.</strong>{{end}}</p>{{end}}
     <p><button type="submit" class="primary" data-testid="alert-submit">{{if .Body.Create}}Create target{{else}}Save{{end}}</button> <a href="/admin/alerts">Cancel</a></p>

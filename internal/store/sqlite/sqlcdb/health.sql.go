@@ -133,7 +133,8 @@ func (q *Queries) InsertStateChange(ctx context.Context, arg InsertStateChangePa
 }
 
 const listFleet = `-- name: ListFleet :many
-SELECT id, name, last_seen, state, state_reason, state_since, daily_version, daily_built, clamd_version
+SELECT id, name, last_seen, state, state_reason, state_since, daily_version, daily_built, clamd_version,
+       (SELECT count(*) FROM events e WHERE e.host_id = hosts.id AND e.ack_at IS NULL) AS open_events
 FROM hosts WHERE token_hash IS NOT NULL ORDER BY name
 `
 
@@ -147,6 +148,7 @@ type ListFleetRow struct {
 	DailyVersion sql.NullInt64
 	DailyBuilt   sql.NullInt64
 	ClamdVersion sql.NullString
+	OpenEvents   int64
 }
 
 // The fleet page: hosts with a token only (a revoked host's state is frozen and
@@ -170,6 +172,7 @@ func (q *Queries) ListFleet(ctx context.Context) ([]ListFleetRow, error) {
 			&i.DailyVersion,
 			&i.DailyBuilt,
 			&i.ClamdVersion,
+			&i.OpenEvents,
 		); err != nil {
 			return nil, err
 		}

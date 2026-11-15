@@ -150,6 +150,32 @@ func RenderEmail(from, to string, targetID int64, payload []byte, now time.Time)
 		line("Target", p.Target)
 		line("Alert id", p.ID)
 		b.WriteString("\nPath and signature are text from the monitored host, shown escaped.\n")
+	case KindDetectionSummary:
+		var p DetectionSummaryPayload
+		if err := json.Unmarshal(payload, &p); err != nil {
+			return EmailMessage{}, fmt.Errorf("alert payload is not readable: %w", err)
+		}
+		m.Subject = fmt.Sprintf("[ClamFleet] %s: %d detections", p.Host, p.Count)
+		b.WriteString("ClamFleet: many detections were reported for one host; this is the summary of the ones\nthat were not sent one by one.\n\n")
+		line("Host", p.Host)
+		line("Detections", fmt.Sprintf("%d", p.Count))
+		line("Window", p.WindowStart+" to "+p.WindowEnd)
+		line("First", p.FirstTS+" (agent time)")
+		line("Last", p.LastTS+" (agent time)")
+		line("Tags", escapeText(strings.Join(p.Tags, ", ")))
+		if p.URL != nil {
+			line("Link", *p.URL)
+		}
+		line("Target", p.Target)
+		line("Alert id", p.ID)
+		b.WriteString("\nSignatures (text from the monitored host, shown escaped):\n")
+		for _, sc := range p.Signatures {
+			fmt.Fprintf(&b, "  - %s: %d\n", escapeText(sc.Signature), sc.Count)
+		}
+		if p.MoreSignatures > 0 {
+			fmt.Fprintf(&b, "  ... and %d more signatures\n", p.MoreSignatures)
+		}
+		b.WriteString("\nThe paths are on the events page; they are not sent by email.\n")
 	case KindTest:
 		var p TestPayload
 		if err := json.Unmarshal(payload, &p); err != nil {

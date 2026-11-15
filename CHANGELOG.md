@@ -10,6 +10,29 @@ All notable changes are listed here. The format follows Keep a Changelog; versio
 ## Unreleased
 
 ### Added
+- Milestone 5, detections (see `docs/detections.md`). clamd's `VirusEvent` runs the new `clamfleet-agent event`, which
+  writes the detection to a spool in the agent's state directory and never touches the network or the token, so
+  a detection survives a server outage. The spool is published with a no-replace `link()` after an `fsync`, has
+  a hard cap on real disk use (`spool.max_mb`, heartbeats are evicted before events, events are never evicted),
+  expires events after `spool.max_event_days`, and is read as untrusted input: only regular files, inode checks,
+  bounded reads, every field validated and re-encoded before sending. The agent sends in two lanes (detections
+  younger than a minute first, then the backlog oldest first; heartbeats separately, replayed ones marked `replay`
+  and stored by the server as history only). The server stores events with the agent's idempotency key (a
+  second genuine detection that collides is counted as "x2", never lost), wakes the alert dispatcher at once,
+  and a **Detections** page (filters, keyset paging, file names with bidi or line-separator characters shown
+  as visible escapes) with admin acknowledgement, per row or "all matching as of this id", and open counts on
+  the fleet, host and menu. A burst of detections per host and target (`detection_burst`, default 10 per 10
+  minutes) becomes individual alerts plus one `detection_summary`; state alerts are claimed first, one worker
+  is reserved for them and a target has at most 2 detection sends in flight. `retention.events_days`
+  (default 365) prunes events daily. New optional payload fields (schema stays 1): `clamd.virus_event`,
+  `report.replay`, `event.id`; new WARN rule `virusevent_missing` (`health.require_virus_event`). AppArmor
+  files for Debian are in `deploy/apparmor/`, proven by the new `make e2e-apparmor` on a VM. No new dependency.
+  **Upgrading from milestone 4:** upgrade the server first, then the agents. Existing alert targets get
+  `detection_burst` 10 (burst summaries), existing events show as open, hosts without a `VirusEvent` line get
+  the WARN `virusevent_missing` (`health.require_virus_event: false` switches it off), replayed heartbeats no
+  longer update `last_seen`, and one dispatcher worker is reserved for state alerts. Migration `00005` is
+  additive: stop the server and copy the database first; an older binary refuses the database. Set the
+  agent's spool keys in the config file, not the environment (the event command cannot see the environment).
 - Milestone 4, alerting by email and webhook (see `docs/alerts.md`). A host's state change, recovery included, and a
   detection become alerts for the targets that take them: each target has a minimum severity (a drop below it is
   sent once as "resolved for this target"), an optional any-of tag filter, and switches for state changes and

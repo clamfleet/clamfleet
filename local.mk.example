@@ -9,3 +9,9 @@
 CFT_EXEC ?= ssh <incus-host> sudo incus exec <container> --
 # INCUS_HOST: ssh target of the host that runs Incus.
 INCUS_HOST ?= <incus-host>
+#
+# The AppArmor VM (make e2e-apparmor, docs/testing.md "The AppArmor VM").
+# CFA_EXEC: command prefix that runs a command inside the VM (same rule about arguments).
+CFA_EXEC ?= ssh <incus-host> sudo incus exec <vm> --
+# CFA_HOST: ssh target of the Incus host that holds the VM (its `clean` snapshot is restored before each scenario).
+CFA_HOST ?= <incus-host>

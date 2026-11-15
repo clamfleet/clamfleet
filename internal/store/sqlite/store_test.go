@@ -395,3 +395,92 @@ func TestListHostsAndPing(t *testing.T) {
 		t.Fatal("Ping on a closed store must fail")
 	}
 }
+
+// A replayed heartbeat is history only: the row is stored, nothing about the
+// host moves. Each assertion pins one column a replay must not touch.
+func TestRecordReportReplayIsHistoryOnly(t *testing.T) {
+	ctx := context.Background()
+	s := openTemp(t)
+	h := addHost(t, s, "web01")
+	newest := rep("web01", t0.Add(time.Hour), "2.0", "prod")
+	record(t, s, h.ID, newest, t0.Add(time.Hour+time.Second))
+	before, err := s.HostByName(ctx, "web01")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	old := rep("web01", t0, "1.0", "stale-tag")
+	old.Replay = true
+	res := record(t, s, h.ID, old, t0.Add(2*time.Hour))
+	if !res.Stored || res.Newest {
+		t.Fatalf("a replay is stored and never newest: %+v", res)
+	}
+	after, err := s.HostByName(ctx, "web01")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !after.LastSeen.Equal(*before.LastSeen) {
+		t.Fatalf("last_seen moved from %v to %v", before.LastSeen, after.LastSeen)
+	}
+	if string(after.LastReport) != string(before.LastReport) || after.AgentVersion != "2.0" || !reflect.DeepEqual(after.Tags, []string{"prod"}) {
+		t.Fatalf("last_report, agent version or tags changed: %+v", after)
+	}
+	if n := count(t, s, `SELECT count(*) FROM reports WHERE host_id = ?`, h.ID); n != 2 {
+		t.Fatalf("%d report rows, want 2 (the replay is kept as history)", n)
+	}
+
+	// A replay with a NEWER ts than last_report (the newest was quarantined on
+	// the agent and only history got through) is still history only.
+	later := rep("web01", t0.Add(3*time.Hour), "3.0", "x")
+	later.Replay = true
+	if res := record(t, s, h.ID, later, t0.Add(3*time.Hour+time.Second)); !res.Stored || res.Newest {
+		t.Fatalf("%+v", res)
+	}
+	after2, _ := s.HostByName(ctx, "web01")
+	if string(after2.LastReport) != string(before.LastReport) || !after2.LastSeen.Equal(*before.LastSeen) {
+		t.Fatal("a newer-ts replay moved the host")
+	}
+
+	// A replayed duplicate of an existing ts changes nothing.
+	dup := newest
+	dup.Replay = true
+	if res := record(t, s, h.ID, dup, t0.Add(4*time.Hour)); res.Stored {
+		t.Fatalf("a duplicate was stored again: %+v", res)
+	}
+	if n := count(t, s, `SELECT count(*) FROM reports WHERE host_id = ?`, h.ID); n != 3 {
+		t.Fatalf("%d report rows, want 3", n)
+	}
+}
+
+// A host that has only ever sent replays has no first_seen: it never looked alive.
+func TestRecordReportReplayDoesNotSetFirstSeen(t *testing.T) {
+	ctx := context.Background()
+	s := openTemp(t)
+	h := addHost(t, s, "web01")
+	r := rep("web01", t0, "1.0")
+	r.Replay = true
+	record(t, s, h.ID, r, t0.Add(time.Minute))
+	got, err := s.HostByName(ctx, "web01")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.FirstSeen != nil || got.LastSeen != nil || len(got.LastReport) != 0 {
+		t.Fatalf("%+v", got)
+	}
+}
+
+// On an ord tie between two live reports the later arrival wins (the existing
+// "<=" rule), so a retry of the same instant from a second path is not lost.
+func TestRecordReportOrdTieLaterArrivalWins(t *testing.T) {
+	ctx := context.Background()
+	s := openTemp(t)
+	h := addHost(t, s, "web01")
+	a := rep("web01", t0, "1.0")
+	record(t, s, h.ID, a, t0)
+	c := rep("web01", t0.Add(time.Second), "3.0")
+	record(t, s, h.ID, c, t0) // ord = min(t0+1s, t0) = t0, the same as a
+	got, _ := s.HostByName(ctx, "web01")
+	if got.AgentVersion != "3.0" {
+		t.Fatalf("on a tie the later arrival must win: %s", got.AgentVersion)
+	}
+}

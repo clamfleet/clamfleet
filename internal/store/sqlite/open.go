@@ -53,6 +53,10 @@ type Store struct {
 	// update and the audit insert, so a test can prove that a failure there
 	// rolls both back. Always nil in production.
 	afterTokenUpdate func() error
+	// afterAckUpdate is a test hook: AckEvent and AckEvents call it between the
+	// acknowledgement UPDATE and the audit row, so a test can prove the two are
+	// one transaction.
+	afterAckUpdate func() error
 
 	// beforeHealthWrite is a test hook: EvaluateHosts calls it after reading
 	// its inputs and before writing, so a test can interleave a competing
@@ -64,6 +68,10 @@ type Store struct {
 	// ran and before anything is written, to prove a failure leaves no delivery,
 	// no notify row, no log row and the flags still set. Always nil in production.
 	beforeAlertPlanWrite func() error
+	// afterAlertPlanDeliveries is a test hook: PlanAlerts calls it after the
+	// windows and deliveries are written and before the flags are cleared, so a
+	// test can prove that a window is closed together with its summary or not at all.
+	afterAlertPlanDeliveries func() error
 
 	// betweenExpireWrites is a test hook: ExpireLeases calls it between failing a
 	// delivery and writing its 'failed' log row, to prove the two are one
