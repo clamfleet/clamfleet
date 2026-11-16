@@ -86,5 +86,5 @@ fails the server refuses to start and the old schema is untouched. Your configur
 
 `apt-get remove` / `dnf remove` stop and disable the units. **The server's database and key file are never
 deleted, not even by `apt-get purge`**: a purge prints where they are. The agent's purge removes its state
-directory (`/var/lib/clamfleet`: the spool and `last_scan.json`) but never follows a symlink and never touches a mount point below it.
+directory (`/var/lib/clamfleet`: the spool and `last_scan.json`) but never follows a symlink, and if a mount point is below it removes nothing and names the mount (one `rm -rf --one-file-system` walk, no per-entry checks).
 Users and groups stay (the usual practice for system users that may own files).

@@ -44,9 +44,12 @@ new_env() {
 			-e "s#^APPARMOR_PROFILE=.*#APPARMOR_PROFILE=$T/apparmor.d/clamfleet-agent-event#" \
 			-e "s#^SELINUX_MODULE=.*#SELINUX_MODULE=$T/selinux/clamfleet.cil#" \
 			-e "s#^SD_RUN=.*#SD_RUN=$T/run/systemd/system#" \
+			-e "s#^MOUNTINFO=.*#MOUNTINFO=$T/mountinfo#" \
 			-e "s#^SERVER_BIN=.*#SERVER_BIN=$T/bin/clamfleet-server#" \
 			"$src/$scr.sh" >"$T/$scr.sh"
 	done
+	# A mount table with the lines the purge must not trip over (field 5 is the mount point).
+	printf '%s\n' '24 1 8:1 / / rw - ext4 /dev/sda1 rw' '31 24 0:27 / /var/lib rw - tmpfs tmpfs rw' >"$T/mountinfo"
 	: >"$T/apparmor.d/clamfleet-agent-event"
 	cat >"$T/bin/log" <<'STUB'
 #!/bin/sh
@@ -117,12 +120,6 @@ STUB
 #!/bin/sh
 # id -u NAME: exists when listed in $T/users
 [ "$1" = -u ] && grep -qx "$2" "$T/users"
-STUB
-	cat >"$T/bin/mountpoint" <<'STUB'
-#!/bin/sh
-# mountpoint -q -- PATH: a mount when PATH is listed in $T/mounts
-[ "$1" = -q ] && shift; [ "$1" = -- ] && shift
-[ -e "$T/mounts" ] && grep -qxF "$1" "$T/mounts"
 STUB
 	cat >"$T/bin/clamfleet-server" <<'STUB'
 #!/bin/sh
@@ -314,16 +311,53 @@ run agent-postremove purge
 expect "purge safety: an inner symlink is removed without touching its target" test -f "$T/precious/marker"
 expect "purge safety: the rest is removed" test ! -e "$T/var/agent"
 cleanup
-# a mount point below the state directory (the mountpoint stub) is skipped with a notice
+# A mount point below the state directory (a line in the mount table): NOTHING is removed, and the
+# notice says which mount. The marker inside it and everything beside it survive.
 new_env
 mkdir -p "$T/var/agent/spool/events" "$T/var/agent/spool/quarantine"
-echo keep >"$T/var/agent/spool/events/marker"; echo gone >"$T/var/agent/spool/quarantine/q"; echo gone >"$T/var/agent/last_scan.json"
-echo "$T/var/agent/spool/events" >"$T/mounts"
+echo keep >"$T/var/agent/spool/events/marker"; echo stays >"$T/var/agent/spool/quarantine/q"; echo stays >"$T/var/agent/last_scan.json"
+echo "40 24 0:35 / $T/var/agent/spool/events rw - tmpfs tmpfs rw" >>"$T/mountinfo"
 run agent-postremove purge
 expect "purge across a mount: exit 0" test "$rc" -eq 0
 expect "purge across a mount: the marker inside the mount survives" test -f "$T/var/agent/spool/events/marker"
-expect "purge across a mount: the notice names the skipped mount" grep -q "not removing .*spool/events: it is a mount point" "$T/out"
-expect "purge across a mount: everything else is removed" bash -c "test ! -e '$T/var/agent/last_scan.json' && test ! -e '$T/var/agent/spool/quarantine'"
+expect "purge across a mount: the notice names the mount" grep -q "spool/events" "$T/out"
+expect "purge across a mount: nothing at all is removed" bash -c "test -f '$T/var/agent/last_scan.json' && test -f '$T/var/agent/spool/quarantine/q'"
+cleanup
+# The state directory itself being a mount point: kept.
+new_env
+echo x >"$T/var/agent/last_scan.json"
+echo "41 24 0:36 / $T/var/agent rw - ext4 /dev/sdb1 rw" >>"$T/mountinfo"
+run agent-postremove purge
+expect "purge of a mounted state directory: kept" test -f "$T/var/agent/last_scan.json"
+cleanup
+# A mount elsewhere that merely shares a prefix (/var/agent2) is not below the directory.
+new_env
+echo x >"$T/var/agent/last_scan.json"
+echo "42 24 0:37 / $T/var/agent2 rw - ext4 /dev/sdb1 rw" >>"$T/mountinfo"
+run agent-postremove purge
+expect "purge: a sibling mount with the same prefix does not block it" test ! -e "$T/var/agent"
+cleanup
+
+# THE RACE: the purge must never check a path and then act on it in a second step (a glob loop that
+# tests -d and then expands "$entry"/* can be raced into deleting what a swapped-in symlink points at).
+# It is ONE rm walk: the recorded rm calls are exactly one, rm -rf --one-file-system -- STATE_DIR, and the
+# purge branch of the script contains no glob.
+new_env
+mkdir -p "$T/var/agent/spool/events"; echo x >"$T/var/agent/spool/events/e.json"
+cat >"$T/bin/rm" <<'STUB'
+#!/bin/sh
+echo "rm $*" >>"$T/calls.log"
+exec /usr/bin/rm "$@"
+STUB
+chmod +x "$T/bin/rm"
+run agent-postremove purge
+expect "purge: exactly one rm, a single --one-file-system walk" bash -c "test \$(grep -c '^rm ' '$T/calls.log') -eq 1 && grep -qx 'rm -rf --one-file-system -- $T/var/agent' '$T/calls.log'"
+expect "purge: the state directory is gone" test ! -e "$T/var/agent"
+cleanup
+new_env
+sed -n '/^\tpurge)/,/^\t\t;;/p' "$src/agent-postremove.sh" | sed 's/#.*$//' >"$T/purge-branch"
+expect "purge: the purge branch uses no shell glob" bash -c "! grep -E '/\*|\.\[|\*\.' '$T/purge-branch'"
+expect "purge: the script has no per-entry loop (no check-then-use)" bash -c "! grep -E 'for entry|purge_tree|is_mount' '$src/agent-postremove.sh'"
 cleanup
 
 # ---------------------------------------------------------------- idempotence and recovery

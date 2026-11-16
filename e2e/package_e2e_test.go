@@ -463,7 +463,7 @@ func TestDebRemoveAndPurge(t *testing.T) {
 	sh(t, "test -f /var/lib/clamfleet-server/clamfleet.db && test -f /etc/clamfleet/server-secret.key")
 }
 
-// Purge never crosses a mount point: a tmpfs mounted at spool/events (as in the full-storage
+// Purge never crosses a mount point, and with one inside it removes nothing and names it: a tmpfs mounted at spool/events (as in the full-storage
 // scenario of milestone 5) with a marker file survives the purge, and the notice names it.
 func TestDebPurgeAcrossAMount(t *testing.T) {
 	installOld(t)
@@ -473,8 +473,9 @@ func TestDebPurgeAcrossAMount(t *testing.T) {
 	if got := sh(t, "cat /var/lib/clamfleet/spool/events/marker"); got != "keep" {
 		t.Fatalf("the file inside the mount did not survive the purge: %q", got)
 	}
-	if !strings.Contains(out, "not removing /var/lib/clamfleet/spool/events: it is a mount point") {
-		t.Fatalf("the notice does not name the skipped mount:\n%s", out)
+	if !strings.Contains(out, "it holds or is a mount point") || !strings.Contains(out, "/var/lib/clamfleet/spool/events") {
+		t.Fatalf("the notice does not name the mount:\n%s", out)
 	}
-	sh(t, "test ! -e /var/lib/clamfleet/last_scan.json")
+	// With a mount inside, the purge removes NOTHING (it never walks a tree it cannot fully leave).
+	sh(t, "test -f /var/lib/clamfleet/last_scan.json")
 }

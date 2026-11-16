@@ -13,41 +13,15 @@
 # The server's database and key file are never touched by anything here.
 STATE_DIR=/var/lib/clamfleet
 APPARMOR_PROFILE=/etc/apparmor.d/clamfleet-agent-event
+MOUNTINFO=/proc/self/mountinfo
 
 set -eu
 
-# purge_tree removes the contents of $1 without ever following a symlink and without
-# touching a mount point: a mounted directory (or a different st_dev) is left alone with
-# a notice, so an operator's mount inside the spool survives a purge. Returns 1 when
-# something was kept.
-purge_tree() {
-	# local is not POSIX but dash, bash and busybox all have it, and the recursion needs it.
-	local dir kept entry
-	dir=$1
-	kept=0
-	for entry in "$dir"/* "$dir"/.[!.]* "$dir"/..?*; do
-		if [ ! -e "$entry" ] && [ ! -L "$entry" ]; then continue; fi
-		if [ -L "$entry" ]; then
-			rm -f -- "$entry"
-		elif [ -d "$entry" ]; then
-			if is_mount "$entry" "$dir"; then
-				echo "clamfleet-agent: not removing $entry: it is a mount point" >&2
-				kept=1
-				continue
-			fi
-			purge_tree "$entry" || kept=1
-			rmdir "$entry" 2>/dev/null || kept=1
-		else
-			rm -f -- "$entry"
-		fi
-	done
-	return $kept
-}
-
-# is_mount: a mount point, or a directory on another device than its parent.
-is_mount() {
-	if command -v mountpoint >/dev/null 2>&1 && mountpoint -q -- "$1"; then return 0; fi
-	[ "$(stat -c %d -- "$1" 2>/dev/null)" != "$(stat -c %d -- "$2" 2>/dev/null)" ]
+# mounts_under prints every mount point at or below $1, read from the kernel's mount table
+# (field 5 of mountinfo). The paths keep mountinfo's octal escapes, which is fine for the
+# prefix match and for printing.
+mounts_under() {
+	awk -v d="$1" '$5 == d || index($5, d "/") == 1 { print $5 }' "$MOUNTINFO"
 }
 
 case "${1:-}" in
@@ -66,15 +40,22 @@ case "${1:-}" in
 		systemctl daemon-reload || true
 		;;
 	purge)
+		# The state directory is writable by the clamfleet user and, below spool/events, by clamd's
+		# group, while this runs as root. So nothing here may check a path and then act on it in a
+		# second step: a glob loop that tests "is this a directory" and then expands "$entry"/* can
+		# be raced into deleting whatever a swapped-in symlink points at (/etc). rm does it in one
+		# walk with openat and no symlink following, and --one-file-system never leaves the
+		# filesystem of the directory it was given.
 		if [ -L "$STATE_DIR" ]; then
 			rm -f -- "$STATE_DIR" # a symlink: the link only, never its target
 		elif [ -d "$STATE_DIR" ]; then
-			if is_mount "$STATE_DIR" "$(dirname "$STATE_DIR")"; then
-				echo "clamfleet-agent: not removing $STATE_DIR: it is a mount point" >&2
-			elif purge_tree "$STATE_DIR"; then
-				rmdir "$STATE_DIR" 2>/dev/null || true
+			mounts="$(mounts_under "$STATE_DIR")"
+			if [ -n "$mounts" ]; then
+				# A mount inside (or the directory itself): remove nothing, say what and where.
+				echo "clamfleet-agent: not removing $STATE_DIR: it holds or is a mount point:" >&2
+				printf '%s\n' "$mounts" | sed 's/^/  /' >&2
 			else
-				echo "clamfleet-agent: $STATE_DIR was kept because it holds a mount point or a file that could not be removed" >&2
+				rm -rf --one-file-system -- "$STATE_DIR"
 			fi
 		fi
 		systemctl daemon-reload || true
