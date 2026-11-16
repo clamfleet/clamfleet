@@ -32,6 +32,7 @@ Re-run the script instead of editing. It scrubs private addresses and lab host n
 | `freshclam/failure.log` | A failed run: mirror unreachable (loopback port 9), never the real CDN. |
 | `freshclam/journal-rerun.txt`, `journal-failure.txt` | `journalctl -u clamav-freshclam -o cat` for the same two runs through the real unit. |
 | `services/*.show` | `systemctl show --property=LoadState,ActiveState` for a unit that is active, inactive, failed, and one that does not exist. |
+| `clamdscan/<case>.out`, `.err`, `.exit`, `.paths` | stdout, stderr, exit status and arguments of `clamdscan --config-file=... --multiscan` for a clean directory, an infected one (EICAR), an unreadable one, several paths, and clamd down. Recorded 2026-11-16 (ClamAV 1.4.3). Shows that `--multiscan` prints one `OK` line per clean path ARGUMENT, not one per file, and no file count. |
 | `debian13/os-release`, `debian13/clamd.conf` | Verbatim files. |
 
 ## Not captured

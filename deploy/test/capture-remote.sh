@@ -8,7 +8,7 @@
 # capture-fixtures.sh for what is recorded and why freshclam is handled with care.
 set -euo pipefail
 cap=/tmp/cap
-mkdir -p $cap/clamd $cap/cvd/initial $cap/freshclam $cap/services $cap/debian13
+mkdir -p $cap/clamd $cap/cvd/initial $cap/freshclam $cap/services $cap/debian13 $cap/clamdscan
 
 # --- clean-state items -------------------------------------------------------
 cp /etc/os-release $cap/debian13/os-release
@@ -35,6 +35,42 @@ show clamav-daemon clamd-active
 show clamav-freshclam freshclam-inactive
 show clamav-clamonacc clamonacc-inactive
 show clamav-no-such-unit not-found
+
+# --- clamdscan: the outputs the scan wrapper parses (milestone 6) --------------
+# One directory of files, scanned with the exact flags the wrapper uses
+# (`--config-file=... --multiscan`): clean, infected (EICAR, built here), an
+# unreadable file (clamd runs as its own user, so root-only 0600 files give an
+# error), several paths, and clamd not answering. stdout, stderr and the exit
+# status of each run are recorded apart. Nothing here touches the network.
+rm -rf /tmp/scan-fx
+mkdir -p /tmp/scan-fx/clean /tmp/scan-fx/infected /tmp/scan-fx/private
+chmod 755 /tmp/scan-fx /tmp/scan-fx/clean /tmp/scan-fx/infected
+printf 'hello\n' > /tmp/scan-fx/clean/a.txt
+printf 'world\n' > /tmp/scan-fx/clean/b.txt
+# The EICAR test string, assembled so this script is not itself flagged by a scanner.
+e1='X5O!P%@AP[4\PZX54(P^)7CC)7}$EICAR'; e2='-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*'
+printf '%s%s\n' "$e1" "$e2" > /tmp/scan-fx/infected/eicar.com
+chmod 644 /tmp/scan-fx/infected/eicar.com
+printf 'secret\n' > /tmp/scan-fx/private/secret.txt
+chmod 700 /tmp/scan-fx/private; chmod 600 /tmp/scan-fx/private/secret.txt
+chmod 644 /tmp/scan-fx/clean/*
+scan_rec() { # $1 = name, then the paths
+  name="$1"; shift
+  set +e
+  clamdscan --config-file=/etc/clamav/clamd.conf --multiscan "$@" > $cap/clamdscan/$name.out 2> $cap/clamdscan/$name.err
+  echo $? > $cap/clamdscan/$name.exit
+  set -e
+  printf '%s\n' "$@" > $cap/clamdscan/$name.paths
+}
+scan_rec clean /tmp/scan-fx/clean
+scan_rec infected /tmp/scan-fx/infected
+scan_rec error /tmp/scan-fx/private
+scan_rec several /tmp/scan-fx/clean /tmp/scan-fx/infected /tmp/scan-fx/private
+systemctl stop clamav-daemon clamav-daemon.socket 2>/dev/null || systemctl stop clamav-daemon
+scan_rec down /tmp/scan-fx/clean
+systemctl start clamav-daemon
+clamdscan --ping 90:2 >/dev/null
+rm -rf /tmp/scan-fx
 
 # --- clamd stopped: the unit state, never a socket connection ------------------
 systemctl stop clamav-daemon

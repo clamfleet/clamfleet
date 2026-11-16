@@ -82,11 +82,22 @@ const (
 	DefaultSpoolEventDays = 365
 )
 
-// Scan configures the scheduled scan wrapper (used from a later milestone).
+// Scan configures the scheduled scan wrapper (`clamfleet-agent scan`, milestone 6).
 type Scan struct {
 	Paths   []string `yaml:"paths"`
 	Summary string   `yaml:"summary"`
+	// Timeout bounds one scan: when it expires the clamdscan process group is
+	// stopped and the summary records exit 2 with the counts so far. Additive key
+	// (milestone 6): without it a hung clamdscan would hold the timer's service forever.
+	Timeout time.Duration `yaml:"timeout"`
 }
+
+// Bounds of scan.timeout.
+const (
+	MinScanTimeout     = time.Minute
+	MaxScanTimeout     = 72 * time.Hour
+	DefaultScanTimeout = 12 * time.Hour
+)
 
 // DefaultConfig returns the Debian defaults.
 func DefaultConfig() Config {
@@ -99,7 +110,7 @@ func DefaultConfig() Config {
 		FreshclamLog: "/var/log/clamav/freshclam.log",
 		Units:        Units{Clamd: "clamav-daemon", Freshclam: "clamav-freshclam", Clamonacc: "clamav-clamonacc"},
 		Spool:        Spool{Dir: "/var/lib/clamfleet/spool", MaxMB: 50, MaxEventDays: DefaultSpoolEventDays},
-		Scan:         Scan{Paths: []string{}, Summary: "/var/lib/clamfleet/last_scan.json"},
+		Scan:         Scan{Paths: []string{}, Summary: "/var/lib/clamfleet/last_scan.json", Timeout: DefaultScanTimeout},
 	}
 }
 
@@ -124,6 +135,9 @@ func (c Config) Validate() error {
 	}
 	if c.Spool.MaxEventDays < MinSpoolEventDays || c.Spool.MaxEventDays > MaxSpoolEventDays {
 		return fmt.Errorf("spool.max_event_days must be between %d and %d, got %d", MinSpoolEventDays, MaxSpoolEventDays, c.Spool.MaxEventDays)
+	}
+	if c.Scan.Timeout < MinScanTimeout || c.Scan.Timeout > MaxScanTimeout {
+		return fmt.Errorf("scan.timeout must be between %s and %s, got %s", MinScanTimeout, MaxScanTimeout, c.Scan.Timeout)
 	}
 	paths := map[string]string{
 		"token_file": c.TokenFile, "clamd_conf": c.ClamdConf, "db_dir": c.DBDir,

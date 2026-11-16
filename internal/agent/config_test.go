@@ -19,7 +19,7 @@ func TestEnvNamesMatchDocumentedTable(t *testing.T) {
 	c := DefaultConfig()
 	want := []string{
 		"CLAMFLEET_AGENT_CLAMD_CONF", "CLAMFLEET_AGENT_DB_DIR", "CLAMFLEET_AGENT_FRESHCLAM_LOG", "CLAMFLEET_AGENT_INTERVAL",
-		"CLAMFLEET_AGENT_SCAN_PATHS", "CLAMFLEET_AGENT_SCAN_SUMMARY", "CLAMFLEET_AGENT_SERVER",
+		"CLAMFLEET_AGENT_SCAN_PATHS", "CLAMFLEET_AGENT_SCAN_SUMMARY", "CLAMFLEET_AGENT_SCAN_TIMEOUT", "CLAMFLEET_AGENT_SERVER",
 		"CLAMFLEET_AGENT_SPOOL_DIR", "CLAMFLEET_AGENT_SPOOL_MAX_EVENT_DAYS", "CLAMFLEET_AGENT_SPOOL_MAX_MB", "CLAMFLEET_AGENT_TAGS", "CLAMFLEET_AGENT_TLS_CLIENT_CERT",
 		"CLAMFLEET_AGENT_TLS_CLIENT_KEY", "CLAMFLEET_AGENT_TOKEN_FILE",
 		"CLAMFLEET_AGENT_UNITS_CLAMD", "CLAMFLEET_AGENT_UNITS_CLAMONACC", "CLAMFLEET_AGENT_UNITS_FRESHCLAM",
@@ -37,14 +37,17 @@ func TestDefaultsValidate(t *testing.T) {
 
 func TestValidateRejects(t *testing.T) {
 	for name, mut := range map[string]func(*Config){
-		"zero interval":  func(c *Config) { c.Interval = 0 },
-		"zero max_mb":    func(c *Config) { c.Spool.MaxMB = 0 },
-		"huge max_mb":    func(c *Config) { c.Spool.MaxMB = 10241 },
-		"short expiry":   func(c *Config) { c.Spool.MaxEventDays = 29 },
-		"long expiry":    func(c *Config) { c.Spool.MaxEventDays = 3651 },
-		"relative db":    func(c *Config) { c.DBDir = "var/lib/clamav" },
-		"relative scan":  func(c *Config) { c.Scan.Paths = []string{"srv"} },
-		"relative clamd": func(c *Config) { c.ClamdConf = "clamd.conf" },
+		"zero interval":          func(c *Config) { c.Interval = 0 },
+		"zero max_mb":            func(c *Config) { c.Spool.MaxMB = 0 },
+		"huge max_mb":            func(c *Config) { c.Spool.MaxMB = 10241 },
+		"short expiry":           func(c *Config) { c.Spool.MaxEventDays = 29 },
+		"long expiry":            func(c *Config) { c.Spool.MaxEventDays = 3651 },
+		"relative db":            func(c *Config) { c.DBDir = "var/lib/clamav" },
+		"relative scan":          func(c *Config) { c.Scan.Paths = []string{"srv"} },
+		"relative clamd":         func(c *Config) { c.ClamdConf = "clamd.conf" },
+		"scan.timeout below 1m":  func(c *Config) { c.Scan.Timeout = 59 * time.Second },
+		"scan.timeout above 72h": func(c *Config) { c.Scan.Timeout = 72*time.Hour + time.Second },
+		"scan.timeout zero":      func(c *Config) { c.Scan.Timeout = 0 },
 	} {
 		c := DefaultConfig()
 		mut(&c)
@@ -144,5 +147,18 @@ func TestValidateRun(t *testing.T) {
 	// collect needs none of it: the plain Validate still accepts no server.
 	if err := DefaultConfig().Validate(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestScanTimeoutBounds(t *testing.T) {
+	if DefaultConfig().Scan.Timeout != 12*time.Hour {
+		t.Fatalf("default %s", DefaultConfig().Scan.Timeout)
+	}
+	for _, d := range []time.Duration{time.Minute, 12 * time.Hour, 72 * time.Hour} {
+		c := DefaultConfig()
+		c.Scan.Timeout = d
+		if err := c.Validate(); err != nil {
+			t.Errorf("%s: %v", d, err)
+		}
 	}
 }

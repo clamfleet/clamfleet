@@ -3,10 +3,8 @@
 
 // Command clamfleet-agent reports ClamAV health to a ClamFleet server.
 //
-// Registered commands: "collect --dry-run", "run [--once]", "event" and
-// "version". The other subcommand of the spec (scan) is added by the milestone
-// that implements it, so the usage text never advertises something that does
-// not exist.
+// Registered commands: "collect --dry-run", "run [--once]", "event", "scan" and
+// "version". The usage text never advertises something that does not exist.
 //
 // Output contract: the report JSON goes to stdout and nothing else does, so
 // "clamfleet-agent collect --dry-run | jq" works. Logs and collection
@@ -53,6 +51,8 @@ commands:
                                       (--once: send one report, exit 0 on success, 1 otherwise)
   event [--config FILE]               spool one detection; run by clamd's VirusEvent, not by hand
                                       (reads CLAM_VIRUSEVENT_FILENAME and CLAM_VIRUSEVENT_VIRUSNAME)
+  scan [--config FILE]                scan scan.paths with clamdscan and write the summary the report carries
+                                      (exit 0 clean, 1 infected, 2 error; never starts clamd; run by clamfleet-scan.service)
   version                             print the agent version
 `
 
@@ -72,6 +72,8 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return runRun(ctx, args[1:], stderr)
 	case "event":
 		return runEvent(args[1:], stderr)
+	case "scan":
+		return runScan(ctx, args[1:], stderr)
 	case "-h", "--help", "help":
 		fmt.Fprint(stdout, usage)
 		return exitOK
@@ -261,4 +263,31 @@ func runEvent(args []string, stderr io.Writer) int {
 		log.Error(res.Message, attrs...)
 	}
 	return int(res.Exit)
+}
+
+// runScan is `clamfleet-agent scan`. Exit codes follow clamdscan: 0 clean, 1
+// infected, 2 error or refusal (clamd inactive, no paths, timeout). No scanned
+// path is ever logged.
+func runScan(ctx context.Context, args []string, stderr io.Writer) int {
+	fs := flag.NewFlagSet("scan", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	cfgFlag := fs.String("config", "", "config file (default: $CLAMFLEET_AGENT_CONFIG or "+agent.DefaultConfigPath+")")
+	if err := fs.Parse(args); err != nil {
+		return exitUsage
+	}
+	if fs.NArg() > 0 {
+		fmt.Fprintf(stderr, "scan: unexpected argument %q\n", fs.Arg(0))
+		return exitUsage
+	}
+	log := slog.New(slog.NewJSONHandler(stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	cfg, ok := loadConfig(log, *cfgFlag, false)
+	if !ok {
+		return agent.ScanError
+	}
+	sc := &agent.Scanner{Cfg: cfg, Exec: agent.RealExec, Now: time.Now, Log: log}
+	code, err := sc.Run(ctx)
+	if err != nil {
+		log.Error("scan", "error", err.Error())
+	}
+	return code
 }

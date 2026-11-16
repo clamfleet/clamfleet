@@ -29,7 +29,7 @@ found anything.
   - freshclam: last successful and last failed update, from the systemd journal, the log file, or as a last resort the database file times
   - systemd state of the clamd, freshclam and clamonacc units
   - host name, OS release, agent version and configured tags
-  - the last scan summary, if a summary file exists (the scan command itself is planned)
+  - the last scan summary, if a summary file exists (written by `clamfleet-agent scan`)
 - `clamfleet-agent run` sends a report now and then every `interval` (default 5 minutes);
   `run --once` sends one and exits 0 on success, 1 otherwise. The service writes every heartbeat to a **spool**
   on disk and sends from there, so a server outage loses nothing within the spool's limits.
