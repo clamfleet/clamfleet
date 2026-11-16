@@ -12,7 +12,9 @@ and are not in the repository.
 
 How to read it:
 
-- The number is the position in the decision list of that milestone's plan. M6 covers 6a (packages, operations)
+- Milestone 1 cites its decisions as "M1 Q<n>": its plan numbered them Q1 to Q10, and a few post-review decisions
+  that no file cites by number.
+- For milestones 2 to 6, the number is the position in the decision list of that milestone's plan. M6 covers 6a (packages, operations)
   and 6b (external sign-in); its decisions 16 to 22 are 6b's.
 - Only decisions that a tracked file cites are listed. A decision no file refers to is not here.
 - A reference such as "plan 4.8" or a `docs/plans/...` path in a comment points at those private design notes.
@@ -22,11 +24,17 @@ How to read it:
 
 ## Milestone 1: the agent
 
-- **Q2, YAML module.** `go.yaml.in/yaml/v3`. Anything the specification names that is deprecated or unmaintained is
+- **M1 Q2, YAML module.** `go.yaml.in/yaml/v3`. Anything the specification names that is deprecated or unmaintained is
   replaced by its maintained successor from the start.
-- **Q4, socket activation.** The agent never starts clamd: it asks systemd for the unit's state first and does not
+- **M1 Q4, socket activation.** The agent never starts clamd: it asks systemd for the unit's state first and does not
   touch the socket while the unit is inactive.
-- **Q7, copyright.** `SPDX-FileCopyrightText: The ClamFleet Authors`.
+- **M1 Q6, other distributions.** Only Debian 13 is tested live. The RHEL 9 example configuration and its fixtures are
+  hand-written, labelled untested, and real recordings are welcome. (Milestone 6 later tested the RHEL 9 family on
+  AlmaLinux 9; see M6 decision 11.)
+- **M1 Q7, copyright.** `SPDX-FileCopyrightText: The ClamFleet Authors`.
+- **M1 Q8, freshclam state.** Read freshclam's entries from the systemd journal first, then its log file, then the
+  database file modification times. The report says which source was used (`freshclam.source`).
+- **M1 Q9, problems.** The payload has no `problems` field; problems go only to the agent's log (the journal).
 - **Post-review decision 1, environment prefixes.** `CLAMFLEET_AGENT_` for the agent and `CLAMFLEET_SERVER_` for the
   server. This departs from the specification's single `CLAMFLEET_CONFIG`.
 
