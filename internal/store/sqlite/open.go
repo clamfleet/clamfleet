@@ -221,6 +221,24 @@ func (s *Store) Migrate(ctx context.Context) error {
 	return nil
 }
 
+// MigrateUpTo applies pending migrations up to and including version v. The
+// binary migrates to the newest with Migrate; this exists so tests can build a
+// database as an older release left it.
+func (s *Store) MigrateUpTo(ctx context.Context, v int64) error {
+	if _, err := s.prov.UpTo(ctx, v); err != nil {
+		return fmt.Errorf("migrate to %d: %w", v, err)
+	}
+	return nil
+}
+
+// PendingMigrations returns the schema version of the database and the newest
+// version this binary knows. from < to means Migrate would change the schema;
+// from == 0 is a fresh database.
+func (s *Store) PendingMigrations(ctx context.Context) (from, to int64, err error) {
+	from, err = s.SchemaVersion(ctx)
+	return from, s.newestEmbedded(), err
+}
+
 // CheckMigrated returns ErrPendingMigrations unless the schema is exactly at
 // this binary's version. The CLI commands other than "migrate" call it so
 // they never migrate themselves.

@@ -60,7 +60,8 @@ const usage = `usage: clamfleet-server <command>
 
 commands:
   serve [--config FILE] [--log-level LEVEL]   run the server (migrates the database first)
-  migrate [--config FILE]                     create or upgrade the database schema
+  migrate [--config FILE] [--no-backup]       create or upgrade the database schema; backs the database up first
+                                              (into backup.dir) when the schema changes, and refuses if the backup fails
   backup [--config FILE] [--dir DIR] [--keep N] [--verify]
                                               write a consistent copy of the database; prints its path (run as the server user)
   host add NAME                               register a host; prints its token once
@@ -178,6 +179,7 @@ func newFlags(name string, stderr io.Writer) (*flag.FlagSet, *string) {
 }
 
 func (a *app) serve(ctx context.Context, args []string) int {
+	restrictiveUmask()
 	fs, cfgFlag := newFlags("serve", a.stderr)
 	lvl := fs.String("log-level", "info", "debug, info, warn or error (info logs every request; debug adds health checks)")
 	if err := fs.Parse(args); err != nil {
@@ -205,7 +207,10 @@ func (a *app) serve(ctx context.Context, args []string) int {
 	}
 	if err == nil {
 		defer st.Close()
-		err = st.Migrate(ctx)
+		// No flag here: past a failed backup, run `migrate --no-backup` once, then start.
+		// serve exits before any loop starts, so no retention prune ever runs on a
+		// database that failed to back up or to migrate.
+		err = a.migrateWithBackup(ctx, log, cfg, st, false)
 	}
 	if err != nil {
 		log.Error("database", "error", err.Error())
@@ -303,7 +308,9 @@ func (a *app) serve(ctx context.Context, args []string) int {
 const alertInterval = 5 * time.Second
 
 func (a *app) migrate(ctx context.Context, args []string) int {
+	restrictiveUmask()
 	fs, cfgFlag := newFlags("migrate", a.stderr)
+	noBackup := fs.Bool("no-backup", false, "migrate without the backup first (the way past a failing backup)")
 	if err := fs.Parse(args); err != nil {
 		return exitUsage
 	}
@@ -320,7 +327,7 @@ func (a *app) migrate(ctx context.Context, args []string) int {
 	}
 	if err == nil {
 		defer st.Close()
-		err = st.Migrate(ctx)
+		err = a.migrateWithBackup(ctx, log, cfg, st, *noBackup)
 	}
 	if err != nil {
 		log.Error("migrate", "error", err.Error())
