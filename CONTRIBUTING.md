@@ -41,7 +41,7 @@ run in CI is excluded with a build tag in a reviewed change, never with a runtim
 The end-to-end suite runs the real agent and server in a container with a real ClamAV and systemd:
 
 ```
-make e2e-docker  # what CI runs; needs Docker, and builds a Debian 13 image (about 15 minutes)
+make e2e-docker  # what CI runs; needs Docker, and builds a Debian 13 image (about 10 minutes)
 make e2e         # the same suite in an Incus container you prepare yourself
 make e2e-web     # Playwright browser tests of the console
 ```
