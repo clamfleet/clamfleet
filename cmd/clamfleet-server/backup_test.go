@@ -135,7 +135,10 @@ func TestBackupOfADamagedDatabaseFails(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for i := len(b) / 2; i < len(b)/2+8192 && i < len(b); i++ {
+	// The middle half of the file, not one page range: how the pages are laid out depends on the schema
+	// (migration 00007 shifted them, and 8 KiB in the middle then fell on pages integrity_check does not
+	// read), while what this test needs is only that some page in use is damaged.
+	for i := len(b) / 4; i < 3*len(b)/4; i++ {
 		b[i] = 0xAB
 	}
 	if err := os.WriteFile(db, b, 0o600); err != nil {
