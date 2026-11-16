@@ -1,0 +1,25 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# SPDX-FileCopyrightText: The ClamFleet Authors
+#
+# One backup of the database (started by clamfleet-server-backup.timer, which ships
+# DISABLED): a verified VACUUM INTO copy into backup.dir, keeping backup.keep of them.
+# The key file is not in the database: back it up separately (docs/operations.md).
+[Unit]
+Description=ClamFleet server database backup
+Documentation=https://github.com/clamfleet/clamfleet
+
+[Service]
+Type=oneshot
+User=clamfleet-server
+ExecStart=/usr/bin/clamfleet-server backup --verify
+StateDirectory=clamfleet-server
+StateDirectoryMode=0700
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+NoNewPrivileges=yes
+RestrictAddressFamilies=AF_UNIX
+CapabilityBoundingSet=
+UMask=0077
+Nice=10
+IOSchedulingClass=idle

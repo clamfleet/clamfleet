@@ -32,6 +32,7 @@ test:
 # Shell tests that need no container (fake ssh).
 scripts-test:
 	./deploy/test/reset_test.sh
+	./deploy/test/units_test.sh
 
 # sqlc is a build-time tool only (pinned in CLAUDE.md): the generated code uses database/sql.
 generate:
