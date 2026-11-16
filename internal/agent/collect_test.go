@@ -172,7 +172,7 @@ func TestCollectHostnameFailureIsFatal(t *testing.T) {
 	}
 }
 
-// Decision Q4: the agent never starts clamd. On a socket-activated clamd, a
+// M1 Q4: the agent never starts clamd. On a socket-activated clamd, a
 // connection to the socket of a stopped service would start it.
 func TestClamdSocketIsNeverTouchedUnlessUnitIsUsable(t *testing.T) {
 	cases := []struct {

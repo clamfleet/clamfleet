@@ -200,7 +200,7 @@ func runsFromLogFile(path string, loc *time.Location) ([]FreshclamRun, error) {
 	return runs, nil
 }
 
-// runsFromJournal reads the freshclam unit's journal entries (decision Q8:
+// runsFromJournal reads the freshclam unit's journal entries (M1 Q8:
 // the first source tried, because the log file is often unreadable by the
 // agent user). The agent user must be in group systemd-journal; without it
 // journalctl exits 0 with no output, which is treated as "no runs", not as a

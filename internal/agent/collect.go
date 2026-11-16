@@ -5,7 +5,7 @@
 //
 // Responsibilities: the Collector, which runs every source in a fixed order,
 // turns each failure into a Problem plus a null or degraded field (only a
-// hostname failure aborts), and enforces decision Q4: the clamd socket is
+// hostname failure aborts), and enforces M1 Q4: the clamd socket is
 // probed only when that cannot start clamd.
 // Dependencies: the other collectors in this package, and the proto package.
 // All outside effects (clock, zone, exec, hostname) are injected.
@@ -29,7 +29,7 @@ const collectDeadline = 20 * time.Second
 
 // Problem is a non-fatal failure of one data source. The report still goes
 // out with that part null or degraded; problems are logged, not sent
-// (decision Q9: the payload has no "problems" field).
+// (M1 Q9: the payload has no "problems" field).
 type Problem struct {
 	Source string
 	Err    error
@@ -113,7 +113,7 @@ func (c *Collector) Collect(ctx context.Context) (proto.Report, []Problem, error
 
 // collectClamdGuarded probes the clamd socket only when that cannot start clamd.
 //
-// Rule (decision Q4): the agent never starts clamd. On Debian, and wherever
+// Rule (M1 Q4): the agent never starts clamd. On Debian, and wherever
 // clamd is socket-activated, connecting to the socket of a stopped clamd makes
 // systemd start it, which would hide the very outage the report exists to
 // show and change the host. So the socket is touched only when the clamd unit

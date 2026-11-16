@@ -48,7 +48,7 @@ Re-run the script instead of editing. It scrubs private addresses and lab host n
 ## Hand-written (`handmade/`)
 
 Written by a person from documentation, **not captured from a real host**. RHEL 9 is untested
-live (decision Q6); contributions of real recordings are welcome.
+live (M1 Q6); contributions of real recordings are welcome.
 
 - `clamd.rhel9.conf`, `os-release.rhel9`: RHEL 9 family layout.
 - `clamd.tcp-only.conf`: a clamd with no `LocalSocket`.
