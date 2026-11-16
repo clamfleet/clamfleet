@@ -414,6 +414,7 @@ func TestPruneEventsByArrivalInBatchesWithCascades(t *testing.T) {
 	}
 	rec(t, s, h.ID, event("a", aid(50), t0.Add(-365*24*time.Hour), "/spooled", "S"), cutoff.Add(time.Hour))
 	rec(t, s, h.ID, event("a", aid(51), t0, "/edge", "S"), cutoff)
+	exec(t, s, `UPDATE events SET alert_pending = 0`) // alerts planned: the guard of PruneEvents is tested apart
 	n, err := s.PruneEvents(ctx, cutoff, 2) // three batches: 2, 2, 1
 	if err != nil || n != 5 {
 		t.Fatalf("pruned %d err %v, want 5", n, err)
@@ -511,5 +512,53 @@ func TestHostDetailAndFleetShowOpenEvents(t *testing.T) {
 	}
 	if got["a"] != 11 || got["b"] != 1 {
 		t.Fatalf("fleet open counts %v", got)
+	}
+}
+
+// Rule (the M5 fix): an old event whose alert is unfinished, or that is held in
+// an OPEN window, is never pruned. Pruning it would cascade-delete a pending
+// delivery or shrink a summary not yet sent. When the delivery finishes and the
+// window closes, the next prune removes it.
+func TestPruneEventsKeepsUnfinishedAlertsAndOpenWindowMembers(t *testing.T) {
+	ctx := context.Background()
+	s := openTemp(t)
+	h := addHost(t, s, "a")
+	hid := itoa(h.ID)
+	old := t0.Add(-48 * time.Hour)
+	for i := 1; i <= 5; i++ {
+		rec(t, s, h.ID, event("a", aid(i), t0, fmt.Sprintf("/p%d", i), "S"), old)
+	}
+	// ids 1..5 in insertion order. 1: alert_pending (kept). 2: a retrying delivery (kept).
+	// 3: member of an open window (kept). 4: finished delivery (goes). 5: nothing (goes).
+	exec(t, s, `UPDATE events SET alert_pending = 0 WHERE id <> 1`)
+	exec(t, s, `INSERT INTO alert_targets (id, name, type, config, created_at, updated_at) VALUES (1, 't', 'webhook', '{}', 1, 1)`)
+	exec(t, s, `INSERT INTO alert_deliveries (id, alert_id, target_id, host_id, event_id, kind, payload, status, created_at) VALUES (1, 'a', 1, `+hid+`, 2, 'detection', '{}', 'pending', 1)`)
+	exec(t, s, `INSERT INTO alert_deliveries (id, alert_id, target_id, host_id, event_id, kind, payload, status, created_at, finished_at) VALUES (2, 'b', 1, `+hid+`, 4, 'detection', '{}', 'sent', 1, 2)`)
+	exec(t, s, `INSERT INTO alert_detection_windows (id, target_id, host_id, window_start) VALUES (1, 1, `+hid+`, 1)`)
+	exec(t, s, `INSERT INTO alert_window_events (window_id, event_id) VALUES (1, 3)`)
+
+	n, err := s.PruneEvents(ctx, t0, 10)
+	if err != nil || n != 2 {
+		t.Fatalf("pruned %d err %v, want 2 (the finished and the unalerted event)", n, err)
+	}
+	if left := count(t, s, `SELECT count(*) FROM events WHERE id IN (1,2,3)`); left != 3 {
+		t.Fatal("an event with an unfinished alert or an open window was pruned")
+	}
+	if c := count(t, s, `SELECT count(*) FROM alert_deliveries WHERE id = 1 AND status = 'pending'`); c != 1 {
+		t.Fatal("the pending delivery was cascaded away")
+	}
+	if c := count(t, s, `SELECT count(*) FROM alert_window_events`); c != 1 {
+		t.Fatal("window membership was cascaded away")
+	}
+	// The alert is planned, the delivery sent and the window closed: now they go.
+	exec(t, s, `UPDATE events SET alert_pending = 0 WHERE id = 1`)
+	exec(t, s, `UPDATE alert_deliveries SET status = 'sent', finished_at = 5 WHERE id = 1`)
+	exec(t, s, `UPDATE alert_detection_windows SET closed_at = 6, outcome = 'summarised' WHERE id = 1`)
+	n, err = s.PruneEvents(ctx, t0, 10)
+	if err != nil || n != 3 {
+		t.Fatalf("second prune: %d err %v, want 3", n, err)
+	}
+	if left := count(t, s, `SELECT count(*) FROM events`); left != 0 {
+		t.Fatalf("%d events left", left)
 	}
 }

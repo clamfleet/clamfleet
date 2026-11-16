@@ -59,6 +59,12 @@ func TestRetentionRunner(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	// With no alert targets the planner has nothing to do but clear the flags: the
+	// events are "planned", so the prune guard (an unfinished alert keeps its event)
+	// does not apply to them.
+	if _, err := st.PlanAlerts(ctx, clk.Now(), 0, func(store.AlertPlanInput) store.AlertPlanOutput { return store.AlertPlanOutput{} }); err != nil {
+		t.Fatal(err)
+	}
 	logs := &strings.Builder{}
 	var lmu sync.Mutex
 	log := slog.New(slog.NewJSONHandler(writerFunc(func(p []byte) (int, error) { lmu.Lock(); defer lmu.Unlock(); return logs.Write(p) }), nil))

@@ -388,7 +388,12 @@ func (q *Queries) PruneClosedWindows(ctx context.Context, arg PruneClosedWindows
 
 const pruneEvents = `-- name: PruneEvents :execrows
 DELETE FROM events WHERE id IN (
-  SELECT e2.id FROM events e2 WHERE e2.received_at < ?1 ORDER BY e2.id LIMIT ?2
+  SELECT e2.id FROM events e2
+  WHERE e2.received_at < ?1 AND e2.alert_pending = 0
+    AND NOT EXISTS (SELECT 1 FROM alert_deliveries d WHERE d.event_id = e2.id AND d.finished_at IS NULL)
+    AND NOT EXISTS (SELECT 1 FROM alert_window_events m JOIN alert_detection_windows w ON w.id = m.window_id
+                    WHERE m.event_id = e2.id AND w.closed_at IS NULL)
+  ORDER BY e2.id LIMIT ?2
 )
 `
 
@@ -399,6 +404,10 @@ type PruneEventsParams struct {
 
 // Retention counts from ARRIVAL (received_at), not the agent's ts: a spooled
 // event can be old when it arrives, and must not be pruned the moment it lands.
+// Rule: an event whose alert is not finished, or that is held in an OPEN detection
+// window, is never pruned. The cascade would delete a pending delivery (the alert
+// is lost without a trace) or shrink a summary that has not been sent yet.
+// Unfinished means alert_pending = 1 or a delivery with no finished_at.
 func (q *Queries) PruneEvents(ctx context.Context, arg PruneEventsParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, pruneEvents, arg.Before, arg.Batch)
 	if err != nil {

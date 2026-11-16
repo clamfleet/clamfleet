@@ -119,7 +119,9 @@ type EventStore interface {
 	AckEvents(ctx context.Context, f EventFilter, upto, expected int64, now time.Time, a Audit) (int64, error)
 	// PruneEvents deletes events received before `before`, `batch` rows per
 	// transaction, and returns how many. Receipts, window membership and the
-	// events' alert rows go with them by cascade.
+	// events' alert rows go with them by cascade. Rule: an event whose alert is
+	// unfinished (alert_pending, or a delivery not finished) or that is a member
+	// of an open detection window is kept until that is over.
 	PruneEvents(ctx context.Context, before time.Time, batch int) (int64, error)
 	// PruneAlertWindows deletes closed detection windows closed before `before`
 	// (their membership cascades), in batches.
