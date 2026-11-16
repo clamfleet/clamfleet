@@ -8,6 +8,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/pem"
+	"fmt"
 	"io"
 	"log/slog"
 	"math/big"
@@ -16,6 +17,7 @@ import (
 	"net/http/httptrace"
 	"os"
 	"path/filepath"
+	"runtime/pprof"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -29,6 +31,9 @@ type reloadEnv struct {
 	addr   string
 	cfg    Config
 	reload chan struct{}
+	// served is the return value of ServeListenerReload, set when it returns, so a watchdog
+	// dump can say whether the server had already stopped.
+	served atomic.Value
 	logs   *syncBuf
 	a, b   testtls.Bundle // two independent CAs and server certificates
 }
@@ -76,7 +81,11 @@ func startReload(t *testing.T, mtls bool) *reloadEnv {
 	ctx, stop := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, "ok") })
-	go func() { done <- ServeListenerReload(ctx, ln, e.cfg, h, log, e.reload) }()
+	go func() {
+		err := ServeListenerReload(ctx, ln, e.cfg, h, log, e.reload)
+		e.served.Store(fmt.Sprintf("%v", err))
+		done <- err
+	}()
 	t.Cleanup(func() {
 		stop()
 		select {
@@ -85,6 +94,23 @@ func startReload(t *testing.T, mtls bool) *reloadEnv {
 			t.Error("server did not stop")
 		}
 	})
+	// Wait until the server has read its certificate files and says it is listening. Listen has
+	// already bound the port, so clients could connect at once, but the server reads the files only
+	// when ServeListenerReload runs on its own goroutine. A test that starts replacing the files
+	// before that read (the load test does, immediately) can hand the server cert B with key A:
+	// ServeListenerReload then returns "private key does not match public key", nothing drains
+	// e.reload any more, and the test blocks on its channel send until the go test timeout.
+	// Seen under CPU load, two runs of 200 out of two.
+	deadline := time.Now().Add(10 * time.Second)
+	for !strings.Contains(e.logs.String(), `"msg":"listening"`) {
+		if v := e.served.Load(); v != nil {
+			t.Fatalf("the server stopped before it was listening: %v", v)
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the server did not log \"listening\" within 10 s:\n%s", e.logs.String())
+		}
+		time.Sleep(time.Millisecond)
+	}
 	return e
 }
 
@@ -308,10 +334,28 @@ func TestTLSResumptionCannotOutliveAClientCAChange(t *testing.T) {
 	}
 }
 
+// watchdog aborts the test binary with a dump of every goroutine when the test has not finished
+// after d. A hang of this test was seen once and ran until the 10 minute go test timeout, which
+// names the stuck goroutines only in a huge dump of the whole package; this one fires early and
+// is the first thing in the output. It panics instead of t.Fatal because a hung test goroutine
+// can never return to report a failure, and FailNow from another goroutine is not allowed.
+func watchdog(t *testing.T, d time.Duration, e *reloadEnv) {
+	t.Helper()
+	timer := time.AfterFunc(d, func() {
+		var b strings.Builder
+		pprof.Lookup("goroutine").WriteTo(&b, 2)
+		panic("test " + t.Name() + " still running after " + d.String() +
+			"; ServeListenerReload returned: " + fmt.Sprint(e.served.Load()) + " (<nil> = still serving); server log:\n" + e.logs.String() +
+			"\ngoroutines:\n" + b.String())
+	})
+	t.Cleanup(func() { timer.Stop() })
+}
+
 // 50 reloads while 8 goroutines handshake continuously (run with -race): no
 // handshake fails and every handshake sees the old or the new certificate.
 func TestTLSReloadUnderLoad(t *testing.T) {
 	e := startReload(t, false)
+	watchdog(t, 60*time.Second, e)
 	serials := []*big.Int{readSerial(t, e.a.Cert), readSerial(t, e.b.Cert)}
 	var stop atomic.Bool
 	var wg sync.WaitGroup
