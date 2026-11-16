@@ -44,6 +44,9 @@ var (
 	// and local accounts are never linked by email (decision 19: that is the classic account
 	// takeover), so the sign-in is refused and nothing is written.
 	ErrEmailInUse = errors.New("email in use by another user")
+	// ErrTooManyOIDCStates: too many OIDC sign-ins are in progress (MaxOIDCStates). Starting one
+	// needs no session, so the table must not be growable without bound by an anonymous caller.
+	ErrTooManyOIDCStates = errors.New("too many OIDC sign-ins in progress")
 )
 
 // Actor kinds of an audit row: the admin CLI, or a signed-in console user.
@@ -476,6 +479,10 @@ type OIDCState struct {
 	ExpiresAt    time.Time
 }
 
+// MaxOIDCStates bounds the sign-ins in progress. A person signing in needs one for under ten
+// minutes; this many at once means someone is filling the table.
+const MaxOIDCStates = 10000
+
 // ExternalStore persists users of external sign-in and the OIDC login states.
 type ExternalStore interface {
 	// ExternalLogin runs in ONE write transaction:
@@ -490,7 +497,8 @@ type ExternalStore interface {
 	//  6. set last_login_at and write user.login with detail.
 	// An error rolls everything back, a user created in step 1 included.
 	ExternalLogin(ctx context.Context, id ExternalIdentity, s Session, now time.Time, a Audit, detail map[string]string) (User, error)
-	// CreateOIDCState stores a sign-in in progress.
+	// CreateOIDCState stores a sign-in in progress, after removing the expired ones; ErrTooManyOIDCStates
+	// when MaxOIDCStates live ones exist.
 	CreateOIDCState(ctx context.Context, st OIDCState) error
 	// TakeOIDCState deletes and returns the state for the cookie hash (DELETE ... RETURNING):
 	// ErrNotFound when it was used already, expired or never existed. One-time by construction.

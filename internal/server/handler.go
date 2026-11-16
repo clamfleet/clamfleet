@@ -70,6 +70,10 @@ func Routes() []Route {
 		{"GET", "/static/{file}", AuthPublic},
 		{"GET", "/login", AuthPublic},
 		{"POST", "/login", AuthPublic},
+		// OpenID Connect (6b). Public class: no session exists yet. The start form is covered by the
+		// cross-origin check; the callback is a GET that only proceeds with the state cookie.
+		{"POST", "/login/oidc", AuthPublic},
+		{"GET", "/login/oidc/callback", AuthPublic},
 		// The second sign-in step. Public class: the caller has no session yet; the
 		// handlers require a valid login challenge (cookie) and answer 303 to /login without one.
 		{"GET", "/login/totp", AuthPublic},
@@ -148,6 +152,8 @@ type Deps struct {
 	// LDAP is the directory sign-in (BuildLDAP; NewHandlerFromConfig sets it from the
 	// configuration); nil means LDAP is off.
 	LDAP web.Directory
+	// OIDC is the OpenID Connect sign-in (BuildOIDC; NewHandlerFromConfig sets it); nil means OIDC is off.
+	OIDC web.OIDCProvider
 	// MetricsToken is the bearer token of GET /metrics; nil means metrics are off
 	// and the route answers 404. NewHandlerFromConfig reads it from metrics.token_file.
 	MetricsToken []byte
@@ -169,6 +175,11 @@ func NewHandlerFromConfig(c Config, d Deps) (http.Handler, error) {
 		return nil, err
 	} else if dir != nil {
 		d.LDAP = dir
+	}
+	if oc, err := BuildOIDC(c, d.Now); err != nil {
+		return nil, err
+	} else if oc != nil {
+		d.OIDC = oc
 	}
 	if d.MetricsToken, err = loadMetricsToken(c.Metrics); err != nil {
 		return nil, err
@@ -206,8 +217,8 @@ func NewHandler(d Deps) http.Handler {
 	}
 	console := web.New(web.Deps{
 		Store: d.Store, Auth: sessions, Hasher: d.Hasher, Throttle: webauth.NewThrottle(d.Now), TOTPThrottle: webauth.NewThrottle(d.Now), Keys: d.Keys, Now: d.Now, Log: d.Log,
-		ClientIP:     func(r *http.Request) string { return api.ClientIP(r, d.TrustedProxies) },
-		LDAP:         d.LDAP,
+		ClientIP: func(r *http.Request) string { return api.ClientIP(r, d.TrustedProxies) },
+		LDAP:     d.LDAP, OIDC: d.OIDC, OIDCName: d.Console.OIDC.DisplayName,
 		LocalEnabled: d.Console.Local.Enabled, TOTPRequired: d.Console.Local.TOTPRequired, Version: d.Version,
 		Alerts: alertDeps(d.Alerts),
 	})
@@ -267,6 +278,7 @@ func NewHandler(d Deps) http.Handler {
 func sourcesFor(d Deps) map[string]bool {
 	s := d.Console.EnabledSources()
 	s[store.AuthLDAP] = s[store.AuthLDAP] && d.LDAP != nil
+	s[store.AuthOIDC] = s[store.AuthOIDC] && d.OIDC != nil
 	return s
 }
 

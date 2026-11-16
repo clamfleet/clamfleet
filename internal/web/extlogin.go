@@ -88,7 +88,7 @@ func (w *Web) ldapLogin(rw http.ResponseWriter, r *http.Request, identifier, pas
 		}
 		return
 	}
-	w.completeExternal(rw, r, id.ExternalIdentity, id.DN, identifier, next, ip, outcome)
+	w.completeExternal(rw, r, id.ExternalIdentity, id.DN, next, ip, outcome)
 }
 
 const (
@@ -109,7 +109,7 @@ func (w *Web) auditLoginFailed(r *http.Request, identifier, ip, reason string) {
 // completeExternal turns a verified identity into a user and a session, in ONE transaction
 // (store.ExternalLogin), sets the cookie and redirects. It writes the response in every case
 // and sets outcome for the throttle. dn is the LDAP DN ("" for OIDC), recorded on success only.
-func (w *Web) completeExternal(rw http.ResponseWriter, r *http.Request, id store.ExternalIdentity, dn, identifier, next, ip string, outcome *webauth.Outcome) {
+func (w *Web) completeExternal(rw http.ResponseWriter, r *http.Request, id store.ExternalIdentity, dn, next, ip string, outcome *webauth.Outcome) {
 	// Drop whatever session the browser came with, then issue a new one: no session fixation.
 	if err := w.Auth.Destroy(r.Context(), r); err != nil {
 		w.Log.Warn("cannot delete the previous session", "error", err.Error())

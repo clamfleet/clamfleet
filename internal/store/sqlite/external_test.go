@@ -211,3 +211,29 @@ func TestOIDCStateIsOneTime(t *testing.T) {
 		t.Fatalf("the live state was deleted: %v", err)
 	}
 }
+
+// Starting a sign-in needs no session: the table of sign-ins in progress is bounded, and expired rows make room.
+func TestOIDCStatesAreBounded(t *testing.T) {
+	ctx := context.Background()
+	s := openTemp(t)
+	// Fill the table directly (10,000 transactions would only slow the test down).
+	if _, err := s.w.Exec(`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM n WHERE i < ?)
+		INSERT INTO oidc_login_states (token_hash, state, nonce, code_verifier, next_path, created_at, expires_at)
+		SELECT CAST(i AS BLOB), 's', 'n', 'v', '/', ?, ? FROM n`, store.MaxOIDCStates, t0.Unix(), t0.Add(10*time.Minute).Unix()); err != nil {
+		t.Fatal(err)
+	}
+	st := store.OIDCState{TokenHash: hash("new"), State: "s", Nonce: "n", CodeVerifier: "v", NextPath: "/", CreatedAt: t0.Add(time.Minute), ExpiresAt: t0.Add(11 * time.Minute)}
+	if err := s.CreateOIDCState(ctx, st); !errors.Is(err, store.ErrTooManyOIDCStates) {
+		t.Fatalf("%v", err)
+	}
+	// Once the rows have expired they make room (the insert sweeps them first).
+	st.CreatedAt, st.ExpiresAt = t0.Add(11*time.Minute), t0.Add(21*time.Minute)
+	if err := s.CreateOIDCState(ctx, st); err != nil {
+		t.Fatal(err)
+	}
+	var n int
+	_ = s.r.QueryRow(`SELECT count(*) FROM oidc_login_states`).Scan(&n)
+	if n != 1 {
+		t.Fatalf("%d rows after the sweep", n)
+	}
+}

@@ -141,6 +141,8 @@ func (w *Web) Handlers() map[string]http.HandlerFunc {
 		"GET /static/{file}":                      w.static,
 		"GET /login":                              w.loginPage,
 		"POST /login":                             w.loginSubmit,
+		"POST /login/oidc":                        w.oidcStart,
+		"GET /login/oidc/callback":                w.oidcCallback,
 		"GET /login/totp":                         w.loginTOTPPage,
 		"POST /login/totp":                        w.loginTOTPSubmit,
 		"POST /logout":                            w.logout,

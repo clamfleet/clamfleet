@@ -434,7 +434,6 @@ func TestLDAPNoSecretInLogsAndAudit(t *testing.T) {
 	}
 }
 
-
 // A cookie the browser brings to the sign-in is never reused: it is deleted and a new token is issued
 // (no session fixation), exactly as for a local sign-in.
 func TestLDAPSignInReplacesThePresentedSession(t *testing.T) {

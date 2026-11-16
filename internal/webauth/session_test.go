@@ -317,3 +317,39 @@ func TestPrincipalActor(t *testing.T) {
 		}
 	}
 }
+
+// The OIDC state cookie token and the session token cannot be mistaken for each other.
+func TestOIDCTokenIsNotASessionToken(t *testing.T) {
+	tok, hash, err := NewOIDCToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ParseOIDCToken(tok) != nil || ParseToken(tok) == nil {
+		t.Fatal("an OIDC token must parse as one and never as a session token")
+	}
+	s, _, _ := NewToken()
+	if ParseOIDCToken(s) == nil {
+		t.Fatal("a session token parsed as an OIDC state token")
+	}
+	if string(hash) != string(HashToken(tok)) || len(hash) != 32 {
+		t.Fatal("hash")
+	}
+	for _, bad := range []string{"", "cfo_", "cfo_" + strings.Repeat("A", 43), "cfo_" + strings.Repeat("!", 43), tok + "A"} {
+		if bad == "cfo_"+strings.Repeat("A", 43) {
+			continue // well-formed base64 of 32 bytes: format-valid, the hash lookup decides
+		}
+		if ParseOIDCToken(bad) == nil {
+			t.Errorf("%q parsed", bad)
+		}
+	}
+	c := NewOIDCCookie(tok, true)
+	if c.Name != "__Host-clamfleet_oidc" || c.SameSite != http.SameSiteLaxMode || !c.Secure || !c.HttpOnly || c.MaxAge != 600 {
+		t.Fatalf("%+v", c)
+	}
+	if p := NewOIDCCookie(tok, false); p.Name != "clamfleet_oidc" || p.Secure {
+		t.Fatalf("%+v", p)
+	}
+	if cl := ClearOIDCCookie(true); cl.MaxAge != -1 || cl.Value != "" {
+		t.Fatalf("%+v", cl)
+	}
+}

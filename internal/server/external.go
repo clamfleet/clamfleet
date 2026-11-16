@@ -9,6 +9,7 @@ package server
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/clamfleet/clamfleet/internal/extauth"
 	"github.com/clamfleet/clamfleet/internal/secrets"
@@ -41,4 +42,32 @@ func BuildLDAP(c Config) (*extauth.Directory, error) {
 		return nil, fmt.Errorf("auth.ldap: %w", err)
 	}
 	return d, nil
+}
+
+// BuildOIDC returns the client for auth.oidc, or nil when it is switched off. It reads the client
+// secret file (key-file permission rule) and the CA bundle now and does no network I/O: discovery
+// is lazy, so a provider that is down at start only disables SSO until it comes back. The
+// configuration must have passed Validate.
+func BuildOIDC(c Config, now func() time.Time) (*extauth.OIDCClient, error) {
+	o := c.Auth.OIDC
+	if !o.Enabled {
+		return nil, nil
+	}
+	pool, err := loadPool(o.CAFile, "auth.oidc.ca_file")
+	if err != nil {
+		return nil, err
+	}
+	secret, err := secrets.ReadProtectedFileExact(o.ClientSecretFile, "auth.oidc.client_secret_file")
+	if err != nil {
+		return nil, err
+	}
+	cl, err := extauth.NewOIDCClient(extauth.OIDCConfig{
+		Issuer: o.Issuer, ClientID: o.ClientID, ClientSecret: secret, ClientAuth: o.ClientAuth, RedirectURL: c.OIDCRedirectURL(),
+		Scopes: o.Scopes, RootCAs: pool, Timeout: o.Timeout, RoleClaim: o.RoleClaim, AdminValues: o.AdminValues,
+		ViewerValues: o.ViewerValues, Now: now,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("auth.oidc: %w", err)
+	}
+	return cl, nil
 }

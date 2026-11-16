@@ -93,6 +93,9 @@ type TokenRecord struct {
 	Verifier                         string
 	AuthMethod                       string // basic, post or none
 	Code                             string
+	// IDToken and AccessToken are what the fake answered with (empty when it refused), so a test can
+	// look for them in logs.
+	IDToken, AccessToken string
 }
 
 type code struct {
@@ -403,6 +406,7 @@ func (s *Server) token(w http.ResponseWriter, r *http.Request) {
 	rec.ClientID = id
 	s.mu.Lock()
 	s.tokens = append(s.tokens, rec)
+	slot := len(s.tokens) - 1
 	sc := s.script
 	s.mu.Unlock()
 	if sc.TokenDelay > 0 {
@@ -461,10 +465,14 @@ func (s *Server) token(w http.ResponseWriter, r *http.Request) {
 	if idToken == "" {
 		idToken = compact(header, claims)
 	}
+	access := randToken()
+	s.mu.Lock()
+	s.tokens[slot].IDToken, s.tokens[slot].AccessToken = idToken, access
+	s.mu.Unlock()
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
 	_ = json.NewEncoder(w).Encode(map[string]any{
-		"access_token": randToken(), "token_type": "Bearer", "expires_in": 300, "id_token": idToken,
+		"access_token": access, "token_type": "Bearer", "expires_in": 300, "id_token": idToken,
 	})
 }
 

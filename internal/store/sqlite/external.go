@@ -106,6 +106,16 @@ func (s *Store) ExternalLogin(ctx context.Context, id store.ExternalIdentity, ss
 // CreateOIDCState implements store.ExternalStore.
 func (s *Store) CreateOIDCState(ctx context.Context, st store.OIDCState) error {
 	return s.inTx(ctx, func(q *sqlcdb.Queries) error {
+		// Rule: starting a sign-in needs no session, so an anonymous caller must not be able to grow
+		// this table without bound. Expired rows go first, then the live ones are counted.
+		if _, err := q.DeleteExpiredOIDCStates(ctx, unix(st.CreatedAt)); err != nil {
+			return err
+		}
+		if n, err := q.CountOIDCStates(ctx); err != nil {
+			return err
+		} else if n >= store.MaxOIDCStates {
+			return store.ErrTooManyOIDCStates
+		}
 		return q.CreateOIDCState(ctx, sqlcdb.CreateOIDCStateParams{
 			TokenHash: st.TokenHash, State: st.State, Nonce: st.Nonce, CodeVerifier: st.CodeVerifier, NextPath: st.NextPath,
 			CreatedAt: unix(st.CreatedAt), ExpiresAt: unix(st.ExpiresAt),

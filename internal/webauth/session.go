@@ -22,6 +22,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 )
 
 const (
@@ -207,4 +208,67 @@ func SanitizeNext(next string) string {
 		return "/"
 	}
 	return next
+}
+
+// OIDC sign-in state cookie. It binds one sign-in (the state row, with its nonce and PKCE verifier)
+// to the browser that started it: the callback finds the row only through the hash of THIS cookie,
+// so a callback URL replayed from another browser finds nothing.
+const (
+	// OIDCCookieNameSecure carries the __Host- prefix, like the session cookie.
+	OIDCCookieNameSecure = "__Host-clamfleet_oidc"
+	// OIDCCookieNamePlain is used only with auth.cookie_secure: false (plain-HTTP development).
+	OIDCCookieNamePlain = "clamfleet_oidc"
+	// OIDCStateLifetime is how long a sign-in may take, from the redirect to the callback.
+	OIDCStateLifetime = 10 * time.Minute
+
+	oidcTokenPrefix = "cfo_"
+)
+
+// OIDCCookieName returns the state cookie's name for the given mode.
+func OIDCCookieName(secure bool) string {
+	if secure {
+		return OIDCCookieNameSecure
+	}
+	return OIDCCookieNamePlain
+}
+
+// NewOIDCToken returns a fresh state-cookie token and its storage hash. The prefix marks it as not a
+// session token: it can never be presented as one (ParseToken checks "cfs_").
+func NewOIDCToken() (token string, hash []byte, err error) {
+	b := make([]byte, secretBytes)
+	if _, err := rand.Read(b); err != nil {
+		return "", nil, fmt.Errorf("generate oidc state token: %w", err)
+	}
+	token = oidcTokenPrefix + enc.EncodeToString(b)
+	return token, HashToken(token), nil
+}
+
+// ParseOIDCToken checks the format only, so garbage never reaches the database.
+func ParseOIDCToken(token string) error {
+	if len(token) != len(oidcTokenPrefix)+43 || token[:len(oidcTokenPrefix)] != oidcTokenPrefix {
+		return ErrMalformedToken
+	}
+	if b, err := enc.DecodeString(token[len(oidcTokenPrefix):]); err != nil || len(b) != secretBytes {
+		return ErrMalformedToken
+	}
+	return nil
+}
+
+// NewOIDCCookie builds the state cookie. SameSite=Lax, not Strict: the identity provider sends the
+// browser back with a top-level GET from another site, and a Strict cookie would not be sent on that
+// navigation, so every sign-in would fail. (Lax is also why the callback is a GET: a cross-site POST
+// back, response_mode=form_post, would carry no Lax cookie and fail the cross-origin check.) Max-Age
+// is the state's lifetime.
+func NewOIDCCookie(token string, secure bool) *http.Cookie {
+	return &http.Cookie{
+		Name: OIDCCookieName(secure), Value: token, Path: "/", MaxAge: int(OIDCStateLifetime.Seconds()),
+		HttpOnly: true, Secure: secure, SameSite: http.SameSiteLaxMode,
+	}
+}
+
+// ClearOIDCCookie tells the browser to drop the state cookie.
+func ClearOIDCCookie(secure bool) *http.Cookie {
+	c := NewOIDCCookie("", secure)
+	c.MaxAge = -1
+	return c
 }

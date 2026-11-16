@@ -15,6 +15,12 @@ type cleanupStore struct {
 	fakeSessions
 	calls chan time.Time
 	swept chan time.Time
+	oidc  chan time.Time
+}
+
+func (c *cleanupStore) DeleteExpiredOIDCStates(_ context.Context, now time.Time) (int64, error) {
+	c.oidc <- now
+	return 0, nil
 }
 
 func (c *cleanupStore) DeleteExpiredChallenges(_ context.Context, now time.Time) (int64, error) {
@@ -28,7 +34,7 @@ func (c *cleanupStore) DeleteExpiredSessions(_ context.Context, now time.Time, i
 }
 
 func TestRunCleanupRunsAtStartAndOnEachTickUntilCancelled(t *testing.T) {
-	st := &cleanupStore{calls: make(chan time.Time, 10), swept: make(chan time.Time, 10)}
+	st := &cleanupStore{calls: make(chan time.Time, 10), swept: make(chan time.Time, 10), oidc: make(chan time.Time, 10)}
 	tick := make(chan time.Time)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
@@ -56,11 +62,25 @@ func TestRunCleanupRunsAtStartAndOnEachTickUntilCancelled(t *testing.T) {
 			t.Fatalf("no challenge sweep %s", what)
 		}
 	}
+	// The OIDC login states are swept with the injected clock too (an expired one is never returned
+	// by TakeOIDCState; this only keeps the table small).
+	waitOIDC := func(what string) {
+		select {
+		case got := <-st.oidc:
+			if !got.Equal(clk) {
+				t.Fatalf("%s: OIDC states swept at %v, want the injected clock %v", what, got, clk)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatalf("no OIDC state sweep %s", what)
+		}
+	}
 	wait("at start")
 	waitSwept("at start")
+	waitOIDC("at start")
 	tick <- clk
 	wait("after a tick")
 	waitSwept("after a tick")
+	waitOIDC("after a tick")
 	cancel()
 	select {
 	case <-done:
