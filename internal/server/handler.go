@@ -20,6 +20,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/netip"
+	"reflect"
 	"time"
 
 	"github.com/clamfleet/clamfleet/internal/agentauth"
@@ -174,7 +175,7 @@ func NewHandler(d Deps) http.Handler {
 	if auth == nil {
 		auth = agentauth.Bearer{Lookup: storeLookup(d.Store)}
 	}
-	if d.Console == (Auth{}) {
+	if reflect.DeepEqual(d.Console, Auth{}) { // Auth holds slices: not comparable with ==
 		d.Console = DefaultConfig().Auth
 	}
 	if d.Hasher == nil {

@@ -37,6 +37,36 @@ live in files with the key-file permission rule (not readable by others), never 
 | `health.require_virus_event` | `CLAMFLEET_SERVER_HEALTH_REQUIRE_VIRUS_EVENT` | `true` | WARN when clamd.conf has no `VirusEvent`. |
 | `auth.local.enabled` | `CLAMFLEET_SERVER_AUTH_LOCAL_ENABLED` | `true` | Email and password accounts. |
 | `auth.local.totp_required` | `CLAMFLEET_SERVER_AUTH_LOCAL_TOTP_REQUIRED` | `false` | Needs the key file. |
+| `auth.ldap.enabled` | `CLAMFLEET_SERVER_AUTH_LDAP_ENABLED` | `false` | LDAP sign-in; see docs/auth.md. |
+| `auth.ldap.url` | `CLAMFLEET_SERVER_AUTH_LDAP_URL` | empty | `ldaps://host:636`, or `ldap://host` with `start_tls`. Plain `ldap://` only to loopback. |
+| `auth.ldap.start_tls` | `CLAMFLEET_SERVER_AUTH_LDAP_START_TLS` | `false` | Not with `ldaps://`. |
+| `auth.ldap.ca_file` | `CLAMFLEET_SERVER_AUTH_LDAP_CA_FILE` | empty | Extra trust anchors (PEM); verification is never skipped. |
+| `auth.ldap.timeout` | `CLAMFLEET_SERVER_AUTH_LDAP_TIMEOUT` | `10s` | 1s to 30s per operation. |
+| `auth.ldap.bind_dn` | `CLAMFLEET_SERVER_AUTH_LDAP_BIND_DN` | empty | Service account for the search; empty = anonymous search. |
+| `auth.ldap.bind_password_file` | `CLAMFLEET_SERVER_AUTH_LDAP_BIND_PASSWORD_FILE` | empty | Required with `bind_dn`; `root:clamfleet-server 0640`. |
+| `auth.ldap.user_base_dn` | `CLAMFLEET_SERVER_AUTH_LDAP_USER_BASE_DN` | `ou=people,dc=example,dc=org` | Search base. |
+| `auth.ldap.user_filter` | `CLAMFLEET_SERVER_AUTH_LDAP_USER_FILTER` | `(&(objectClass=inetOrgPerson)(\|(uid={username})(mail={username})))` | Must contain `{username}` (escaped, RFC 4515). |
+| `auth.ldap.id_attribute` | `CLAMFLEET_SERVER_AUTH_LDAP_ID_ATTRIBUTE` | `entryUUID` | The stable identity; `objectGUID` on AD. Never the DN. |
+| `auth.ldap.email_attribute` | `CLAMFLEET_SERVER_AUTH_LDAP_EMAIL_ATTRIBUTE` | `mail` |  |
+| `auth.ldap.name_attribute` | `CLAMFLEET_SERVER_AUTH_LDAP_NAME_ATTRIBUTE` | `cn` | Display name. |
+| `auth.ldap.username_attribute` | `CLAMFLEET_SERVER_AUTH_LDAP_USERNAME_ATTRIBUTE` | `uid` | `sAMAccountName` on AD. |
+| `auth.ldap.group_attribute` | `CLAMFLEET_SERVER_AUTH_LDAP_GROUP_ATTRIBUTE` | `memberOf` | Read from the user entry; empty = search groups. |
+| `auth.ldap.group_base_dn` | `CLAMFLEET_SERVER_AUTH_LDAP_GROUP_BASE_DN` | empty | Needed when `group_attribute` is empty. |
+| `auth.ldap.group_filter` | `CLAMFLEET_SERVER_AUTH_LDAP_GROUP_FILTER` | `(&(objectClass=groupOfNames)(member={dn}))` | Must contain `{dn}` (escaped). |
+| `auth.ldap.admin_groups` | `CLAMFLEET_SERVER_AUTH_LDAP_ADMIN_GROUPS` | empty | Group DNs that map to admin. |
+| `auth.ldap.viewer_groups` | `CLAMFLEET_SERVER_AUTH_LDAP_VIEWER_GROUPS` | empty | Group DNs that map to viewer. At least one of the two lists is required. |
+| `auth.oidc.enabled` | `CLAMFLEET_SERVER_AUTH_OIDC_ENABLED` | `false` | OpenID Connect sign-in; needs `public_url`; see docs/auth.md. |
+| `auth.oidc.display_name` | `CLAMFLEET_SERVER_AUTH_OIDC_DISPLAY_NAME` | `Single sign-on` | The button text. |
+| `auth.oidc.issuer` | `CLAMFLEET_SERVER_AUTH_OIDC_ISSUER` | empty | `https://...`; http only for a loopback host. |
+| `auth.oidc.client_id` | `CLAMFLEET_SERVER_AUTH_OIDC_CLIENT_ID` | empty |  |
+| `auth.oidc.client_secret_file` | `CLAMFLEET_SERVER_AUTH_OIDC_CLIENT_SECRET_FILE` | empty | `root:clamfleet-server 0640`. |
+| `auth.oidc.client_auth` | `CLAMFLEET_SERVER_AUTH_OIDC_CLIENT_AUTH` | `basic` | `basic` or `post`. |
+| `auth.oidc.scopes` | `CLAMFLEET_SERVER_AUTH_OIDC_SCOPES` | `openid,email,profile` | Must include `openid`. |
+| `auth.oidc.ca_file` | `CLAMFLEET_SERVER_AUTH_OIDC_CA_FILE` | empty | Extra trust anchors (PEM). |
+| `auth.oidc.timeout` | `CLAMFLEET_SERVER_AUTH_OIDC_TIMEOUT` | `10s` | 1s to 30s per request. |
+| `auth.oidc.role_claim` | `CLAMFLEET_SERVER_AUTH_OIDC_ROLE_CLAIM` | `groups` | Dotted path into the ID token claims, such as `realm_access.roles`. |
+| `auth.oidc.admin_values` | `CLAMFLEET_SERVER_AUTH_OIDC_ADMIN_VALUES` | empty | Claim values that map to admin. |
+| `auth.oidc.viewer_values` | `CLAMFLEET_SERVER_AUTH_OIDC_VIEWER_VALUES` | empty | Claim values that map to viewer. At least one of the two lists is required. |
 | `auth.session_max_age` | `CLAMFLEET_SERVER_AUTH_SESSION_MAX_AGE` | `12h` | At most 720h. |
 | `auth.session_idle` | `CLAMFLEET_SERVER_AUTH_SESSION_IDLE` | `1h` | At least 1m, not above the max age. |
 | `auth.cookie_secure` | `CLAMFLEET_SERVER_AUTH_COOKIE_SECURE` | `true` | `false` only for plain-HTTP development. |
