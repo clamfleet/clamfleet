@@ -1,0 +1,30 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# SPDX-FileCopyrightText: The ClamFleet Authors
+#
+# One scheduled scan (started by clamfleet-scan.timer, which ships DISABLED).
+# `clamfleet-agent scan` never starts clamd: with the clamd unit inactive it exits 2
+# and writes nothing, so the server's scan_missed rule fires. Exit status 1 means
+# the scan found something (the unit shows as failed on purpose).
+#
+# No ProtectHome: clamdscan resolves the paths it is given, and scan.paths usually
+# include /home. The agent user never reads those files itself; clamd does.
+# TimeoutStartSec is only a backstop above the largest scan.timeout (72h).
+[Unit]
+Description=ClamFleet scheduled scan
+Documentation=https://github.com/clamfleet/clamfleet
+After=clamav-daemon.service clamd@scan.service
+
+[Service]
+Type=oneshot
+User=clamfleet
+ExecStart=/usr/bin/clamfleet-agent scan
+Nice=10
+IOSchedulingClass=idle
+TimeoutStartSec=73h
+ProtectSystem=strict
+ReadWritePaths=/var/lib/clamfleet
+PrivateTmp=yes
+NoNewPrivileges=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+UMask=0027

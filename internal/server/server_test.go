@@ -239,16 +239,17 @@ func TestTLSConfigErrors(t *testing.T) {
 		"client_ca no PEM":  {TLS: TLS{Cert: b.Cert, Key: b.Key, ClientCA: empty}},
 		"client_ca missing": {TLS: TLS{Cert: b.Cert, Key: b.Key, ClientCA: filepath.Join(dir, "nope")}},
 	} {
-		if _, err := tlsConfig(c); err == nil {
+		if _, err := newTLSReloader(c); err == nil {
 			t.Errorf("%s: expected an error at start", name)
 		}
 	}
-	if tc, err := tlsConfig(Config{}); tc != nil || err != nil {
-		t.Fatalf("TLS off: %v %v", tc, err)
+	if rl, err := newTLSReloader(Config{}); rl != nil || err != nil {
+		t.Fatalf("TLS off: %v %v", rl, err)
 	}
-	tc, _ := tlsConfig(Config{TLS: TLS{Cert: b.Cert, Key: b.Key, ClientCA: b.CA}})
-	if tc.MinVersion != tls.VersionTLS12 || tc.ClientAuth != tls.RequireAndVerifyClientCert {
-		t.Fatalf("%+v", tc)
+	rl, _ := newTLSReloader(Config{TLS: TLS{Cert: b.Cert, Key: b.Key, ClientCA: b.CA}})
+	tc, err := rl.config().GetConfigForClient(nil) // what a handshake actually uses
+	if err != nil || tc.MinVersion != tls.VersionTLS12 || tc.ClientAuth != tls.RequireAndVerifyClientCert || tc.ClientCAs == nil {
+		t.Fatalf("%+v %v", tc, err)
 	}
 }
 

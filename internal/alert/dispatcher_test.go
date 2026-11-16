@@ -747,33 +747,26 @@ func TestUnroutedDetectionIsLogged(t *testing.T) {
 	}
 }
 
-func TestPruneRunsOncePerDayOfTheInjectedClock(t *testing.T) {
+// The alert-history prune moved to the server's retention runner
+// (retention.alert_log_days): a dispatcher pass must never delete history, or the
+// configured retention would be silently overridden by a fixed 90 days.
+func TestPassNeverPrunesAlertHistory(t *testing.T) {
 	e := newDispEnv(t)
 	e.host("a")
 	e.webhook("t", nil)
-	old := e.clk.Now().Add(-Retention - time.Hour).Unix()
-	if _, err := e.st.PruneAlertHistory(context.Background(), e.clk.Now(), 10); err != nil {
+	old := e.clk.Now().Add(-400 * 24 * time.Hour).Unix()
+	db, _ := sql.Open("sqlite", "file:"+e.path)
+	defer db.Close()
+	if _, err := db.Exec(`INSERT INTO alert_log (ts, target_name, status) VALUES (?, 't', 'sent')`, old); err != nil {
 		t.Fatal(err)
 	}
-	seed := func() {
-		db, _ := sql.Open("sqlite", "file:"+e.path)
-		defer db.Close()
-		db.Exec(`INSERT INTO alert_log (ts, target_name, status) VALUES (?, 't', 'sent')`, old)
-	}
 	e.state("CRIT") // work, so the pass is not skipped
-	e.once()        // first pass: prunes (lastPrune was zero)
-	seed()
-	e.clk.Add(time.Hour)
-	e.state("OK")
-	e.once() // inside 24 h: no prune
-	if e.q(`SELECT count(*) FROM alert_log WHERE ts = ?`, old) != 1 {
-		t.Fatal("pruned twice inside a day")
-	}
-	e.clk.Add(24 * time.Hour)
-	e.state("CRIT")
 	e.once()
-	if e.q(`SELECT count(*) FROM alert_log WHERE ts = ?`, old) != 0 {
-		t.Fatal("not pruned after a day")
+	e.clk.Add(48 * time.Hour)
+	e.state("OK")
+	e.once()
+	if e.q(`SELECT count(*) FROM alert_log WHERE ts = ?`, old) != 1 {
+		t.Fatal("the dispatcher pruned alert history: that is the retention runner's job")
 	}
 }
 

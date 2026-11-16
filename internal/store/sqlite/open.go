@@ -49,6 +49,9 @@ type Store struct {
 	r    *sql.DB // read pool, query_only
 	prov *goose.Provider
 
+	// onPruneTx is a test hook: pruneBatches calls it before each batch
+	// transaction, so a test can count them. Always nil in production.
+	onPruneTx func()
 	// afterTokenUpdate is a test hook: SetToken calls it between the token
 	// update and the audit insert, so a test can prove that a failure there
 	// rolls both back. Always nil in production.
@@ -81,6 +84,14 @@ type Store struct {
 	// betweenResealRows is a test hook: ResealSecrets calls it after each row, to
 	// prove a failure midway rolls every row back. Always nil in production.
 	betweenResealRows func() error
+
+	// backupHook is a test seam: Backup calls it after each stage of its protocol
+	// (docs/plans/milestone-6.md 4.4), and a returned error fails that stage.
+	// backupEUID and backupFree replace the effective uid and the free space.
+	// All nil in production.
+	backupHook func(stage int) error
+	backupEUID func() int
+	backupFree func() uint64
 
 	// afterHostDelete is a test hook: DeleteHost calls it between the delete
 	// and the audit insert, to prove a failure there rolls both back.
@@ -134,7 +145,7 @@ func Open(ctx context.Context, path string) (*Store, error) {
 		w.Close()
 		return nil, fmt.Errorf("open database %s: %w", path, err)
 	}
-	sub, err := fs.Sub(migrations.SQLite, "sqlite")
+	sub, err := fs.Sub(migrations.FS(), "sqlite")
 	if err != nil {
 		w.Close()
 		r.Close()
@@ -208,6 +219,24 @@ func (s *Store) Migrate(ctx context.Context) error {
 		return fmt.Errorf("migrate: %w", err)
 	}
 	return nil
+}
+
+// MigrateUpTo applies pending migrations up to and including version v. The
+// binary migrates to the newest with Migrate; this exists so tests can build a
+// database as an older release left it.
+func (s *Store) MigrateUpTo(ctx context.Context, v int64) error {
+	if _, err := s.prov.UpTo(ctx, v); err != nil {
+		return fmt.Errorf("migrate to %d: %w", v, err)
+	}
+	return nil
+}
+
+// PendingMigrations returns the schema version of the database and the newest
+// version this binary knows. from < to means Migrate would change the schema;
+// from == 0 is a fresh database.
+func (s *Store) PendingMigrations(ctx context.Context) (from, to int64, err error) {
+	from, err = s.SchemaVersion(ctx)
+	return from, s.newestEmbedded(), err
 }
 
 // CheckMigrated returns ErrPendingMigrations unless the schema is exactly at

@@ -10,6 +10,38 @@ All notable changes are listed here. The format follows Keep a Changelog; versio
 ## Unreleased
 
 ### Added
+- Milestone 6a, operations and packaging (see `docs/install.md`, `docs/operations.md`, `docs/configuration.md`).
+  **Packages:** `clamfleet-agent` and `clamfleet-server` as `.deb` and `.rpm` (nfpm v2.49.0), with systemd units
+  (hardened), sysusers.d and tmpfiles.d files, example configs as conffiles, our own AppArmor profile (Debian) or an
+  SELinux module (RHEL family, installed at priority 300, no rule on a stock type). The agent waits for its token;
+  the first server install creates the secret key file; a purge never deletes the database or the key file.
+  **Retention** for every table (`retention.reports_days` 30, `state_changes_days` 365, `alert_log_days` 90,
+  `audit_days` 365, plus `events_days`), one daily pass, `PRAGMA optimize`. **Backup:** `clamfleet-server backup`
+  (`--keep`, `--verify`, `VACUUM INTO`, a private directory, a lock), a timer that ships disabled, and an automatic
+  backup before every migration. **`GET /metrics`** (Prometheus text format, off by default, bearer token from a file).
+  **TLS reload** on SIGHUP, all or nothing. **`clamfleet-agent scan`** and its timer (shipped disabled); new agent
+  key `scan.timeout`; `scanned` is always 0 (clamdscan does not report a file count). New server keys: `retention.*`,
+  `backup.*`, `metrics.*`, `alert.webhook.nat64_prefixes`. Migration `00006` is additive (three indexes). No new
+  runtime dependency.
+
+### Fixed
+- Milestone 6a: **event prune** deleted events whose alert was still being delivered, or that were held in an open
+  detection window; they are now kept until the alert is finished. **NAT64:** a webhook or SMTP address that carries an
+  IPv4 address (`64:ff9b::/96`, your own prefixes in `alert.webhook.nat64_prefixes`) is judged by the IPv4 inside it;
+  6to4, Teredo, IPv4-compatible, SIIT and the local-use range of an unlisted translator are blocked.
+
+### Upgrade notes (milestone 6a)
+- **The first retention pass** can delete a large part of `reports` (kept since milestone 2): in batches, logged by count.
+  The file does not shrink; `clamfleet-server backup` writes a compact copy.
+- **A backup is written before every migration** (`backup.dir`, the newest 3 kept; free space of 1.1 times the database
+  is needed). If it fails the server refuses to migrate; `clamfleet-server migrate --no-backup` is the way past it.
+- **`/metrics` is off** unless you enable it and give it a token file.
+- **Alert addresses are judged on both forms** (the address and the IPv4 inside it): a `deny_networks` entry now also blocks
+  its NAT64 form. An operator with a local-use NAT64 translator must list its prefix in `alert.webhook.nat64_prefixes`.
+- The alert history prune moved from the dispatcher to the retention runner (`retention.alert_log_days`, default 90).
+- Upgrade the server first, then the agents. An M5 binary refuses a `00006` database.
+
+### Added (earlier milestones)
 - Milestone 5, detections (see `docs/detections.md`). clamd's `VirusEvent` runs the new `clamfleet-agent event`, which
   writes the detection to a spool in the agent's state directory and never touches the network or the token, so
   a detection survives a server outage. The spool is published with a no-replace `link()` after an `fsync`, has

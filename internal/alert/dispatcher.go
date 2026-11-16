@@ -52,12 +52,6 @@ const (
 	MaxDetectionsPerTarget = 2
 	// leaseMargin is added to an attempt's hard deadline to form its lease.
 	leaseMargin = 30 * time.Second
-	// Retention is the fixed age after which finished deliveries and log rows are
-	// pruned (spec 8.2); it becomes configurable with M6's retention block.
-	Retention = 90 * 24 * time.Hour
-	// pruneEvery is how often the injected clock allows a prune.
-	pruneEvery = 24 * time.Hour
-	pruneBatch = 5000
 	// MaxTestSend caps a synchronous test send. The console answers it inside
 	// one HTTP request whose WriteTimeout is 30 s (internal/server); a send that
 	// outlived it would lose its result fragment, so the cap stays below that
@@ -130,7 +124,6 @@ type Dispatcher struct {
 	mu        sync.Mutex
 	inflight  int
 	inflightD int // of inflight, detections and summaries (the reserve counts these)
-	lastPrune time.Time
 	wg        sync.WaitGroup
 	wake      chan struct{}
 	testing   map[int64]*testState
@@ -251,7 +244,6 @@ func (d *Dispatcher) Inflight() int {
 // Pass runs one pass without waiting for the sends it starts.
 func (d *Dispatcher) Pass(ctx context.Context) error {
 	now := d.Now()
-	d.maybePrune(ctx, now)
 	work, err := d.Store.HasAlertWork(ctx, now, d.Cooldown)
 	if err != nil {
 		return fmt.Errorf("check for alert work: %w", err)
@@ -314,31 +306,6 @@ func (d *Dispatcher) Pass(ctx context.Context) error {
 		}()
 	}
 	return nil
-}
-
-// maybePrune deletes history older than the retention, at most once per 24 h of
-// the injected clock. A failure is logged and retried at the next opportunity.
-func (d *Dispatcher) maybePrune(ctx context.Context, now time.Time) {
-	d.mu.Lock()
-	due := d.lastPrune.IsZero() || now.Sub(d.lastPrune) >= pruneEvery
-	if due {
-		d.lastPrune = now
-	}
-	d.mu.Unlock()
-	if !due {
-		return
-	}
-	n, err := d.Store.PruneAlertHistory(ctx, now.Add(-Retention), pruneBatch)
-	if err != nil {
-		d.Log.Error("pruning alert history failed", "err", err)
-		d.mu.Lock()
-		d.lastPrune = time.Time{}
-		d.mu.Unlock()
-		return
-	}
-	if n > 0 {
-		d.Log.Info("pruned alert history", "rows", n)
-	}
 }
 
 // logPlan writes one info line per planned alert (so journald forwarders see

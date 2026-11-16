@@ -9,22 +9,41 @@ BIN := bin
 VERSION ?= 0.0.0-dev
 LDFLAGS := -s -w -X github.com/clamfleet/clamfleet/internal/version.Version=$(VERSION)
 
-.PHONY: build vet staticcheck test scripts-test sqlc-check generate check e2e e2e-apparmor e2e-web fixtures webfixture web-fixture
+.PHONY: build vet staticcheck test scripts-test sqlc-check generate check packages e2e e2e-apparmor e2e-el9 e2e-web fixtures webfixture web-fixture
 
 # Both binaries are static (CGO_ENABLED=0: the server uses pure-Go SQLite).
+# E2E_BUILD_TAGS: extra build tags, only for the package upgrade e2e (e2e_migration: a test-only
+# migration). It is picked up from the environment, so `build` (and with it `packages`) refuses a
+# non-empty value unless VERSION contains "e2e": an exported tag must never reach a release package.
+# The tagged binary also announces itself, "+e2e_migration" after its version (migrations/e2e_overlay.go).
+E2E_BUILD_TAGS ?=
 build:
-	CGO_ENABLED=0 $(GO) build -trimpath -ldflags '$(LDFLAGS)' -o $(BIN)/clamfleet-agent ./cmd/clamfleet-agent
-	CGO_ENABLED=0 $(GO) build -trimpath -ldflags '$(LDFLAGS)' -o $(BIN)/clamfleet-server ./cmd/clamfleet-server
+	@test -z "$(E2E_BUILD_TAGS)" || case "$(VERSION)" in *e2e*) ;; *) echo "build: E2E_BUILD_TAGS=$(E2E_BUILD_TAGS) is only for e2e builds: VERSION=$(VERSION) does not contain e2e" >&2; exit 1 ;; esac
+	CGO_ENABLED=0 $(GO) build -trimpath -tags '$(E2E_BUILD_TAGS)' -ldflags '$(LDFLAGS)' -o $(BIN)/clamfleet-agent ./cmd/clamfleet-agent
+	CGO_ENABLED=0 $(GO) build -trimpath -tags '$(E2E_BUILD_TAGS)' -ldflags '$(LDFLAGS)' -o $(BIN)/clamfleet-server ./cmd/clamfleet-server
+
+# Packages (milestone 6): .deb and .rpm of the agent and the server into dist/, built by nfpm, which is a
+# build-time tool only (pinned in CLAUDE.md, run with `go run` like sqlc; nothing of it is in the binaries).
+# VERSION is semver; a pre-release such as 0.6.0-rc1 becomes 0.6.0~rc1 in a deb. amd64 only (arm64 is 6c).
+NFPM_VERSION := v2.49.0
+NFPM := $(GO) run github.com/goreleaser/nfpm/v2/cmd/nfpm@$(NFPM_VERSION)
+PKG_DIR ?= dist
+packages: build
+	rm -rf $(PKG_DIR) && mkdir -p $(PKG_DIR)
+	set -e; for pkg in agent server; do for fmt in deb rpm; do \
+		VERSION=$(VERSION) NFPM_ARCH=amd64 $(NFPM) package -f deploy/packaging/nfpm-$$pkg.yaml -p $$fmt -t $(PKG_DIR)/; \
+	done; done
+	ls -l $(PKG_DIR)
 
 vet:
 	$(GO) vet ./...
 	$(GO) vet -tags e2e ./...
-	$(GO) vet -tags "e2e e2e_apparmor" ./...
+	$(GO) vet -tags "e2e e2e_apparmor e2e_el9" ./...
 
 staticcheck:
 	staticcheck ./...
 	staticcheck -tags e2e ./...
-	staticcheck -tags "e2e e2e_apparmor" ./...
+	staticcheck -tags "e2e e2e_apparmor e2e_el9" ./...
 
 test:
 	$(GO) test ./...
@@ -32,6 +51,9 @@ test:
 # Shell tests that need no container (fake ssh).
 scripts-test:
 	./deploy/test/reset_test.sh
+	./deploy/test/units_test.sh
+	./deploy/test/selinux_test.sh
+	./deploy/test/packages_test.sh
 
 # sqlc is a build-time tool only (pinned in CLAUDE.md): the generated code uses database/sql.
 generate:
@@ -51,10 +73,12 @@ check: vet staticcheck sqlc-check test scripts-test
 -include local.mk
 # The AppArmor VM (milestone 5, decision 7): CFA_EXEC is the command prefix that runs a command
 # in the VM, CFA_HOST the ssh target of the Incus host that holds it. Also no defaults.
-export CFT_EXEC INCUS_HOST CFA_EXEC CFA_HOST
+# The AlmaLinux 9 VM (milestone 6, decision 11): CFE_EXEC and CFE_HOST, the same way. Also no defaults.
+export CFT_EXEC INCUS_HOST CFA_EXEC CFA_HOST CFE_EXEC CFE_HOST
 
 e2e:
 	@test -n "$(CFT_EXEC)" -a -n "$(INCUS_HOST)" || { echo "e2e: set CFT_EXEC and INCUS_HOST (environment or local.mk, see local.mk.example)" >&2; exit 1; }
+	$(MAKE) packages VERSION=0.6.0-e2e1
 	$(GO) test -tags e2e -count=1 -timeout 20m -v ./e2e/
 
 # AppArmor enforcing, in the throwaway Debian 13 VM (docs/testing.md "The AppArmor VM"). Part of the
@@ -63,8 +87,19 @@ e2e:
 # CFT_EXEC and INCUS_HOST at it, CT/SNAP make deploy/test/reset.sh restore the VM's `clean` snapshot.
 e2e-apparmor:
 	@test -n "$(CFA_EXEC)" -a -n "$(CFA_HOST)" || { echo "e2e-apparmor: set CFA_EXEC and CFA_HOST (environment or local.mk, see local.mk.example and docs/testing.md)" >&2; exit 1; }
+	$(MAKE) packages VERSION=0.6.0-e2e1
 	CFT_EXEC="$(CFA_EXEC)" INCUS_HOST="$(CFA_HOST)" CT=clamfleet-aa SNAP=clean READY_FILE=/var/lib/clamav/freshclam.dat \
 		$(GO) test -tags "e2e e2e_apparmor" -count=1 -timeout 30m -v -run 'TestAppArmor|TestClamdOnlyExecsTheAgent' ./e2e/
+
+# RHEL 9 and SELinux Enforcing, in the throwaway AlmaLinux 9 VM (docs/testing.md "The AlmaLinux 9 VM"):
+# the .rpm files are installed with dnf and the detection path must work through the SELinux module the
+# package loads. Part of the milestone 6 acceptance, with `make e2e` and `make e2e-apparmor`. Without CFE_EXEC
+# and CFE_HOST it FAILS (it never skips). READY_FILE is a file clamd's domain may read (under /var/lib/clamav).
+e2e-el9:
+	@test -n "$(CFE_EXEC)" -a -n "$(CFE_HOST)" || { echo "e2e-el9: set CFE_EXEC and CFE_HOST (environment or local.mk, see local.mk.example and docs/testing.md)" >&2; exit 1; }
+	$(MAKE) packages VERSION=0.6.0-e2e1
+	CFT_EXEC="$(CFE_EXEC)" INCUS_HOST="$(CFE_HOST)" CT=clamfleet-el9 SNAP=clean READY_FILE=/var/lib/clamav/bytecode.cvd \
+		$(GO) test -tags "e2e e2e_el9" -count=1 -timeout 40m -v -run 'TestEL9|TestSELinux' ./e2e/
 
 fixtures:
 	./deploy/test/capture-fixtures.sh

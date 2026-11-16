@@ -16,4 +16,7 @@ freshclam_log: /var/log/freshclam.log
 # clamd is not managed by systemd (started by hand or another supervisor).
 units: {clamd: clamd@scan, freshclam: clamav-freshclam, clamonacc: clamav-clamonacc}
 spool: {dir: /var/lib/clamfleet/spool, max_mb: 50, max_event_days: 365}  # set in this file only: see agent.yaml.example
-scan: {paths: [/srv, /home], summary: /var/lib/clamfleet/last_scan.json}
+# scan: `clamfleet-agent scan` (the clamfleet-scan.timer, shipped disabled) scans these paths with clamdscan and
+# writes the summary the report carries. It never starts clamd. clamd reads the files as its own user, so a
+# private directory under /home shows up as errors. timeout (1m to 72h): the scan is stopped after this long.
+scan: {paths: [/srv, /home], summary: /var/lib/clamfleet/last_scan.json, timeout: 12h}

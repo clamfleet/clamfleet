@@ -60,7 +60,10 @@ const usage = `usage: clamfleet-server <command>
 
 commands:
   serve [--config FILE] [--log-level LEVEL]   run the server (migrates the database first)
-  migrate [--config FILE]                     create or upgrade the database schema
+  migrate [--config FILE] [--no-backup]       create or upgrade the database schema; backs the database up first
+                                              (into backup.dir) when the schema changes, and refuses if the backup fails
+  backup [--config FILE] [--dir DIR] [--keep N] [--verify]
+                                              write a consistent copy of the database; prints its path (run as the server user)
   host add NAME                               register a host; prints its token once
   host list [--json]                          list hosts with their state
   host show NAME [--json]                     show one host: state, reasons, history, newest report
@@ -113,6 +116,8 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return a.serve(ctx, args[1:])
 	case "migrate":
 		return a.migrate(ctx, args[1:])
+	case "backup":
+		return a.backup(ctx, args[1:])
 	case "host":
 		return a.host(ctx, args[1:])
 	case "user":
@@ -163,6 +168,11 @@ func (a *app) loadConfig(log *slog.Logger, flagValue string) (server.Config, err
 	if err == nil {
 		err = cfg.Validate()
 	}
+	if err == nil {
+		for _, w := range cfg.Warnings() {
+			log.Warn(w)
+		}
+	}
 	return cfg, err
 }
 
@@ -174,6 +184,27 @@ func newFlags(name string, stderr io.Writer) (*flag.FlagSet, *string) {
 }
 
 func (a *app) serve(ctx context.Context, args []string) int {
+	restrictiveUmask()
+	// SIGHUP (systemctl reload) re-reads the TLS files. It is caught from the very
+	// start: the default action of SIGHUP is to terminate, and a reload that arrives
+	// while the database is still migrating must not kill the server.
+	hup := make(chan os.Signal, 1)
+	signal.Notify(hup, syscall.SIGHUP)
+	defer signal.Stop(hup)
+	reload := make(chan struct{}, 1)
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-hup:
+				select {
+				case reload <- struct{}{}:
+				default: // a reload is already queued
+				}
+			}
+		}
+	}()
 	fs, cfgFlag := newFlags("serve", a.stderr)
 	lvl := fs.String("log-level", "info", "debug, info, warn or error (info logs every request; debug adds health checks)")
 	if err := fs.Parse(args); err != nil {
@@ -201,7 +232,10 @@ func (a *app) serve(ctx context.Context, args []string) int {
 	}
 	if err == nil {
 		defer st.Close()
-		err = st.Migrate(ctx)
+		// No flag here: past a failed backup, run `migrate --no-backup` once, then start.
+		// serve exits before any loop starts, so no retention prune ever runs on a
+		// database that failed to back up or to migrate.
+		err = a.migrateWithBackup(ctx, log, cfg, st, false)
 	}
 	if err != nil {
 		log.Error("database", "error", err.Error())
@@ -273,9 +307,9 @@ func (a *app) serve(ctx context.Context, args []string) int {
 	}()
 	go func() {
 		defer func() { loopDone <- struct{}{} }()
-		server.RunRetention(loopCtx, st, a.now, cfg.Retention.EventsDays, log, retentionTick.C)
+		server.RunRetention(loopCtx, st, a.now, cfg.Retention, log, retentionTick.C)
 	}()
-	err = server.Serve(ctx, cfg, h, log)
+	err = server.ServeReload(ctx, cfg, h, log, reload)
 	// Wait for the loops before the deferred st.Close(): an evaluation cut off by
 	// a closing database would log a spurious error at every shutdown.
 	stopLoop()
@@ -299,7 +333,9 @@ func (a *app) serve(ctx context.Context, args []string) int {
 const alertInterval = 5 * time.Second
 
 func (a *app) migrate(ctx context.Context, args []string) int {
+	restrictiveUmask()
 	fs, cfgFlag := newFlags("migrate", a.stderr)
+	noBackup := fs.Bool("no-backup", false, "migrate without the backup first (the way past a failing backup)")
 	if err := fs.Parse(args); err != nil {
 		return exitUsage
 	}
@@ -316,7 +352,7 @@ func (a *app) migrate(ctx context.Context, args []string) int {
 	}
 	if err == nil {
 		defer st.Close()
-		err = st.Migrate(ctx)
+		err = a.migrateWithBackup(ctx, log, cfg, st, *noBackup)
 	}
 	if err != nil {
 		log.Error("migrate", "error", err.Error())

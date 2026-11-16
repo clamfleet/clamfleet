@@ -18,8 +18,13 @@
 // (deny_networks) or turn private networks off. An egress firewall remains the
 // stronger control (docs/alerts.md).
 //
-// NOT decoded (known gap, plan A3): NAT64 (64:ff9b::/96) and other embedded-IPv4
-// forms of a blocked IPv4 address. IPv4-mapped (::ffff:a.b.c.d) is handled by Unmap.
+// Embedded IPv4 (milestone 6, plan 4.9): an IPv6 address that carries an IPv4
+// address must not be a way round the IPv4 rules. classify decodes the forms it
+// can (IPv4-mapped, the well-known NAT64 prefix 64:ff9b::/96 and any translation
+// prefix the operator lists in alert.webhook.nat64_prefixes), blocks the forms
+// that cannot be judged (6to4, Teredo, IPv4-compatible, SIIT, and the local-use
+// NAT64 range 64:ff9b:1::/48 unless listed), and every check below runs on BOTH
+// the address as dialled and the IPv4 inside it: the most restrictive result wins.
 package alert
 
 import (
@@ -40,8 +45,13 @@ type Policy struct {
 	AllowPrivate bool
 	// AllowLoopback allows 127.0.0.0/8, ::1 and the localhost names.
 	AllowLoopback bool
-	// DenyNetworks are extra prefixes that are always blocked.
+	// DenyNetworks are extra prefixes that are always blocked. They are matched
+	// against the dialled address and against the IPv4 embedded in it.
 	DenyNetworks []netip.Prefix
+	// NAT64Prefixes are the operator's own translation prefixes (alert.webhook.
+	// nat64_prefixes: /32, /40, /48, /56, /64 or /96, RFC 6052). An address under
+	// one is decoded and judged by its IPv4. 64:ff9b::/96 needs no entry.
+	NAT64Prefixes []netip.Prefix
 }
 
 var (
@@ -69,64 +79,201 @@ var (
 // isPrivate covers RFC 1918, fc00::/7 and the carrier-grade NAT range.
 func isPrivate(a netip.Addr) bool { return a.IsPrivate() || cgnat.Contains(a) }
 
-// normalize strips the IPv4-mapped form and any zone, so ::ffff:127.0.0.1 is
-// judged as 127.0.0.1.
-func normalize(a netip.Addr) netip.Addr { return a.Unmap().WithZone("") }
+var (
+	wellKnownNAT64 = netip.MustParsePrefix("64:ff9b::/96")
+	// localUseNAT64 (RFC 8215): the translator's prefix length is unknown, so the
+	// IPv4 destination cannot be read from the address.
+	localUseNAT64 = netip.MustParsePrefix("64:ff9b:1::/48")
+	// deprecatedEmbedding lists forms that carry an IPv4 address in a way no
+	// legitimate receiver needs: 6to4, Teredo and SIIT. IPv4-compatible (::/96) is
+	// checked in classify because it must not catch :: and ::1.
+	deprecatedEmbedding = []struct {
+		pf   netip.Prefix
+		name string
+	}{
+		{netip.MustParsePrefix("2002::/16"), "6to4 (2002::/16)"},
+		{netip.MustParsePrefix("2001::/32"), "Teredo (2001::/32)"},
+		{netip.MustParsePrefix("::ffff:0:0:0/96"), "SIIT (::ffff:0:0:0/96)"},
+	}
+	ipv4Compatible = netip.MustParsePrefix("::/96")
+)
+
+// ValidNAT64Length reports whether bits is a prefix length RFC 6052 allows.
+func ValidNAT64Length(bits int) bool {
+	switch bits {
+	case 32, 40, 48, 56, 64, 96:
+		return true
+	}
+	return false
+}
+
+// decodeRFC6052 reads the IPv4 address embedded in a under a prefix of the given
+// length (RFC 6052 section 2.2: the address bits skip bits 64-71, the "u" octet,
+// which must be zero). ok is false when the u octet is not zero.
+func decodeRFC6052(a netip.Addr, bits int) (netip.Addr, bool) {
+	b := a.As16()
+	if b[8] != 0 {
+		return netip.Addr{}, false
+	}
+	var v4 [4]byte
+	switch bits {
+	case 32:
+		copy(v4[:], b[4:8])
+	case 40:
+		copy(v4[:3], b[5:8])
+		v4[3] = b[9]
+	case 48:
+		copy(v4[:2], b[6:8])
+		copy(v4[2:], b[9:11])
+	case 56:
+		v4[0] = b[7]
+		copy(v4[1:], b[9:12])
+	case 64:
+		copy(v4[:], b[9:13])
+	case 96:
+		copy(v4[:], b[12:16])
+	default:
+		return netip.Addr{}, false
+	}
+	return netip.AddrFrom4(v4), true
+}
+
+// classify returns the forms of a that every rule is checked against: a itself,
+// followed by the IPv4 address embedded in it when there is one. blocked is a
+// non-empty reason when the address cannot be judged at all (a deprecated form, a
+// local-use NAT64 address of an unknown translator, a bad u octet).
+//
+// Rule: IPv4-mapped (::ffff:a.b.c.d) is judged as a.b.c.d only, as it always was.
+func classify(a netip.Addr, nat64 []netip.Prefix) (forms []netip.Addr, blocked string) {
+	a = a.WithZone("")
+	if !a.IsValid() {
+		return nil, ""
+	}
+	if a.Is4In6() {
+		return []netip.Addr{a.Unmap()}, ""
+	}
+	if a.Is4() {
+		return []netip.Addr{a}, ""
+	}
+	for _, d := range deprecatedEmbedding {
+		if d.pf.Contains(a) {
+			return []netip.Addr{a}, "is a " + d.name + " address, which embeds an IPv4 address and is always blocked"
+		}
+	}
+	if ipv4Compatible.Contains(a) && !a.IsUnspecified() && !a.IsLoopback() {
+		return []netip.Addr{a}, "is an IPv4-compatible address (::/96), which embeds an IPv4 address and is always blocked"
+	}
+	// The operator's own prefixes first: they are more specific than the local-use range they may sit in.
+	for _, pf := range nat64 {
+		if pf.Contains(a) {
+			v4, ok := decodeRFC6052(a, pf.Bits())
+			if !ok {
+				return []netip.Addr{a}, "is under the NAT64 prefix " + pf.String() + " but its bits 64-71 are not zero (RFC 6052), so the IPv4 address cannot be read"
+			}
+			return []netip.Addr{a, v4}, ""
+		}
+	}
+	if wellKnownNAT64.Contains(a) {
+		v4, _ := decodeRFC6052(a, 96)
+		return []netip.Addr{a, v4}, ""
+	}
+	if localUseNAT64.Contains(a) {
+		return []netip.Addr{a}, "is in the local-use NAT64 range 64:ff9b:1::/48 and its translator is not listed: the IPv4 destination cannot be known; list the translator's prefix in alert.webhook.nat64_prefixes"
+	}
+	return []netip.Addr{a}, ""
+}
+
+// Effective returns the address the rules judge a by: the IPv4 embedded in a
+// translation address, otherwise a (unmapped). The error is the reason when a
+// cannot be judged at all.
+func (p Policy) Effective(a netip.Addr) (netip.Addr, error) {
+	forms, why := classify(a, p.NAT64Prefixes)
+	if why != "" {
+		return netip.Addr{}, &PermanentError{Code: "blocked", Msg: "address " + a.WithZone("").String() + " " + why}
+	}
+	if len(forms) == 0 {
+		return netip.Addr{}, &PermanentError{Code: "blocked", Msg: "address is not valid"}
+	}
+	return forms[len(forms)-1], nil
+}
 
 // CheckAddr returns nil when a webhook may connect to a, otherwise a
 // *PermanentError with code "blocked" whose text names the reason. The text
 // may name the address: it is only ever shown to admins.
+//
+// Every rule applies to every form of the address (see classify); the loopback
+// and private switches are judged on the embedded IPv4 when there is one, since
+// the translation address itself is a global unicast address.
 func (p Policy) CheckAddr(a netip.Addr) error {
-	a = normalize(a)
-	blocked := func(why string) error {
-		return &PermanentError{Code: "blocked", Msg: "address " + a.String() + " " + why}
-	}
-	switch {
-	case !a.IsValid():
+	forms, why := classify(a, p.NAT64Prefixes)
+	if len(forms) == 0 {
 		return &PermanentError{Code: "blocked", Msg: "address is not valid"}
-	case a.IsUnspecified():
-		return blocked("is unspecified and is always blocked")
-	case a.IsLinkLocalUnicast() || a.IsLinkLocalMulticast():
-		return blocked("is link-local (cloud metadata lives here) and is always blocked")
-	case a.IsMulticast() || a.IsInterfaceLocalMulticast():
-		return blocked("is multicast and is always blocked")
 	}
-	for _, pf := range alwaysBlockedPrefixes {
-		if pf.Contains(a) {
-			return blocked("is in " + pf.String() + " (special-purpose) and is always blocked")
+	blocked := func(f netip.Addr, why string) error {
+		msg := "address " + a.WithZone("").Unmap().String() + " "
+		if f != a.WithZone("").Unmap() {
+			msg += "(embedded IPv4 " + f.String() + ") "
+		}
+		return &PermanentError{Code: "blocked", Msg: msg + why}
+	}
+	if why != "" {
+		return blocked(forms[0], why)
+	}
+	for _, f := range forms {
+		switch {
+		case f.IsUnspecified():
+			return blocked(f, "is unspecified and is always blocked")
+		case f.IsLinkLocalUnicast() || f.IsLinkLocalMulticast():
+			return blocked(f, "is link-local (cloud metadata lives here) and is always blocked")
+		case f.IsMulticast() || f.IsInterfaceLocalMulticast():
+			return blocked(f, "is multicast and is always blocked")
+		}
+		for _, pf := range alwaysBlockedPrefixes {
+			if pf.Contains(f) {
+				return blocked(f, "is in "+pf.String()+" (special-purpose) and is always blocked")
+			}
+		}
+		for _, m := range metadataAddrs {
+			if f == m {
+				return blocked(f, "is a cloud metadata or platform endpoint and is always blocked")
+			}
+		}
+		for _, pf := range p.DenyNetworks {
+			if pf.Contains(f) {
+				return blocked(f, "is in "+pf.String()+" (alert.webhook.deny_networks)")
+			}
 		}
 	}
-	for _, m := range metadataAddrs {
-		if a == m {
-			return blocked("is a cloud metadata or platform endpoint and is always blocked")
-		}
-	}
-	for _, pf := range p.DenyNetworks {
-		if pf.Contains(a) {
-			return blocked("is in " + pf.String() + " (alert.webhook.deny_networks)")
-		}
-	}
-	if a.IsLoopback() {
+	judged := forms[len(forms)-1]
+	if judged.IsLoopback() {
 		if !p.AllowLoopback {
-			return blocked("is loopback; set alert.webhook.allow_loopback to allow it")
+			return blocked(judged, "is loopback; set alert.webhook.allow_loopback to allow it")
 		}
 		return nil
 	}
-	if isPrivate(a) && !p.AllowPrivate {
-		return blocked("is a private address; set alert.webhook.allow_private to allow it")
+	if isPrivate(judged) && !p.AllowPrivate {
+		return blocked(judged, "is a private address; set alert.webhook.allow_private to allow it")
 	}
 	return nil
 }
 
 // CheckPlaintext applies decision 19 to an address: plaintext (http, SMTP
 // without TLS) only to loopback and private addresses, never to a public one.
-func CheckPlaintext(a netip.Addr) error {
-	a = normalize(a)
-	if a.IsLoopback() || isPrivate(a) {
+// It judges a translation address by the IPv4 inside it, so a NAT64 form of a
+// public address is public.
+func (p Policy) CheckPlaintext(a netip.Addr) error {
+	j, err := p.Effective(a)
+	if err != nil {
+		return err
+	}
+	if j.IsLoopback() || isPrivate(j) {
 		return nil
 	}
-	return &PermanentError{Code: "plaintext", Msg: "address " + a.String() + " is public: plaintext connections are only allowed to loopback and private addresses, use https"}
+	return &PermanentError{Code: "plaintext", Msg: "address " + a.WithZone("").Unmap().String() + " is public: plaintext connections are only allowed to loopback and private addresses, use https"}
 }
+
+// CheckPlaintext is Policy{}.CheckPlaintext: for callers that have no translation prefixes.
+func CheckPlaintext(a netip.Addr) error { return Policy{}.CheckPlaintext(a) }
 
 // Resolver is the part of net.Resolver the dial step needs; tests script it.
 type Resolver interface {
@@ -153,7 +300,7 @@ func ControlFunc(p Policy, plaintext bool) func(ctx context.Context, network, ad
 			return err
 		}
 		if plaintext {
-			return CheckPlaintext(a)
+			return p.CheckPlaintext(a)
 		}
 		return nil
 	}
@@ -207,10 +354,10 @@ func (d *SafeDialer) DialContext(ctx context.Context, network, addr string) (net
 	var allowed []netip.Addr
 	var firstBlock error
 	for _, a := range answers {
-		a = normalize(a)
+		a = a.WithZone("").Unmap()
 		e := d.Policy.CheckAddr(a)
 		if e == nil && d.Plaintext {
-			e = CheckPlaintext(a)
+			e = d.Policy.CheckPlaintext(a)
 		}
 		if e != nil {
 			if firstBlock == nil {

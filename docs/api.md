@@ -105,6 +105,15 @@ does not move `last_seen`. The agent side (the `event` command and the spool) is
 No authentication. `200 {"status":"ok"}` when the database answers within two seconds, otherwise
 `503 {"status":"unavailable"}`. It reveals nothing else.
 
+### `GET /metrics`
+
+Prometheus text exposition format 0.0.4, **off by default** (404). With `metrics.enabled: true` it needs
+`Authorization: Bearer <token>`, the token read from `metrics.token_file`; a wrong or missing one gets 401. It is not a
+console route: no cookie, no CSRF. Series: `clamfleet_hosts{state}`, `clamfleet_host_state{host,state}`,
+`clamfleet_host_last_seen_timestamp_seconds{host}`, `clamfleet_host_signature_age_seconds{host,db}`,
+`clamfleet_events_open`, `clamfleet_alert_deliveries{status}` and `clamfleet_build_info{version}`. Never a path, a
+signature or a tag. See [operations.md](operations.md#metrics).
+
 ## Logging
 
 The server logs one line per request: method, path, status, the authenticated host name (empty for

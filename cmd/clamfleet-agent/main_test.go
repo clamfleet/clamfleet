@@ -187,9 +187,12 @@ func TestVersionAndUsage(t *testing.T) {
 			t.Errorf("%v: exit %d, want 2", args, res.code)
 		}
 	}
-	// Subcommands of later milestones are not advertised (event arrived in milestone 5).
-	if res := runAgent(t, "", nil, "bogus"); strings.Contains(res.stderr, "scan") {
-		t.Errorf("usage mentions commands that do not exist yet: %s", res.stderr)
+	// The usage lists exactly the registered commands (scan arrived in milestone 6).
+	res := runAgent(t, "", nil, "bogus")
+	for _, c := range []string{"collect --dry-run", "run [--once]", "event [--config", "scan [--config", "version"} {
+		if !strings.Contains(res.stderr, c) {
+			t.Errorf("usage does not mention %q: %s", c, res.stderr)
+		}
 	}
 }
 

@@ -134,7 +134,7 @@ func ValidateWebhookURL(raw string, p Policy) (ValidatedURL, error) {
 			return ValidatedURL{}, err
 		}
 		if u.Scheme == "http" {
-			if err := CheckPlaintext(ip); err != nil {
+			if err := p.CheckPlaintext(ip); err != nil {
 				return ValidatedURL{}, err
 			}
 		}

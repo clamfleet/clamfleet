@@ -26,4 +26,7 @@ units: {clamd: clamav-daemon, freshclam: clamav-freshclam, clamonacc: clamav-cla
 #   max_mb          1 to 10240: a hard cap on the real disk use of everything under dir
 #   max_event_days  30 to 3650: a spooled event older than this is deleted instead of sent
 spool: {dir: /var/lib/clamfleet/spool, max_mb: 50, max_event_days: 365}
-scan: {paths: [/srv, /home], summary: /var/lib/clamfleet/last_scan.json}
+# scan: `clamfleet-agent scan` (the clamfleet-scan.timer, shipped disabled) scans these paths with clamdscan and
+# writes the summary the report carries. It never starts clamd. clamd reads the files as its own user, so a
+# private directory under /home shows up as errors. timeout (1m to 72h): the scan is stopped after this long.
+scan: {paths: [/srv, /home], summary: /var/lib/clamfleet/last_scan.json, timeout: 12h}

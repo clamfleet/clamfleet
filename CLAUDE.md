@@ -10,15 +10,17 @@ Central management for ClamAV on Linux fleets. Spec: `docs/HANDOVER.md`. Current
 
 ## Commands
 
-- `make check`: `go vet`, `staticcheck`, `sqlc diff`, `go test ./...` and `scripts-test` (the shell tests of `deploy/test`, fake ssh; no container needed).
+- `make check`: `go vet`, `staticcheck`, `sqlc diff`, `go test ./...` and `scripts-test` (the shell tests of `deploy/test`: fake ssh, the systemd units and SELinux module statically, and the package maintainer scripts under stub commands; no container needed).
+- `make packages VERSION=x.y.z`: the `.deb` and `.rpm` of the agent and the server into `dist/`, built by nfpm (`deploy/packaging`, build-time only).
 - `make e2e`: runs the agent inside the `clamfleet-test` Incus container. Read `docs/testing.md` first.
 - `make webfixture`: builds `bin/webfixture`, a throwaway console on 127.0.0.1 with seeded users and hosts for browser tests (see `docs/testing.md`, "Browser fixture").
+- `make e2e-el9`: the rpm and the detection path on the AlmaLinux 9 VM (SELinux enforcing); part of milestone 6 acceptance, together with `make e2e` and `make e2e-apparmor`. Needs `CFE_EXEC` and `CFE_HOST`; fails, never skips (`docs/testing.md`).
 - `make e2e-apparmor`: the detection path on the VM `clamfleet-aa` (Debian 13, AppArmor enforcing); part of milestone 5 acceptance, together with `make e2e`. Needs `CFA_EXEC` and `CFA_HOST`; it fails, never skips (see `docs/testing.md`).
 - `make e2e-web`: Playwright browser tests of the console (`e2e/web`, `@playwright/test` 1.63.0 on Chromium 1243 from `/opt/playwright/browsers`); run from a fresh shell so `/opt/env.sh` is loaded.
 - Tests in `cmd/*` and `hack/webfixture` build binaries that `go test` caching cannot see: use `-count=1` when changing code they cover.
 - `make fixtures`: re-records `internal/agent/testdata` from the container. Never hand-edit recorded files.
 - `make generate` runs sqlc over `migrations/sqlite` and `internal/store/sqlite/queries`; `make check` runs `sqlc diff`. Never hand-edit `internal/store/sqlite/sqlcdb`.
-- Tools: Go 1.27.4 (`go 1.26.0` in go.mod), staticcheck 2026.2.2 (v0.8.2), sqlc v1.31.1 (`CGO_ENABLED=0 go install github.com/sqlc-dev/sqlc/cmd/sqlc@v1.31.1`, build-time only).
+- Tools: Go 1.27.4 (`go 1.26.0` in go.mod), staticcheck 2026.2.2 (v0.8.2), sqlc v1.31.1 (`CGO_ENABLED=0 go install github.com/sqlc-dev/sqlc/cmd/sqlc@v1.31.1`, build-time only), nfpm v2.49.0 (`go run github.com/goreleaser/nfpm/v2/cmd/nfpm@v2.49.0`, pinned as `NFPM_VERSION` in the Makefile, build-time only, nothing installed).
 
 ## Rules
 
@@ -35,6 +37,7 @@ Central management for ClamAV on Linux fleets. Spec: `docs/HANDOVER.md`. Current
 - Time goes through an injected clock, never `time.Now()` inside a collector.
 - The agent never starts clamd: it does not touch the clamd socket while the clamd unit is not active (socket activation).
 - Bind nothing to non-loopback addresses in tests or tools.
+- Package maintainer scripts never edit another package's files (`clamd.conf`, Debian's AppArmor local include for clamd): the postinstall prints the lines for the administrator. The SELinux module is installed and removed at priority 300 only (`semodule -X 300`).
 - No org-specific hostnames in fixtures; scrub them to `mirror.example`.
 - The agent never imports `internal/store`, `internal/server`, `internal/alert`, `net/smtp` or the SQLite and goose modules (a test pins it).
 - Agent credentials live only in `internal/agentauth` and `hosts.token_hash`; web-console users (later) get their own package and tables. Routes are registered only in `server.NewHandler` (table `server.Routes`).

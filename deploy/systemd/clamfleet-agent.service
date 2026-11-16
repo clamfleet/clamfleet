@@ -1,0 +1,39 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# SPDX-FileCopyrightText: The ClamFleet Authors
+#
+# The ClamFleet agent: sends a health report to the server every interval and
+# delivers the detections that clamd's VirusEvent spooled.
+#
+# ConditionPathExists: a freshly installed agent has no token yet. The unit then
+# shows "condition failed" instead of a restart loop; write the token (root:clamfleet
+# 0640) and `systemctl start clamfleet-agent`.
+#
+# The hardening is what the agent needs and no more: it reads clamd's socket,
+# /var/lib/clamav and the journal, asks systemd about units over D-Bus, and writes only
+# under /var/lib/clamfleet. The e2e suites (Debian 13 and AlmaLinux 9) prove the full
+# report still works under it; ProtectHome is on because the agent never reads /home
+# (clamd scans as its own user).
+[Unit]
+Description=ClamFleet agent (reports ClamAV health to the ClamFleet server)
+Documentation=https://github.com/clamfleet/clamfleet
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=/etc/clamfleet/token
+
+[Service]
+Type=simple
+User=clamfleet
+ExecStart=/usr/bin/clamfleet-agent run
+Restart=on-failure
+RestartSec=10
+ProtectSystem=strict
+ReadWritePaths=/var/lib/clamfleet
+ProtectHome=yes
+PrivateTmp=yes
+NoNewPrivileges=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+UMask=0027
+
+[Install]
+WantedBy=multi-user.target

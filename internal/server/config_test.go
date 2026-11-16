@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -27,16 +28,19 @@ func TestEnvNamesMatchDocumentedTable(t *testing.T) {
 	want := []string{
 		"CLAMFLEET_SERVER_ALERT_COOLDOWN", "CLAMFLEET_SERVER_ALERT_WEBHOOK_ALLOW_LOOPBACK",
 		"CLAMFLEET_SERVER_ALERT_WEBHOOK_ALLOW_PRIVATE", "CLAMFLEET_SERVER_ALERT_WEBHOOK_CA_FILE",
-		"CLAMFLEET_SERVER_ALERT_WEBHOOK_DENY_NETWORKS", "CLAMFLEET_SERVER_ALERT_WEBHOOK_TIMEOUT",
+		"CLAMFLEET_SERVER_ALERT_WEBHOOK_DENY_NETWORKS", "CLAMFLEET_SERVER_ALERT_WEBHOOK_NAT64_PREFIXES", "CLAMFLEET_SERVER_ALERT_WEBHOOK_TIMEOUT",
 		"CLAMFLEET_SERVER_AUTH_COOKIE_SECURE", "CLAMFLEET_SERVER_AUTH_LOCAL_ENABLED",
 		"CLAMFLEET_SERVER_AUTH_LOCAL_TOTP_REQUIRED",
 		"CLAMFLEET_SERVER_AUTH_SESSION_IDLE", "CLAMFLEET_SERVER_AUTH_SESSION_MAX_AGE",
+		"CLAMFLEET_SERVER_BACKUP_DIR", "CLAMFLEET_SERVER_BACKUP_KEEP",
 		"CLAMFLEET_SERVER_DB_PATH",
 		"CLAMFLEET_SERVER_HEALTH_BEHIND_WARN", "CLAMFLEET_SERVER_HEALTH_DAILY_CRIT_HOURS",
 		"CLAMFLEET_SERVER_HEALTH_DAILY_WARN_HOURS", "CLAMFLEET_SERVER_HEALTH_DEFAULT_INTERVAL",
 		"CLAMFLEET_SERVER_HEALTH_EVAL_INTERVAL", "CLAMFLEET_SERVER_HEALTH_REQUIRE_VIRUS_EVENT", "CLAMFLEET_SERVER_HEALTH_SCAN_WARN_HOURS",
 		"CLAMFLEET_SERVER_HEALTH_STALE_FACTOR",
-		"CLAMFLEET_SERVER_LISTEN", "CLAMFLEET_SERVER_PUBLIC_URL", "CLAMFLEET_SERVER_RETENTION_EVENTS_DAYS", "CLAMFLEET_SERVER_SECRET_KEY_FILE",
+		"CLAMFLEET_SERVER_LISTEN", "CLAMFLEET_SERVER_METRICS_ENABLED", "CLAMFLEET_SERVER_METRICS_TOKEN_FILE", "CLAMFLEET_SERVER_PUBLIC_URL", "CLAMFLEET_SERVER_RETENTION_ALERT_LOG_DAYS", "CLAMFLEET_SERVER_RETENTION_AUDIT_DAYS",
+		"CLAMFLEET_SERVER_RETENTION_EVENTS_DAYS", "CLAMFLEET_SERVER_RETENTION_REPORTS_DAYS", "CLAMFLEET_SERVER_RETENTION_STATE_CHANGES_DAYS",
+		"CLAMFLEET_SERVER_SECRET_KEY_FILE",
 		"CLAMFLEET_SERVER_SMTP_CA_FILE", "CLAMFLEET_SERVER_SMTP_FROM", "CLAMFLEET_SERVER_SMTP_HELO",
 		"CLAMFLEET_SERVER_SMTP_HOST", "CLAMFLEET_SERVER_SMTP_PASSWORD_FILE", "CLAMFLEET_SERVER_SMTP_PORT",
 		"CLAMFLEET_SERVER_SMTP_TIMEOUT", "CLAMFLEET_SERVER_SMTP_TLS", "CLAMFLEET_SERVER_SMTP_USERNAME",
@@ -114,6 +118,9 @@ func TestValidate(t *testing.T) {
 		if tc.c.Retention == (Retention{}) {
 			tc.c.Retention = DefaultConfig().Retention
 		}
+		if tc.c.Backup == (Backup{}) {
+			tc.c.Backup = DefaultConfig().Backup
+		}
 		if tc.c.Alert.Webhook.Timeout == 0 {
 			tc.c.Alert = DefaultConfig().Alert
 		}
@@ -146,13 +153,13 @@ func TestEnvOverridesFile(t *testing.T) {
 }
 
 // A copy of spec 12 with keys of a later milestone must fail loudly, not be ignored:
-// retention.events_days exists since milestone 5, reports_days and the others arrive in M6.
+// retention.* has five keys; a sixth, invented one is refused.
 func TestUnknownKeyIsAnError(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "server.yaml")
-	if err := os.WriteFile(p, []byte("listen: 127.0.0.1:1\nretention: {reports_days: 90}\n"), 0o600); err != nil {
+	if err := os.WriteFile(p, []byte("listen: 127.0.0.1:1\nretention: {sessions_days: 90}\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := LoadConfig(p, true, noEnv()); err == nil || !strings.Contains(err.Error(), "reports_days") {
+	if _, _, err := LoadConfig(p, true, noEnv()); err == nil || !strings.Contains(err.Error(), "sessions_days") {
 		t.Fatalf("err = %v", err)
 	}
 }
@@ -369,5 +376,94 @@ func TestRetentionEventsDaysFromFileAndEnv(t *testing.T) {
 	c, _, err = LoadConfig(p, true, o)
 	if err != nil || c.Retention.EventsDays != 9 {
 		t.Fatalf("the environment must win: %+v %v", c.Retention, err)
+	}
+}
+
+// The new retention keys load from the file and the environment like events_days.
+func TestRetentionKeysFromFileAndEnv(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "server.yaml")
+	if err := os.WriteFile(p, []byte("retention: {reports_days: 14, audit_days: 90, alert_log_days: 40}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	o := noEnv()
+	o.LookupEnv = func(k string) (string, bool) { return "45", k == "CLAMFLEET_SERVER_RETENTION_STATE_CHANGES_DAYS" }
+	c, _, err := LoadConfig(p, true, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := Retention{ReportsDays: 14, EventsDays: 365, StateChangesDays: 45, AlertLogDays: 40, AuditDays: 90}
+	if c.Retention != want {
+		t.Fatalf("%+v, want %+v", c.Retention, want)
+	}
+}
+
+func TestBackupConfig(t *testing.T) {
+	c := DefaultConfig()
+	if c.Backup.Dir != "/var/lib/clamfleet-server/backups" || c.Backup.Keep != 7 {
+		t.Fatalf("%+v", c.Backup)
+	}
+	for _, keep := range []int{0, 1, 365} {
+		c.Backup.Keep = keep
+		if err := c.Backup.Validate(); err != nil {
+			t.Errorf("keep %d: %v", keep, err)
+		}
+	}
+	for _, keep := range []int{-1, 366} {
+		c.Backup.Keep = keep
+		if err := c.Backup.Validate(); err == nil || !strings.Contains(err.Error(), "backup.keep") {
+			t.Errorf("keep %d accepted: %v", keep, err)
+		}
+	}
+	c.Backup.Keep = 7
+	c.Backup.Dir = "relative/dir"
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "backup.dir") {
+		t.Fatalf("a relative backup.dir was accepted: %v", err)
+	}
+}
+
+// docs/configuration.md lists every environment variable the server derives from its configuration, and no
+// other: a key added without a row (or a row left behind by a removed key) fails here.
+func TestConfigurationDocMatchesTheEnvNames(t *testing.T) {
+	b, err := os.ReadFile(filepath.Join("..", "..", "docs", "configuration.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc := map[string]bool{}
+	for _, m := range regexp.MustCompile("`("+EnvPrefix+"[A-Z0-9_]+)`").FindAllStringSubmatch(string(b), -1) {
+		doc[m[1]] = true
+	}
+	c := DefaultConfig()
+	for _, n := range config.EnvNames(&c, EnvPrefix) {
+		if !doc[n] {
+			t.Errorf("%s is not documented in docs/configuration.md", n)
+		}
+		delete(doc, n)
+	}
+	for n := range doc {
+		t.Errorf("docs/configuration.md documents %s, which is not a server setting", n)
+	}
+}
+
+// A backup.dir outside the state directory is read-only under the packaged units: warn, never refuse.
+func TestBackupDirOutsideTheStateDirectoryWarns(t *testing.T) {
+	c := DefaultConfig()
+	if w := c.Warnings(); len(w) != 0 {
+		t.Fatalf("the default backup.dir warns: %v", w)
+	}
+	for _, d := range []string{"/var/lib/clamfleet-server", "/var/lib/clamfleet-server/other/", "/var/lib/clamfleet-server/../clamfleet-server/b"} {
+		c.Backup.Dir = d
+		if w := c.Warnings(); len(w) != 0 {
+			t.Errorf("%s warns: %v", d, w)
+		}
+	}
+	for _, d := range []string{"/srv/backups", "/var/lib/clamfleet-server2/b", "/var/lib/clamfleet-server/../x"} {
+		c.Backup.Dir = d
+		w := c.Warnings()
+		if len(w) != 1 || !strings.Contains(w[0], "ReadWritePaths="+filepath.Clean(d)) {
+			t.Errorf("%s: warnings %v, want one naming the drop-in", d, w)
+		}
+		if err := c.Validate(); err != nil {
+			t.Errorf("%s: a warning must not be an error: %v", d, err)
+		}
 	}
 }

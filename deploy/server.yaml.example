@@ -64,13 +64,34 @@ alert:
     allow_private: true   # RFC 1918, 100.64.0.0/10 and fc00::/7 (and plaintext http:// to them). Set false on a cloud host
     allow_loopback: false # 127.0.0.0/8, ::1, localhost: for a receiver on this machine
     deny_networks: []     # extra CIDRs that are never allowed, e.g. ["10.9.0.0/16"]
+    nat64_prefixes: []    # your own NAT64 translator prefixes, e.g. ["64:ff9b:1::/96"] (IPv6, /32 /40 /48 /56 /64 or /96).
+                          # An address under one is judged by the IPv4 it carries; 64:ff9b::/96 needs no entry; an unlisted
+                          # local-use 64:ff9b:1::/48 address is blocked, because its destination cannot be known
     ca_file: ""           # extra CA bundle (PEM) added to the system roots, for a receiver with a private CA
                           # Link-local, cloud metadata, multicast and unspecified addresses are always blocked.
-# Retention. Events are deleted this many days after they ARRIVED (not by the agent's detection
-# time: a spooled event can be old when it arrives). A file path is personal data. reports_days
-# and state_changes_days arrive in milestone 6. Environment: CLAMFLEET_SERVER_RETENTION_EVENTS_DAYS.
+# Retention, in days, counted from ARRIVAL on the server clock (not the agent's detection time: a
+# spooled event can be old when it arrives). A file path is personal data. One daily pass prunes every
+# table in batches. A row whose alert is still unfinished is kept until that is over.
+# Environment: CLAMFLEET_SERVER_RETENTION_REPORTS_DAYS and so on.
 retention:
-  events_days: 365        # 7 to 3650
+  reports_days: 30        # 14 to 90: heartbeat reports
+  events_days: 365        # 7 to 3650: detections
+  state_changes_days: 365 # 30 to 3650: health state history
+  alert_log_days: 90      # 30 to 3650: alert attempts, finished deliveries, closed detection windows
+  audit_days: 365         # 90 to 3650: the audit log (emails and client IPs)
+# Backups: `sudo -u clamfleet-server clamfleet-server backup` writes a consistent copy of the database here
+# (the key file is NOT in it: back that up separately). A backup holds every row, also paths older than the
+# retention, so keep it as private as the database. Environment: CLAMFLEET_SERVER_BACKUP_DIR and _KEEP.
+backup:
+  dir: /var/lib/clamfleet-server/backups   # a real directory, mode 0700, owned by the server user (created if missing)
+  keep: 7                                  # 0 to 365 newest backups kept by `backup`; 0 keeps them all
+# Prometheus metrics at GET /metrics (host names, states and counts; never a path or a signature).
+# Off by default. When on, a bearer token is required, read from a file that follows the key-file rule
+# (root:clamfleet-server 0640). Generate one: openssl rand -base64 48 > FILE. Prometheus: authorization.credentials_file.
+# Environment: CLAMFLEET_SERVER_METRICS_ENABLED and CLAMFLEET_SERVER_METRICS_TOKEN_FILE.
+metrics:
+  enabled: false
+  token_file: ""          # e.g. /etc/clamfleet/metrics-token (at least 32 bytes)
 # Email alerts. Empty host = email is off (creating an email target is refused).
 smtp:
   host: ""                # e.g. smtp.example

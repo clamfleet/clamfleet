@@ -240,6 +240,9 @@ func (s *Store) pruneBatches(ctx context.Context, batch int, del func(q *sqlcdb.
 	var total int64
 	for {
 		var n int64
+		if s.onPruneTx != nil {
+			s.onPruneTx()
+		}
 		if err := s.inTx(ctx, func(q *sqlcdb.Queries) error {
 			var err error
 			n, err = del(q)

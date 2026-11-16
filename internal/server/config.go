@@ -19,6 +19,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/clamfleet/clamfleet/internal/alert"
 	"github.com/clamfleet/clamfleet/internal/config"
 	"github.com/clamfleet/clamfleet/internal/health"
 	"github.com/clamfleet/clamfleet/internal/secrets"
@@ -57,30 +58,113 @@ type Config struct {
 	Alert     Alert     `yaml:"alert"`
 	SMTP      SMTP      `yaml:"smtp"`
 	Retention Retention `yaml:"retention"`
+	Backup    Backup    `yaml:"backup"`
+	Metrics   Metrics   `yaml:"metrics"`
 }
 
-// Retention says how long data is kept. Only events arrive in milestone 5; the
-// report and state-change keys come with the other retention rules in milestone
-// 6 (the strict config decoder refuses keys that do not exist yet).
-type Retention struct {
-	// EventsDays: events (and, by cascade, their receipts, window membership and
-	// alert rows) are deleted this many days after they ARRIVED, by received_at
-	// and not by the agent's ts: a spooled event can be old when it arrives. A
-	// file path is personal data, so this is also how long paths live here.
-	EventsDays int `yaml:"events_days"`
+// Backup configures `clamfleet-server backup` and the automatic backup before a
+// migration (milestone 6, plan 4.4 and 4.5).
+type Backup struct {
+	// Dir holds the backups: absolute, a real directory owned by the server user
+	// with mode 0700 (the command checks it). It defaults under the state directory.
+	Dir string `yaml:"dir"`
+	// Keep is how many regular backups `backup` leaves (0 = keep every backup).
+	// Pre-migration backups are kept separately: the newest 3.
+	Keep int `yaml:"keep"`
 }
 
-// Bounds of retention.events_days.
+// packagedStateDir is the directory the packaged unit makes writable (StateDirectory=clamfleet-server).
+const packagedStateDir = "/var/lib/clamfleet-server"
+
+// Warnings returns non-fatal configuration problems for the caller to log. Today: a backup.dir
+// outside the state directory. The packaged unit has ProtectSystem=strict, so such a directory is
+// read-only for the service and for the backup timer unless a drop-in adds it to ReadWritePaths=;
+// without it the daily backup fails and so does the backup before a migration (the next upgrade
+// that brings one would refuse to start).
+func (c Config) Warnings() []string {
+	var w []string
+	d := filepath.Clean(c.Backup.Dir)
+	if d != packagedStateDir && !strings.HasPrefix(d, packagedStateDir+"/") {
+		w = append(w, fmt.Sprintf("backup.dir %s is outside %s: under the packaged systemd units (ProtectSystem=strict) it is read-only unless a drop-in adds ReadWritePaths=%s; see docs/operations.md", d, packagedStateDir, d))
+	}
+	return w
+}
+
+// Bounds of backup.keep.
 const (
-	MinEventsDays     = 7
-	MaxEventsDays     = 3650
-	DefaultEventsDays = 365
+	MaxBackupKeep     = 365
+	DefaultBackupKeep = 7
+	// DefaultBackupDir is inside the state directory, which is 0700 for the server user.
+	DefaultBackupDir = "/var/lib/clamfleet-server/backups"
 )
 
-// Validate checks the retention keys.
+// Validate checks the backup keys.
+func (b Backup) Validate() error {
+	if !filepath.IsAbs(b.Dir) {
+		return fmt.Errorf("backup.dir must be an absolute path, got %q", b.Dir)
+	}
+	if b.Keep < 0 || b.Keep > MaxBackupKeep {
+		return fmt.Errorf("backup.keep must be between 0 (keep every backup) and %d, got %d", MaxBackupKeep, b.Keep)
+	}
+	return nil
+}
+
+// Retention says how long data is kept, in days, per table (spec 8.2; plan
+// docs/plans/milestone-6.md 4.3). Every key counts from ARRIVAL on the server
+// clock (received_at or ts of the server's own rows), never from the agent's
+// clock: a spooled event or report can be old when it arrives.
+type Retention struct {
+	// ReportsDays: heartbeat reports. The fleet page does not depend on them
+	// (hosts.last_report and hosts.state live on the host row).
+	ReportsDays int `yaml:"reports_days"`
+	// EventsDays: events (and, by cascade, their receipts, window membership and
+	// alert rows). A file path is personal data, so this is also how long paths
+	// live here. An event whose alert is unfinished, or held in an open detection
+	// window, is kept until that is over.
+	EventsDays int `yaml:"events_days"`
+	// StateChangesDays: health state history. One whose alert is still pending is kept.
+	StateChangesDays int `yaml:"state_changes_days"`
+	// AlertLogDays: the alert attempt log, finished deliveries and closed
+	// detection windows (the M4 constant alert.Retention, now configurable).
+	AlertLogDays int `yaml:"alert_log_days"`
+	// AuditDays: the audit log. Audit rows hold emails and client IPs (personal
+	// data), and a security log still needs a bound.
+	AuditDays int `yaml:"audit_days"`
+}
+
+// Defaults and bounds of the retention keys (plan 4.3).
+const (
+	MinReportsDays, MaxReportsDays, DefaultReportsDays                = 14, 90, 30
+	MinEventsDays, MaxEventsDays, DefaultEventsDays                   = 7, 3650, 365
+	MinStateChangesDays, MaxStateChangesDays, DefaultStateChangesDays = 30, 3650, 365
+	MinAlertLogDays, MaxAlertLogDays, DefaultAlertLogDays             = 30, 3650, 90
+	MinAuditDays, MaxAuditDays, DefaultAuditDays                      = 90, 3650, 365
+)
+
+// DefaultRetention returns the defaults of every retention key.
+func DefaultRetention() Retention {
+	return Retention{
+		ReportsDays: DefaultReportsDays, EventsDays: DefaultEventsDays, StateChangesDays: DefaultStateChangesDays,
+		AlertLogDays: DefaultAlertLogDays, AuditDays: DefaultAuditDays,
+	}
+}
+
+// Validate checks every retention key against its bounds, so a typo cannot
+// delete history at once (a day count of 0) or keep personal data for centuries.
 func (r Retention) Validate() error {
-	if r.EventsDays < MinEventsDays || r.EventsDays > MaxEventsDays {
-		return fmt.Errorf("retention.events_days must be between %d and %d, got %d", MinEventsDays, MaxEventsDays, r.EventsDays)
+	for _, k := range []struct {
+		key         string
+		v, min, max int
+	}{
+		{"reports_days", r.ReportsDays, MinReportsDays, MaxReportsDays},
+		{"events_days", r.EventsDays, MinEventsDays, MaxEventsDays},
+		{"state_changes_days", r.StateChangesDays, MinStateChangesDays, MaxStateChangesDays},
+		{"alert_log_days", r.AlertLogDays, MinAlertLogDays, MaxAlertLogDays},
+		{"audit_days", r.AuditDays, MinAuditDays, MaxAuditDays},
+	} {
+		if k.v < k.min || k.v > k.max {
+			return fmt.Errorf("retention.%s must be between %d and %d, got %d", k.key, k.min, k.max, k.v)
+		}
 	}
 	return nil
 }
@@ -105,6 +189,12 @@ type AlertWebhook struct {
 	DenyNetworks []string `yaml:"deny_networks"`
 	// CAFile adds trust anchors (PEM) to the system roots.
 	CAFile string `yaml:"ca_file"`
+	// NAT64Prefixes are the operator's own NAT64 translation prefixes (/32, /40,
+	// /48, /56, /64 or /96, RFC 6052). An address under one is judged by the IPv4
+	// it carries, like the well-known 64:ff9b::/96. A local-use NAT64 address
+	// (64:ff9b:1::/48) of a translator that is not listed is blocked, because the
+	// destination cannot be known. It also applies to the SMTP relay.
+	NAT64Prefixes []string `yaml:"nat64_prefixes"`
 }
 
 // SMTP configures email alerts; an empty Host switches email off.
@@ -149,6 +239,10 @@ func (c Config) validateAlerting() error {
 	if _, err := ParseDenyNetworks(a.Webhook.DenyNetworks); err != nil {
 		return err
 	}
+	nat64, err := ParseNAT64Prefixes(a.Webhook.NAT64Prefixes)
+	if err != nil {
+		return err
+	}
 	if a.Webhook.CAFile != "" && !filepath.IsAbs(a.Webhook.CAFile) {
 		return fmt.Errorf("alert.webhook.ca_file must be an absolute path, got %q", a.Webhook.CAFile)
 	}
@@ -188,8 +282,10 @@ func (c Config) validateAlerting() error {
 		// dial, on the address it resolves to.
 		if ip, err := netip.ParseAddr(strings.Trim(m.Host, "[]")); err == nil {
 			ip = ip.Unmap()
-			if !ip.IsLoopback() && !ip.IsPrivate() && !(netip.MustParsePrefix("100.64.0.0/10").Contains(ip)) {
-				return fmt.Errorf("smtp.tls: none is only allowed for a relay on a loopback or private address, and %s is public: use starttls or tls", ip)
+			// The same classification as the dialer: a NAT64 form of a public IPv4
+			// address is public, and a deprecated embedding cannot be judged at all.
+			if err := (alert.Policy{NAT64Prefixes: nat64}).CheckPlaintext(ip); err != nil {
+				return fmt.Errorf("smtp.tls: none is only allowed for a relay on a loopback or private address, and %s is public or cannot be judged (%v): use starttls or tls", ip, err)
 			}
 			if m.Username != "" && !ip.IsLoopback() {
 				return fmt.Errorf("smtp.tls: none with smtp.username would send the password in clear to %s: credentials are only sent unencrypted to loopback; use starttls or tls", ip)
@@ -199,6 +295,28 @@ func (c Config) validateAlerting() error {
 		}
 	}
 	return nil
+}
+
+// ParseNAT64Prefixes parses alert.webhook.nat64_prefixes: IPv6 prefixes of an
+// RFC 6052 length whose bits 64-71 (the "u" octet) are zero. An invalid entry is
+// an error (Validate calls this): a typo must not silently leave a translator undecoded.
+func ParseNAT64Prefixes(list []string) ([]netip.Prefix, error) {
+	out := make([]netip.Prefix, 0, len(list))
+	for _, e := range list {
+		p, err := netip.ParsePrefix(strings.TrimSpace(e))
+		switch {
+		case err != nil || p.Addr().Is4() || p.Addr().Is4In6():
+			return nil, fmt.Errorf("alert.webhook.nat64_prefixes: %q is not an IPv6 prefix such as 64:ff9b:1::/96", e)
+		case !alert.ValidNAT64Length(p.Bits()):
+			return nil, fmt.Errorf("alert.webhook.nat64_prefixes: %q has length /%d, but RFC 6052 allows only /32, /40, /48, /56, /64 and /96", e, p.Bits())
+		case p.Bits() > 64 && p.Addr().As16()[8] != 0:
+			return nil, fmt.Errorf("alert.webhook.nat64_prefixes: %q sets bits 64-71, which RFC 6052 reserves as zero", e)
+		case p != p.Masked():
+			return nil, fmt.Errorf("alert.webhook.nat64_prefixes: %q has bits set beyond its length (did you mean %s?)", e, p.Masked())
+		}
+		out = append(out, p.Masked())
+	}
+	return out, nil
 }
 
 // ParseDenyNetworks parses alert.webhook.deny_networks. An invalid entry is an
@@ -352,10 +470,11 @@ func DefaultConfig() Config {
 		},
 		Alert: Alert{
 			Cooldown: 15 * time.Minute,
-			Webhook:  AlertWebhook{Timeout: 10 * time.Second, AllowPrivate: true, DenyNetworks: []string{}},
+			Webhook:  AlertWebhook{Timeout: 10 * time.Second, AllowPrivate: true, DenyNetworks: []string{}, NAT64Prefixes: []string{}},
 		},
 		SMTP:      SMTP{Port: 587, TLS: "starttls", Timeout: 30 * time.Second},
-		Retention: Retention{EventsDays: DefaultEventsDays},
+		Retention: DefaultRetention(),
+		Backup:    Backup{Dir: DefaultBackupDir, Keep: DefaultBackupKeep},
 	}
 }
 
@@ -400,6 +519,12 @@ func (c Config) Validate() error {
 		return err
 	}
 	if err := c.Retention.Validate(); err != nil {
+		return err
+	}
+	if err := c.Backup.Validate(); err != nil {
+		return err
+	}
+	if err := c.Metrics.Validate(); err != nil {
 		return err
 	}
 	if c.Listen == "" {

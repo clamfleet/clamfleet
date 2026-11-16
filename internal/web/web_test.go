@@ -854,8 +854,8 @@ func TestUIRouteTable(t *testing.T) {
 			rt.Auth = server.AuthAdmin // keep probing it as an admin route: the viewer probe must see a 403
 		}
 		switch rt.Auth {
-		case server.AuthAgent, server.AuthNone:
-			continue // covered by internal/api TestRouteTable
+		case server.AuthAgent, server.AuthNone, server.AuthMetrics:
+			continue // covered by internal/api TestRouteTable and internal/server TestMetricsThroughRouter
 		case server.AuthPublic:
 			// /login/totp is the one public route that redirects: without a login
 			// challenge it sends the browser to /login (TestLoginTOTPRoutesNeedAChallenge pins that).

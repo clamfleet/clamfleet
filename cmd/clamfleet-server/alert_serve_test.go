@@ -339,6 +339,12 @@ func TestServeRunsTheRetentionPrune(t *testing.T) {
 		Event: proto.Event{TS: old, Path: "/srv/MARKER-PATH", Signature: "S", Source: "clamd"}}); err != nil {
 		t.Fatal(err)
 	}
+	// An event whose alert is not yet planned is kept by the prune (it would lose its
+	// alert), and serve's first pass could run before the dispatcher plans it. Plan it
+	// here (no targets: the planner only clears the flag) so the test does not race.
+	if _, err := st.PlanAlerts(ctx, time.Now(), 0, func(store.AlertPlanInput) store.AlertPlanOutput { return store.AlertPlanOutput{} }); err != nil {
+		t.Fatal(err)
+	}
 	st.Close()
 	srv := startServe(t, tlsb, db)
 	deadline := time.Now().Add(10 * time.Second)

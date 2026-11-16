@@ -522,3 +522,96 @@ func TestM4BinaryRefusesAMigration00005Database(t *testing.T) {
 		t.Fatalf("an M4 binary must refuse the database: %v", err)
 	}
 }
+
+// 00006 only adds indexes: it must keep every existing row, round-trip down and up,
+// and SQLite must actually use the new indexes for the cascade lookups (plan 4.1, [A19]).
+// Without them a pruned event or state change scans the alert tables in full.
+func TestMigration00006IndexesServeTheCascades(t *testing.T) {
+	ctx := context.Background()
+	s, err := Open(ctx, filepath.Join(t.TempDir(), "t.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if _, err := s.prov.UpTo(ctx, 5); err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range []string{
+		`INSERT INTO hosts (id, name, token_hash, created_at) VALUES (1, 'a', x'01', 100)`,
+		`INSERT INTO events (id, host_id, ts, received_at, path, signature, source) VALUES (1, 1, 10, 11, '/p', 'S', 'clamd')`,
+		`INSERT INTO alert_targets (id, name, type, config, created_at, updated_at) VALUES (1, 't', 'webhook', '{}', 1, 1)`,
+		`INSERT INTO alert_log (ts, target_id, target_name, event_id, status) VALUES (1, 1, 't', 1, 'sent')`,
+	} {
+		if _, err := s.w.Exec(q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if n := count(t, s, `SELECT count(*) FROM alert_log`); n != 1 {
+		t.Fatalf("a row was lost by 00006: %d", n)
+	}
+	// The lookups a cascaded delete performs, one per child column.
+	for _, c := range []struct{ query, index string }{
+		{`SELECT 1 FROM alert_deliveries WHERE state_change_id = 1`, "alert_deliveries_state_change"},
+		{`SELECT 1 FROM alert_log WHERE state_change_id = 1`, "alert_log_state_change"},
+		{`SELECT 1 FROM alert_log WHERE event_id = 1`, "alert_log_event"},
+	} {
+		rows, err := s.w.Query(`EXPLAIN QUERY PLAN ` + c.query)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var plan strings.Builder
+		for rows.Next() {
+			var id, parent, unused int
+			var detail string
+			if err := rows.Scan(&id, &parent, &unused, &detail); err != nil {
+				t.Fatal(err)
+			}
+			plan.WriteString(detail + "\n")
+		}
+		rows.Close()
+		if !strings.Contains(plan.String(), c.index) {
+			t.Errorf("%s does not use %s:\n%s", c.query, c.index, plan.String())
+		}
+	}
+	if _, err := s.prov.DownTo(ctx, 5); err != nil {
+		t.Fatal(err)
+	}
+	for _, ix := range []string{"alert_deliveries_state_change", "alert_log_state_change", "alert_log_event"} {
+		var n int
+		if err := s.w.QueryRow(`SELECT count(*) FROM sqlite_master WHERE type='index' AND name=?`, ix).Scan(&n); err != nil || n != 0 {
+			t.Errorf("index %s survived the down migration (%d, %v)", ix, n, err)
+		}
+	}
+	if err := s.Migrate(ctx); err != nil {
+		t.Fatalf("up again: %v", err)
+	}
+}
+
+// Rule: an M5 binary must refuse a 00006 database, like every earlier migration.
+func TestM5BinaryRefusesAMigration00006Database(t *testing.T) {
+	ctx := context.Background()
+	s := openTemp(t)
+	if v, err := s.SchemaVersion(ctx); err != nil || v < 6 {
+		t.Fatalf("schema version %d, %v: the test needs 00006 applied", v, err)
+	}
+	old := fstest.MapFS{}
+	for _, n := range []string{"00001_init.sql", "00002_health_users.sql", "00003_totp.sql", "00004_alerting.sql", "00005_events.sql"} {
+		b, err := migrations.SQLite.ReadFile("sqlite/" + n)
+		if err != nil {
+			t.Fatal(err)
+		}
+		old[n] = &fstest.MapFile{Data: b}
+	}
+	prov, err := goose.NewProvider(goose.DialectSQLite3, s.w, old, goose.WithDisableGlobalRegistry(true))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m5 := &Store{path: s.path, w: s.w, r: s.r, prov: prov}
+	err = m5.checkNotNewer(ctx)
+	if err == nil || !strings.Contains(err.Error(), "newer than this binary supports") {
+		t.Fatalf("an M5 binary must refuse the database: %v", err)
+	}
+}

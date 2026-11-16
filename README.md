@@ -11,9 +11,9 @@ detections to a central server. The design is in [docs/HANDOVER.md](docs/HANDOVE
 
 ClamAV is a registered trademark of Cisco Systems, Inc.; ClamFleet is not affiliated with or endorsed by Cisco.
 
-**Status: early development, not production ready.** Milestones 1 and 2 exist: the agent collects
-its report and sends it to a server, which authenticates the agent and stores the report in SQLite.
-There is no web interface, no health evaluation and no alerting yet, and no packages.
+**Status: early development, not production ready.** Milestones 1 to 6a exist: the agent reports to a server that
+stores, evaluates and alerts, with a web console, detections from clamd's `VirusEvent`, retention, backup, `/metrics`,
+and `.deb` and `.rpm` packages (see [docs/install.md](docs/install.md)). LDAP and OIDC sign-in are planned.
 
 ## Who it is for
 
@@ -29,7 +29,7 @@ found anything.
   - freshclam: last successful and last failed update, from the systemd journal, the log file, or as a last resort the database file times
   - systemd state of the clamd, freshclam and clamonacc units
   - host name, OS release, agent version and configured tags
-  - the last scan summary, if a summary file exists (the scan command itself is planned)
+  - the last scan summary, if a summary file exists (written by `clamfleet-agent scan`)
 - `clamfleet-agent run` sends a report now and then every `interval` (default 5 minutes);
   `run --once` sends one and exits 0 on success, 1 otherwise. The service writes every heartbeat to a **spool**
   on disk and sends from there, so a server outage loses nothing within the spool's limits.
@@ -65,6 +65,14 @@ found anything.
 A data source that cannot be read does not fail the report. It appears as `null`, and a warning goes
 to stderr.
 
+## Install
+
+Packages for Debian 13 and the RHEL 9 family (tested on AlmaLinux 9 with SELinux enforcing): `clamfleet-server` and
+`clamfleet-agent`, built by `make packages VERSION=x.y.z`. [docs/install.md](docs/install.md) has the steps,
+[docs/operations.md](docs/operations.md) retention, backup and restore, `/metrics` and TLS reload, and
+[docs/configuration.md](docs/configuration.md) every key. The packages never edit clamd's configuration: the install
+notice prints the `VirusEvent` line (and, on Debian, the two AppArmor lines) to add.
+
 ## Requirements
 
 - **Go 1.27.4.** `go.mod` declares `go 1.26.0` and `toolchain go1.27.4`. With the default
@@ -83,7 +91,10 @@ to stderr.
 make build      # static binaries bin/clamfleet-agent and bin/clamfleet-server (CGO_ENABLED=0)
 make check      # go vet, staticcheck, sqlc diff, go test ./..., script tests; no container needed
 make generate   # regenerate internal/store/sqlite/sqlcdb after changing a migration or query
-make e2e        # end-to-end tests inside a ClamAV container; needs setup
+make packages VERSION=x.y.z   # .deb and .rpm of the agent and the server into dist/ (nfpm v2.49.0, via go run)
+make e2e        # end-to-end tests inside a ClamAV container, including the packages; needs setup
+make e2e-apparmor   # the detection path on a Debian 13 VM with AppArmor enforcing (docs/testing.md)
+make e2e-el9        # the rpm and the detection path on an AlmaLinux 9 VM with SELinux enforcing (docs/testing.md)
 make web-fixture   # a throwaway console on 127.0.0.1 with seeded users and hosts, for browser tests (docs/testing.md)
 ```
 
@@ -157,12 +168,21 @@ readable by others, or the server refuses to start; keep it out of your database
 | `auth.session_max_age` | `CLAMFLEET_SERVER_AUTH_SESSION_MAX_AGE` | `12h` (5m to 720h) |
 | `auth.session_idle` | `CLAMFLEET_SERVER_AUTH_SESSION_IDLE` | `1h` (at least 1m; not above the max age) |
 | `auth.cookie_secure` | `CLAMFLEET_SERVER_AUTH_COOKIE_SECURE` | `true`; `false` only for plain-HTTP development (drops `Secure` and the `__Host-` prefix, logs a warning) |
-| `retention.events_days` | `CLAMFLEET_SERVER_RETENTION_EVENTS_DAYS` | `365` (7 to 3650; detections are deleted this long after they arrived, daily) |
+| `retention.reports_days` | `CLAMFLEET_SERVER_RETENTION_REPORTS_DAYS` | `30` (14 to 90; heartbeat reports, from arrival) |
+| `retention.events_days` | `CLAMFLEET_SERVER_RETENTION_EVENTS_DAYS` | `365` (7 to 3650; detections are deleted this long after they arrived, daily; one whose alert is unfinished is kept) |
+| `retention.state_changes_days` | `CLAMFLEET_SERVER_RETENTION_STATE_CHANGES_DAYS` | `365` (30 to 3650; a state change whose alert is pending is kept) |
+| `retention.alert_log_days` | `CLAMFLEET_SERVER_RETENTION_ALERT_LOG_DAYS` | `90` (30 to 3650; the alert attempt log, finished deliveries and closed detection windows) |
+| `retention.audit_days` | `CLAMFLEET_SERVER_RETENTION_AUDIT_DAYS` | `365` (90 to 3650; audit rows hold emails and client IPs) |
+| `backup.dir` | `CLAMFLEET_SERVER_BACKUP_DIR` | `/var/lib/clamfleet-server/backups` (absolute; a real directory, mode 0700, owned by the server user) |
+| `backup.keep` | `CLAMFLEET_SERVER_BACKUP_KEEP` | `7` (0 to 365; 0 keeps every backup) |
+| `metrics.enabled` | `CLAMFLEET_SERVER_METRICS_ENABLED` | `false` (`GET /metrics` answers 404 while off) |
+| `metrics.token_file` | `CLAMFLEET_SERVER_METRICS_TOKEN_FILE` | empty; required when enabled: absolute path of a file with the bearer token (at least 32 bytes, `root:clamfleet-server 0640`) |
 | `public_url` | `CLAMFLEET_SERVER_PUBLIC_URL` | empty (links in alerts are null) |
 | `alert.cooldown` | `CLAMFLEET_SERVER_ALERT_COOLDOWN` | `15m` (0 to 24h; 0 = no holds) |
 | `alert.webhook.timeout` | `CLAMFLEET_SERVER_ALERT_WEBHOOK_TIMEOUT` | `10s` (1s to 30s per attempt) |
 | `alert.webhook.allow_private` / `alert.webhook.allow_loopback` | `CLAMFLEET_SERVER_ALERT_WEBHOOK_ALLOW_PRIVATE` / `..._ALLOW_LOOPBACK` | `true` / `false` |
 | `alert.webhook.deny_networks` | `CLAMFLEET_SERVER_ALERT_WEBHOOK_DENY_NETWORKS` | empty (extra CIDRs that are never allowed) |
+| `alert.webhook.nat64_prefixes` | `CLAMFLEET_SERVER_ALERT_WEBHOOK_NAT64_PREFIXES` | empty (your own NAT64 translation prefixes; a local-use `64:ff9b:1::/48` address of an unlisted translator is blocked) |
 | `alert.webhook.ca_file` | `CLAMFLEET_SERVER_ALERT_WEBHOOK_CA_FILE` | empty (extra CA bundle, PEM) |
 | `smtp.host` | `CLAMFLEET_SERVER_SMTP_HOST` | empty (email is off) |
 | `smtp.port` / `smtp.tls` | `CLAMFLEET_SERVER_SMTP_PORT` / `..._TLS` | `587` / `starttls` (`tls` for implicit TLS; `none` only for a loopback or private relay) |
@@ -312,12 +332,13 @@ Things to know:
 
 | Platform | Status |
 |---|---|
-| Debian 13 | Tested live, end-to-end tests in a container. |
-| RHEL 9 family | **Untested.** The example config and hand-written fixtures follow the packages' documentation. Contributions welcome. |
+| Debian 13 | Tested live: end-to-end tests in a container, and in a VM with AppArmor enforcing. `.deb` packages. |
+| RHEL 9 family | **Tested on AlmaLinux 9** (SELinux enforcing, ClamAV from EPEL) in a VM: `.rpm` packages, the detection path through an SELinux module. RHEL itself is not tested (it needs a subscription). |
+| Debian 12 | Untested. The binaries are static and should work. |
 
 ## Roadmap
 
-Milestones follow [docs/HANDOVER.md](docs/HANDOVER.md). Milestones 1 to 5 are built, with TOTP two-factor sign-in for local accounts.
+Milestones follow [docs/HANDOVER.md](docs/HANDOVER.md). Milestones 1 to 6a are built, with TOTP two-factor sign-in for local accounts.
 
 | # | Deliverable | Status |
 |---|---|---|
@@ -325,8 +346,10 @@ Milestones follow [docs/HANDOVER.md](docs/HANDOVER.md). Milestones 1 to 5 are bu
 | 2 | Server ingest API, SQLite schema, migrations, token authentication, `run` | Built. Tested on Debian 13 only. |
 | 3 | Health evaluator, state history, web console with local accounts | Built. Tested on Debian 13 only. |
 | 4 | Email and webhook alerting | Built. Tested on Debian 13 only. |
-| 5 | Detection events, spool, events page, acknowledgement | Built. Tested on Debian 13 (container, and a VM with AppArmor enforcing); RHEL 9 and SELinux in milestone 6. |
-| 6 | Packaging (.deb and .rpm), LDAP and OIDC login, `/metrics`, retention job, backup command | Planned |
+| 5 | Detection events, spool, events page, acknowledgement | Built. Tested on Debian 13 (container, and a VM with AppArmor enforcing). |
+| 6a | Packages (.deb and .rpm), retention for every table, backup, `/metrics`, TLS reload, NAT64 in the alert policy, `clamfleet-agent scan`, SELinux | Built. Tested on Debian 13 and AlmaLinux 9. |
+| 6b | LDAP and OIDC login | Planned |
+| 6c | CI, signed releases, checksums, SBOM, project files | Planned |
 
 Built: local accounts with email and password and the roles `viewer` and `admin`, and TOTP two-factor
 sign-in (optional per user, or required for all local users with `auth.local.totp_required`; see `docs/web.md`).

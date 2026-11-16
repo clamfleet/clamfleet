@@ -11,20 +11,18 @@
 // the bearer token is still checked on every /v1 request, so a stolen client
 // certificate alone gets nothing and a stolen token alone cannot even connect.
 //
-// The certificate is loaded once at start; a renewed certificate needs a
-// restart (reload is a Milestone 6 packaging item).
+// The certificate, key and client CA are re-read on SIGHUP (tlsreload.go): a
+// renewed certificate needs no restart.
 package server
 
 import (
 	"context"
 	"crypto/tls"
-	"crypto/x509"
 	"errors"
 	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
-	"os"
 	"time"
 )
 
@@ -39,33 +37,6 @@ const (
 	shutdownTimeout   = 10 * time.Second
 )
 
-// tlsConfig builds the TLS configuration, nil when TLS is off.
-func tlsConfig(c Config) (*tls.Config, error) {
-	if !c.TLSEnabled() {
-		return nil, nil
-	}
-	cert, err := tls.LoadX509KeyPair(c.TLS.Cert, c.TLS.Key)
-	if err != nil {
-		return nil, fmt.Errorf("load tls.cert/tls.key: %w", err)
-	}
-	cfg := &tls.Config{MinVersion: tls.VersionTLS12, Certificates: []tls.Certificate{cert}}
-	if c.TLS.ClientCA != "" {
-		pemBytes, err := os.ReadFile(c.TLS.ClientCA)
-		if err != nil {
-			return nil, fmt.Errorf("read tls.client_ca: %w", err)
-		}
-		pool := x509.NewCertPool()
-		if !pool.AppendCertsFromPEM(pemBytes) {
-			// Fail at start: an empty pool would otherwise reject every agent
-			// with a handshake error that looks like a network problem.
-			return nil, fmt.Errorf("tls.client_ca %s contains no PEM certificate", c.TLS.ClientCA)
-		}
-		cfg.ClientCAs = pool
-		cfg.ClientAuth = tls.RequireAndVerifyClientCert
-	}
-	return cfg, nil
-}
-
 // Listen binds c.Listen. Separate from Serve so a caller (or test) that asked
 // for port 0 can learn the real address before serving.
 func Listen(c Config) (net.Listener, error) {
@@ -76,23 +47,37 @@ func Listen(c Config) (net.Listener, error) {
 // gracefully (10 s). It logs the actual listen address (useful with port 0).
 // A clean shutdown returns nil.
 func Serve(ctx context.Context, c Config, h http.Handler, log *slog.Logger) error {
+	return ServeReload(ctx, c, h, log, nil)
+}
+
+// ServeReload is Serve that reloads the TLS files each time reload receives a value.
+func ServeReload(ctx context.Context, c Config, h http.Handler, log *slog.Logger, reload <-chan struct{}) error {
 	ln, err := Listen(c)
 	if err != nil {
 		return fmt.Errorf("listen %s: %w", c.Listen, err)
 	}
-	return ServeListener(ctx, ln, c, h, log)
+	return ServeListenerReload(ctx, ln, c, h, log, reload)
 }
 
 // ServeListener is Serve on an existing listener. It closes the listener.
 func ServeListener(ctx context.Context, ln net.Listener, c Config, h http.Handler, log *slog.Logger) error {
-	tc, err := tlsConfig(c)
+	return ServeListenerReload(ctx, ln, c, h, log, nil)
+}
+
+// ServeListenerReload is ServeReload on an existing listener. A receive on
+// reload re-reads tls.cert, tls.key and tls.client_ca: all or nothing, the old
+// state kept (and an error logged) when anything is wrong. With TLS off it logs
+// that there is nothing to reload.
+func ServeListenerReload(ctx context.Context, ln net.Listener, c Config, h http.Handler, log *slog.Logger, reload <-chan struct{}) error {
+	rl, err := newTLSReloader(c)
 	if err != nil {
 		ln.Close()
 		return err
 	}
-	if tc != nil {
-		ln = tls.NewListener(ln, tc)
+	if rl != nil {
+		ln = tls.NewListener(ln, rl.config())
 	}
+	tc := rl != nil
 	srv := &http.Server{
 		Handler:           h,
 		ReadHeaderTimeout: readHeaderTimeout,
@@ -105,7 +90,27 @@ func ServeListener(ctx context.Context, ln net.Listener, c Config, h http.Handle
 		// the peer address.
 		ErrorLog: slog.NewLogLogger(log.Handler(), slog.LevelWarn),
 	}
-	log.Info("listening", "addr", ln.Addr().String(), "tls", tc != nil, "mtls", c.TLS.ClientCA != "")
+	log.Info("listening", "addr", ln.Addr().String(), "tls", tc, "mtls", c.TLS.ClientCA != "")
+	reloadDone := make(chan struct{})
+	rctx, stopReload := context.WithCancel(ctx)
+	defer stopReload()
+	go func() {
+		defer close(reloadDone)
+		for {
+			select {
+			case <-rctx.Done():
+				return
+			case <-reload:
+				if rl == nil {
+					log.Info("reload requested, but TLS is off: nothing to reload")
+					continue
+				}
+				if err := rl.reload(log); err != nil {
+					log.Error("tls reload failed, keeping the previous certificate and client CA", "error", err.Error())
+				}
+			}
+		}
+	}()
 
 	errc := make(chan error, 1)
 	go func() { errc <- srv.Serve(ln) }()
@@ -114,6 +119,8 @@ func ServeListener(ctx context.Context, ln net.Listener, c Config, h http.Handle
 		return err // the listener failed; Serve only returns ErrServerClosed after Shutdown
 	case <-ctx.Done():
 	}
+	stopReload()
+	<-reloadDone
 	sctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
 	if err := srv.Shutdown(sctx); err != nil {

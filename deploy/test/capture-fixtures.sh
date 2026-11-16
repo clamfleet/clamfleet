@@ -13,6 +13,8 @@
 #   freshclam/    freshclam logs (LogTime yes and no; success, up-to-date,
 #                 failure) and the matching systemd journal output
 #   services/     `systemctl show` for active, inactive, failed, not-found units
+#   clamdscan/    stdout, stderr, exit status and paths of `clamdscan --multiscan` (clean,
+#                 infected, unreadable file, several paths, clamd down)
 #   debian13/     /etc/os-release and /etc/clamav/clamd.conf
 #
 # Freshclam and the CDN: the real signature CDN rate-limits (HTTP 429/403) and
@@ -83,7 +85,7 @@ if grep -rIh -E "$scrub_re" "$work/pull" | grep -v 'db\.local\.clamav\.net' | gr
 	exit 1
 fi
 
-rm -rf "$out/clamd" "$out/cvd" "$out/freshclam" "$out/services" "$out/debian13"
+rm -rf "$out/clamd" "$out/cvd" "$out/freshclam" "$out/services" "$out/debian13" "$out/clamdscan"
 mkdir -p "$out"
 cp -r "$work/pull/." "$out/"
 # Drop the second CVD snapshot when the update changed nothing.

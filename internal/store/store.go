@@ -452,6 +452,8 @@ type Store interface {
 	TOTPStore
 	AlertStore
 	EventStore
+	RetentionStore
+	MetricsStore
 	// CreateHost registers a host with its token hash and writes the audit
 	// row. ErrHostExists if the name is taken. The name is normalised.
 	CreateHost(ctx context.Context, name string, tokenHash []byte, now time.Time, a Audit) (Host, error)

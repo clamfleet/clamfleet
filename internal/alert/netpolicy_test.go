@@ -176,3 +176,114 @@ func TestSigningKey(t *testing.T) {
 		t.Fatal("a secret without a key was accepted")
 	}
 }
+
+func prefixes(t *testing.T, list ...string) []netip.Prefix {
+	t.Helper()
+	var out []netip.Prefix
+	for _, s := range list {
+		out = append(out, netip.MustParsePrefix(s))
+	}
+	return out
+}
+
+// The embedded-IPv4 table (plan 4.9, 6.1). Mutations: remove the NAT64 decode
+// (64:ff9b::a9fe:a9fe would be allowed), unblock 6to4 or Teredo, treat the local-use
+// range as private again, or check deny_networks on the decoded form only.
+func TestPolicyEmbeddedIPv4(t *testing.T) {
+	priv := Policy{AllowPrivate: true}
+	loop := Policy{AllowPrivate: true, AllowLoopback: true}
+	cases := []struct {
+		name string
+		addr string
+		p    Policy
+		want string // "" = allowed; otherwise a substring of the reason
+	}{
+		{"nat64 of 127.0.0.1, loopback off", "64:ff9b::7f00:1", priv, "loopback"},
+		{"nat64 of 127.0.0.1, loopback on", "64:ff9b::7f00:1", loop, ""},
+		{"nat64 of the metadata address", "64:ff9b::a9fe:a9fe", loop, "link-local"},
+		{"nat64 of 10.0.0.1 follows allow_private", "64:ff9b::a00:1", priv, ""},
+		{"nat64 of 10.0.0.1, private off", "64:ff9b::a00:1", Policy{}, "private"},
+		{"nat64 of 8.8.8.8", "64:ff9b::808:808", priv, ""},
+		{"nat64 of 100.100.100.200 (Alibaba metadata)", "64:ff9b::6464:64c8", loop, "metadata"},
+		{"deny_networks IPv4 entry blocks the nat64 form", "64:ff9b::cb00:7101", Policy{AllowPrivate: true, DenyNetworks: prefixes(t, "203.0.113.0/24")}, "deny_networks"},
+		{"deny_networks 64:ff9b::/96 blocks all nat64", "64:ff9b::808:808", Policy{AllowPrivate: true, DenyNetworks: prefixes(t, "64:ff9b::/96")}, "deny_networks"},
+		{"local-use nat64 is blocked, even with allow_private", "64:ff9b:1::1", priv, "local-use NAT64"},
+		{"local-use nat64 of the metadata address, not listed", "64:ff9b:1::a9fe:a9fe", priv, "local-use NAT64"},
+		{"local-use nat64 listed /96 decodes the metadata address", "64:ff9b:1::a9fe:a9fe", Policy{AllowPrivate: true, NAT64Prefixes: prefixes(t, "64:ff9b:1::/96")}, "link-local"},
+		{"local-use nat64 listed /96, public target", "64:ff9b:1::808:808", Policy{AllowPrivate: true, NAT64Prefixes: prefixes(t, "64:ff9b:1::/96")}, ""},
+		{"6to4", "2002:7f00:1::1", loop, "6to4"},
+		{"teredo", "2001:0:4136:e378:8000:63bf:3fff:fdd2", loop, "Teredo"},
+		{"ipv4-compatible", "::7f00:1", loop, "IPv4-compatible"},
+		{"siit", "::ffff:0:7f00:1", loop, "SIIT"},
+		{"unspecified is still unspecified", "::", loop, "unspecified"},
+		{"::1 is still loopback", "::1", priv, "loopback"},
+		{"::1 allowed with loopback on", "::1", loop, ""},
+		{"4in6 loopback behaves as before", "::ffff:127.0.0.1", priv, "loopback"},
+		{"4in6 loopback, loopback on", "::ffff:127.0.0.1", loop, ""},
+		{"ipv6 metadata stays blocked", "fd00:ec2::254", loop, "metadata"},
+		{"an ordinary ipv6 address", "2606:4700::1111", priv, ""},
+	}
+	for _, c := range cases {
+		err := c.p.CheckAddr(mustAddr(c.addr))
+		switch {
+		case c.want == "" && err != nil:
+			t.Errorf("%s: %s blocked: %v", c.name, c.addr, err)
+		case c.want != "" && (err == nil || !strings.Contains(err.Error(), c.want)):
+			t.Errorf("%s: %s: err = %v, want a block mentioning %q", c.name, c.addr, err, c.want)
+		}
+	}
+}
+
+// RFC 6052 section 2.4: for the prefix 2001:db8::/N each length embeds 192.0.2.33
+// at a different place. Every one decodes to it, and a non-zero u octet is refused.
+func TestRFC6052ExampleVectors(t *testing.T) {
+	for _, c := range []struct{ prefix, addr string }{
+		{"2001:db8::/32", "2001:db8:c000:221::"},
+		{"2001:db8:100::/40", "2001:db8:1c0:2:21::"},
+		{"2001:db8:122::/48", "2001:db8:122:c000:2:2100::"},
+		{"2001:db8:122:300::/56", "2001:db8:122:3c0:0:221::"},
+		{"2001:db8:122:344::/64", "2001:db8:122:344:c0:2:2100:0"},
+		{"2001:db8:122:344::/96", "2001:db8:122:344::c000:221"},
+	} {
+		pf := netip.MustParsePrefix(c.prefix)
+		forms, why := classify(mustAddr(c.addr), []netip.Prefix{pf})
+		if why != "" || len(forms) != 2 || forms[1] != mustAddr("192.0.2.33") {
+			t.Errorf("%s under %s: forms %v, blocked %q, want 192.0.2.33", c.addr, c.prefix, forms, why)
+		}
+		// With 192.0.2.0/24 denied, the translation address is blocked too.
+		p := Policy{AllowPrivate: true, NAT64Prefixes: []netip.Prefix{pf}, DenyNetworks: prefixes(t, "192.0.2.0/24")}
+		if err := p.CheckAddr(mustAddr(c.addr)); err == nil || !strings.Contains(err.Error(), "deny_networks") {
+			t.Errorf("%s: a denied IPv4 inside the translation address was allowed: %v", c.addr, err)
+		}
+		// Not listed: the address is an ordinary global address, not decoded.
+		if forms, _ := classify(mustAddr(c.addr), nil); len(forms) != 1 {
+			t.Errorf("%s decoded without a listed prefix", c.addr)
+		}
+	}
+	// A non-zero u octet (bits 64-71) cannot be a translation address: blocked.
+	_, why := classify(mustAddr("2001:db8:122:c000:100:2100::"), prefixes(t, "2001:db8:122::/48"))
+	if why == "" || !strings.Contains(why, "bits 64-71") {
+		t.Fatalf("a non-zero u octet was accepted: %q", why)
+	}
+}
+
+// The deny list and the always-blocked checks apply to the original IPv6 address too.
+func TestPolicyChecksBothForms(t *testing.T) {
+	p := Policy{AllowPrivate: true, AllowLoopback: true, DenyNetworks: prefixes(t, "2606:4700::/32")}
+	if err := p.CheckAddr(mustAddr("2606:4700::1111")); err == nil {
+		t.Fatal("an IPv6 deny entry did not block its address")
+	}
+	// Plaintext: a NAT64 form of a public address is public.
+	if err := CheckPlaintext(mustAddr("64:ff9b::808:808")); err == nil || !strings.Contains(err.Error(), "public") {
+		t.Fatalf("plaintext to a public IPv4 through NAT64: %v", err)
+	}
+	if err := CheckPlaintext(mustAddr("64:ff9b::7f00:1")); err != nil {
+		t.Fatalf("plaintext to loopback through NAT64: %v", err)
+	}
+	if err := CheckPlaintext(mustAddr("64:ff9b::a00:1")); err != nil {
+		t.Fatalf("plaintext to a private address through NAT64: %v", err)
+	}
+	if err := CheckPlaintext(mustAddr("2002:7f00:1::1")); err == nil {
+		t.Fatal("plaintext to 6to4 was allowed")
+	}
+}

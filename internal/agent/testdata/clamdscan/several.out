@@ -1,0 +1,10 @@
+/tmp/scan-fx/clean: OK
+/tmp/scan-fx/infected/eicar.com: Eicar-Signature FOUND
+/tmp/scan-fx/private: File path check failure: Permission denied. ERROR
+
+----------- SCAN SUMMARY -----------
+Infected files: 1
+Total errors: 1
+Time: 0.009 sec (0 m 0 s)
+Start Date: 2026:11:16 08:16:53
+End Date:   2026:11:16 08:16:53

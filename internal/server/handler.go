@@ -46,6 +46,9 @@ const (
 	AuthUser AuthClass = "user"
 	// AuthAdmin: a signed-in console user with the admin role, CSRF token on non-GET.
 	AuthAdmin AuthClass = "admin"
+	// AuthMetrics: a monitoring scraper with the metrics bearer token (404 while
+	// metrics are off). Not a console route: no session, no cookie, no CSRF.
+	AuthMetrics AuthClass = "metrics"
 )
 
 // Route is one registered route.
@@ -61,6 +64,8 @@ func Routes() []Route {
 		{"POST", "/v1/report", AuthAgent},
 		{"POST", "/v1/event", AuthAgent},
 		{"GET", "/healthz", AuthNone},
+		// Prometheus text format; off by default, bearer token from a file when on (M6).
+		{"GET", "/metrics", AuthMetrics},
 		{"GET", "/static/{file}", AuthPublic},
 		{"GET", "/login", AuthPublic},
 		{"POST", "/login", AuthPublic},
@@ -139,6 +144,11 @@ type Deps struct {
 	// Alerts is what the alert pages need (server.BuildAlerts); nil means a strict
 	// policy, no email and no test send.
 	Alerts *Alerts
+	// MetricsToken is the bearer token of GET /metrics; nil means metrics are off
+	// and the route answers 404. NewHandlerFromConfig reads it from metrics.token_file.
+	MetricsToken []byte
+	// FailedDeliveryWindow bounds the failed deliveries /metrics counts (alert_log_days); 0 means 90 days.
+	FailedDeliveryWindow time.Duration
 }
 
 // NewHandlerFromConfig is NewHandler with the config-derived settings
@@ -151,6 +161,10 @@ func NewHandlerFromConfig(c Config, d Deps) (http.Handler, error) {
 	}
 	d.TrustedProxies = proxies
 	d.Console = c.Auth
+	if d.MetricsToken, err = loadMetricsToken(c.Metrics); err != nil {
+		return nil, err
+	}
+	d.FailedDeliveryWindow = days(c.Retention.AlertLogDays)
 	return NewHandler(d), nil
 }
 
@@ -168,6 +182,10 @@ func NewHandler(d Deps) http.Handler {
 	}
 	if d.Version == "" {
 		d.Version = version.Version
+	}
+	failedWindow := d.FailedDeliveryWindow
+	if failedWindow == 0 {
+		failedWindow = days(DefaultAlertLogDays)
 	}
 	h := api.New(api.Deps{Store: d.Store, Now: d.Now, Log: d.Log, AfterReport: d.AfterReport, AfterEvent: d.AfterEvent})
 	agent := agentauth.Middleware(auth, d.Log)
@@ -187,6 +205,7 @@ func NewHandler(d Deps) http.Handler {
 		"POST /v1/report": h.Report,
 		"POST /v1/event":  h.Event,
 		"GET /healthz":    h.Health,
+		"GET /metrics":    metricsHandler(d.Store, d.MetricsToken, d.Now, failedWindow, d.Version, d.TrustedProxies, d.Log),
 	}
 	for k, v := range console.Handlers() {
 		handlers[k] = v
@@ -205,7 +224,8 @@ func NewHandler(d Deps) http.Handler {
 		switch rt.Auth {
 		case AuthAgent:
 			wrapped = agent(hd)
-		case AuthNone:
+		case AuthNone, AuthMetrics:
+			// AuthMetrics checks its own bearer token inside the handler (and 404s when off).
 			wrapped = hd
 		case AuthPublic:
 			wrapped = web.SecurityHeaders(sessions.CrossOrigin(hd))

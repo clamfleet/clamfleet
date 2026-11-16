@@ -15,3 +15,9 @@ INCUS_HOST ?= <incus-host>
 CFA_EXEC ?= ssh <incus-host> sudo incus exec <vm> --
 # CFA_HOST: ssh target of the Incus host that holds the VM (its `clean` snapshot is restored before each scenario).
 CFA_HOST ?= <incus-host>
+#
+# The AlmaLinux 9 VM (make e2e-el9, docs/testing.md "The AlmaLinux 9 VM").
+# CFE_EXEC: command prefix that runs a command inside the VM (same rule about arguments).
+CFE_EXEC ?= ssh <incus-host> sudo incus exec <el9-vm> --
+# CFE_HOST: ssh target of the Incus host that holds the VM (its `clean` snapshot is restored before each scenario).
+CFE_HOST ?= <incus-host>

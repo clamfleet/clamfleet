@@ -538,6 +538,7 @@ func TestRouteTable(t *testing.T) {
 		{Method: "POST", Path: "/v1/report", Auth: server.AuthAgent},
 		{Method: "POST", Path: "/v1/event", Auth: server.AuthAgent},
 		{Method: "GET", Path: "/healthz", Auth: server.AuthNone},
+		{Method: "GET", Path: "/metrics", Auth: server.AuthMetrics},
 		{Method: "GET", Path: "/static/{file}", Auth: server.AuthPublic},
 		{Method: "GET", Path: "/login", Auth: server.AuthPublic},
 		{Method: "POST", Path: "/login", Auth: server.AuthPublic},
@@ -602,6 +603,12 @@ func TestRouteTable(t *testing.T) {
 			}
 			if r := e.do(rt.Method, path, tok, body); r.status != 202 {
 				t.Errorf("%s %s: status %d with a valid token, want 202", rt.Method, rt.Path, r.status)
+			}
+		case server.AuthMetrics:
+			// Off by default: the route exists and answers 404 (TestMetricsThroughRouter in
+			// internal/server covers the token).
+			if r = e.do(rt.Method, path, "", nil); r.status != 404 {
+				t.Errorf("%s %s: status %d with metrics off, want 404", rt.Method, rt.Path, r.status)
 			}
 		case server.AuthNone, server.AuthPublic:
 			want := 200
