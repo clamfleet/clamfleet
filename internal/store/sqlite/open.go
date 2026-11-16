@@ -85,6 +85,14 @@ type Store struct {
 	// prove a failure midway rolls every row back. Always nil in production.
 	betweenResealRows func() error
 
+	// backupHook is a test seam: Backup calls it after each stage of its protocol
+	// (docs/plans/milestone-6.md 4.4), and a returned error fails that stage.
+	// backupEUID and backupFree replace the effective uid and the free space.
+	// All nil in production.
+	backupHook func(stage int) error
+	backupEUID func() int
+	backupFree func() uint64
+
 	// afterHostDelete is a test hook: DeleteHost calls it between the delete
 	// and the audit insert, to prove a failure there rolls both back.
 	afterHostDelete func() error
