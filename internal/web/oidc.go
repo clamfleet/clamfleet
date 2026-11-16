@@ -65,6 +65,14 @@ func (w *Web) oidcStart(rw http.ResponseWriter, r *http.Request) {
 	}
 	next := webauth.SanitizeNext(r.PostForm.Get("next"))
 	ip := w.ClientIP(r)
+	// Rule: one client IP may have only a few sign-ins in progress, so one host cannot fill the table
+	// of states (store.MaxOIDCStates) and switch SSO off for everybody. Checked before any network I/O.
+	if w.OIDCStarts != nil && !w.OIDCStarts.Allow(ip) {
+		w.Log.Warn("oidc: too many sign-ins in progress from one address", "client_ip", ip)
+		rw.Header().Set("Retry-After", "60")
+		w.statusPage(rw, r, http.StatusTooManyRequests, "Too many sign-ins were started from your address. Wait a few minutes and try again.", "error-sso-unavailable")
+		return
+	}
 	req, err := w.OIDC.Begin(r.Context())
 	if err != nil {
 		w.Log.Error("oidc: cannot start a sign-in", "client_ip", ip, "error", err.Error())

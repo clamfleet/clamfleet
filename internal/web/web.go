@@ -83,6 +83,8 @@ type Deps struct {
 	OIDC OIDCProvider
 	// OIDCName is the text of the single sign-on button (auth.oidc.display_name).
 	OIDCName string
+	// OIDCStarts bounds the sign-ins one client IP may have in progress; nil means unbounded (tests of other things).
+	OIDCStarts *webauth.StartLimiter
 	// TOTPRequired is auth.local.totp_required: it changes the wording of the TOTP
 	// pages and forbids turning TOTP off (the gate itself is in webauth.Manager).
 	TOTPRequired bool

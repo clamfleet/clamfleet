@@ -353,3 +353,31 @@ func TestOIDCTokenIsNotASessionToken(t *testing.T) {
 		t.Fatalf("%+v", cl)
 	}
 }
+
+func TestStartLimiter(t *testing.T) {
+	now := clk
+	l := NewStartLimiter(func() time.Time { return now }, 3, 10*time.Minute)
+	for i := 0; i < 3; i++ {
+		if !l.Allow("192.0.2.1") {
+			t.Fatalf("start %d refused", i)
+		}
+	}
+	if l.Allow("192.0.2.1") {
+		t.Fatal("a fourth live start was allowed")
+	}
+	if !l.Allow("192.0.2.2") {
+		t.Fatal("another address was refused")
+	}
+	now = now.Add(10*time.Minute + time.Second)
+	if !l.Allow("192.0.2.1") {
+		t.Fatal("the slots did not come back after the ttl")
+	}
+	// The memory bound: a full table of live addresses refuses a new one.
+	l2 := NewStartLimiter(func() time.Time { return now }, 1, time.Hour)
+	l2.maxIPs = 2
+	l2.Allow("a")
+	l2.Allow("b")
+	if l2.Allow("c") {
+		t.Fatal("a new address was admitted into a full table")
+	}
+}

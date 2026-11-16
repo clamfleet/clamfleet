@@ -161,6 +161,9 @@ type Deps struct {
 	FailedDeliveryWindow time.Duration
 }
 
+// MaxOIDCStartsPerIP is how many OIDC sign-ins one client IP may have in progress at once.
+const MaxOIDCStartsPerIP = 15
+
 // NewHandlerFromConfig is NewHandler with the config-derived settings
 // (trusted_proxies) applied to d, so the binary has one call that cannot
 // forget one. The config must have passed Validate.
@@ -219,6 +222,7 @@ func NewHandler(d Deps) http.Handler {
 		Store: d.Store, Auth: sessions, Hasher: d.Hasher, Throttle: webauth.NewThrottle(d.Now), TOTPThrottle: webauth.NewThrottle(d.Now), Keys: d.Keys, Now: d.Now, Log: d.Log,
 		ClientIP: func(r *http.Request) string { return api.ClientIP(r, d.TrustedProxies) },
 		LDAP:     d.LDAP, OIDC: d.OIDC, OIDCName: d.Console.OIDC.DisplayName,
+		OIDCStarts:   webauth.NewStartLimiter(d.Now, MaxOIDCStartsPerIP, webauth.OIDCStateLifetime),
 		LocalEnabled: d.Console.Local.Enabled, TOTPRequired: d.Console.Local.TOTPRequired, Version: d.Version,
 		Alerts: alertDeps(d.Alerts),
 	})

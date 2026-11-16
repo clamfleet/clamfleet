@@ -170,7 +170,10 @@ different implementation. For contributors: this is why those are out of scope, 
   `__Host-clamfleet_oidc` cookie (Secure, HttpOnly, **SameSite=Lax**, 10 minutes). The callback takes the row, once: a
   callback URL used a second time, opened in another browser, or after ten minutes, shows "This sign-in has expired or was
   already used" and signs nobody in. The row is gone whatever else is wrong with that callback. Starting a sign-in needs no
-  session, so at most 10,000 are in progress at once; put rate limiting for `POST /login/oidc` in your reverse proxy.
+  session, so two bounds apply: **one client IP may have 15 sign-ins in progress** (the 16th start gets a 429 page until
+  the others finish or expire after ten minutes; the address is the one the console logs, so set `trusted_proxies` behind a
+  proxy or every visitor shares the proxy's), and at most 10,000 are in progress in all. Without the first, one host could fill
+  the table and switch SSO off for everybody. The count is in memory: a restart forgets it.
 - **Why SameSite=Lax:** the provider returns the browser with a top-level GET from another site. A Strict cookie is not sent on
   that navigation and every sign-in would fail. This is tested in a real browser with the console and the provider on two
   different sites (`e2e/web/tests/sso.spec.ts`).

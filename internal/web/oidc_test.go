@@ -720,3 +720,27 @@ func TestOIDCCallbackIgnoresAFrontChannelIDToken(t *testing.T) {
 		}
 	}
 }
+
+// One client IP may have only MaxOIDCStartsPerIP sign-ins in progress, so a single host cannot fill the
+// table of states and switch SSO off for everybody. The 16th start is refused (429) and stores nothing; the
+// slots come back when the states expire.
+func TestOIDCStartsAreBoundedPerClientIP(t *testing.T) {
+	r := newOIDCRig(t, nil)
+	e := r.e
+	for i := 0; i < server.MaxOIDCStartsPerIP; i++ {
+		if p := r.start(e.browser(), ""); p.status != 200 {
+			t.Fatalf("start %d: %d", i, p.status)
+		}
+	}
+	p := r.start(e.browser(), "")
+	if p.status != http.StatusTooManyRequests || p.header.Get("Retry-After") == "" || !strings.Contains(p.body, `data-testid="error-sso-unavailable"`) {
+		t.Fatalf("over the bound: %d", p.status)
+	}
+	if n := e.count(`SELECT count(*) FROM oidc_login_states`); n != server.MaxOIDCStartsPerIP {
+		t.Fatalf("%d state rows, want %d: the refused start must store nothing", n, server.MaxOIDCStartsPerIP)
+	}
+	e.advance(11 * time.Minute)
+	if p := r.start(e.browser(), ""); p.status != 200 {
+		t.Fatalf("after the states expired: %d", p.status)
+	}
+}
