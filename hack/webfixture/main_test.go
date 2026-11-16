@@ -527,3 +527,103 @@ func TestFixtureSeedsDetections(t *testing.T) {
 		t.Errorf("the default (open) filter shows %d rows, want 9 (9 open; the x2 merge is one row)", strings.Count(open, `data-testid="event-row-`))
 	}
 }
+
+// --sso: the fixture runs the fake provider and the fake directory on loopback, the real server is
+// configured for both, and fixture.json says how to reach them. This walks what the browser spec does,
+// with an HTTP client: the SSO button, the whole OIDC flow for the admin, the user without a group, the
+// LDAP sign-in by user name, and the local users still signing in next to them.
+func TestFixtureSSO(t *testing.T) {
+	fx, newClient := startFixture(t, buildServer(t), "--sso")
+	if fx.SSO == nil || !strings.HasPrefix(fx.SSO.IssuerURL, "https://localhost:") || fx.SSO.OIDCAdmin != "sso-admin" || fx.SSO.LDAPAdmin.Email != "ldap-admin" || fx.SSO.LDAPAdmin.Password == "" {
+		t.Fatalf("%+v", fx.SSO)
+	}
+	if !strings.HasPrefix(fx.URL, "https://127.0.0.1:") {
+		t.Fatalf("%s", fx.URL)
+	}
+	get := func(c *http.Client, u string) (int, string, string) {
+		t.Helper()
+		resp, err := c.Get(u)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		b, _ := io.ReadAll(resp.Body)
+		return resp.StatusCode, resp.Header.Get("Location"), string(b)
+	}
+
+	c := newClient()
+	if code, _, body := get(c, fx.URL+"/login"); code != 200 || !strings.Contains(body, `data-testid="login-sso-submit">`+fx.SSO.ButtonText+"<") || !strings.Contains(body, "Email or user name") {
+		t.Fatalf("login page: %d", code)
+	}
+
+	// OIDC: start, choose a user at the provider (a different site, https://localhost), come back.
+	oidc := func(key string) (int, string) {
+		t.Helper()
+		c := newClient()
+		code, authURL := post(t, c, fx.URL, "/login/oidc", url.Values{})
+		if code != 303 || !strings.HasPrefix(authURL, fx.SSO.IssuerURL+"/authorize?") {
+			t.Fatalf("start: %d %q", code, authURL)
+		}
+		if st, _, body := get(c, authURL); st != 200 || !strings.Contains(body, `data-testid="idp-user-`+key+`"`) {
+			t.Fatalf("the provider's page: %d", st)
+		}
+		u, _ := url.Parse(authURL)
+		q := u.Query()
+		q.Set("user", key)
+		st, back, _ := get(c, fx.SSO.IssuerURL+"/authorize/pick?"+q.Encode())
+		if st != 302 || !strings.HasPrefix(back, fx.URL+"/login/oidc/callback?") {
+			t.Fatalf("pick: %d %q", st, back)
+		}
+		st, loc, body := get(c, back)
+		if st == 303 {
+			if page, _, _ := get(c, fx.URL+loc); page != 200 {
+				t.Fatalf("after sign-in: %d", page)
+			}
+		}
+		return st, body
+	}
+	if st, _ := oidc(fx.SSO.OIDCAdmin); st != 303 {
+		t.Fatalf("sso-admin: %d", st)
+	}
+	if st, body := oidc(fx.SSO.OIDCViewer); st != 303 || strings.Contains(body, "nav-admin") {
+		t.Fatalf("sso-viewer: %d", st)
+	}
+	if st, body := oidc(fx.SSO.OIDCNoRole); st != 403 || !strings.Contains(body, `data-testid="error-no-role"`) {
+		t.Fatalf("sso-norole: %d", st)
+	}
+
+	// LDAP by user name, and a wrong password.
+	c = newClient()
+	if code, _ := post(t, c, fx.URL, "/login", url.Values{"email": {fx.SSO.LDAPAdmin.Email}, "password": {"wrong"}}); code != 200 {
+		t.Fatalf("wrong password: %d", code)
+	}
+	if code, loc := post(t, c, fx.URL, "/login", url.Values{"email": {fx.SSO.LDAPAdmin.Email}, "password": {fx.SSO.LDAPAdmin.Password}}); code != 303 || loc != "/" {
+		t.Fatalf("ldap sign-in: %d %q", code, loc)
+	}
+	if code, _, body := get(c, fx.URL+"/account"); code != 200 || !strings.Contains(body, `data-testid="account-source">LDAP<`) {
+		t.Fatalf("account page: %d", code)
+	}
+
+	// The local users sign in as before, next to both providers.
+	c = newClient()
+	if code, loc := post(t, c, fx.URL, "/login", url.Values{"email": {fx.Admin.Email}, "password": {fx.Admin.Password}}); code != 303 || loc != "/" {
+		t.Fatalf("local admin: %d %q", code, loc)
+	}
+}
+
+// Without --sso nothing of it exists: no fakes, no button, and fixture.json has no sso member.
+func TestFixtureWithoutSSOHasNoProviders(t *testing.T) {
+	fx, newClient := startFixture(t, buildServer(t))
+	if fx.SSO != nil {
+		t.Fatal("sso set without --sso")
+	}
+	resp, err := newClient().Get(fx.URL + "/login")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if strings.Contains(string(b), "login-sso") || strings.Contains(string(b), "Email or user name") {
+		t.Fatal("an SSO button without --sso")
+	}
+}
