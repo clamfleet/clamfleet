@@ -73,7 +73,7 @@ type Backup struct {
 	Keep int `yaml:"keep"`
 }
 
-// stateDir is the directory the packaged unit makes writable (StateDirectory=clamfleet-server).
+// packagedStateDir is the directory the packaged unit makes writable (StateDirectory=clamfleet-server).
 const packagedStateDir = "/var/lib/clamfleet-server"
 
 // Warnings returns non-fatal configuration problems for the caller to log. Today: a backup.dir
