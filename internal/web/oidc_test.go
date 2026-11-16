@@ -7,6 +7,8 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/base64"
+	"encoding/json"
 	"html"
 	"net/http"
 	"net/url"
@@ -687,6 +689,34 @@ func TestOIDCRefusalPathsLogNoCodeOrState(t *testing.T) {
 		}
 		if strings.Contains(logs, secret) || strings.Contains(audit.String(), secret) {
 			t.Fatalf("the %s is in a log line or the audit log", name)
+		}
+	}
+}
+
+// Only the code flow exists: the callback never reads an id_token (or access_token) from the URL, however
+// well formed and however mapped to an admin. A front-channel token would need signature verification, which
+// this implementation does not do (decision 17, docs/auth.md), so accepting one would be a forgery hole.
+func TestOIDCCallbackIgnoresAFrontChannelIDToken(t *testing.T) {
+	r := newOIDCRig(t, nil)
+	e := r.e
+	enc := func(v any) string { b, _ := json.Marshal(v); return base64.RawURLEncoding.EncodeToString(b) }
+	forged := enc(map[string]any{"alg": "RS256"}) + "." + enc(map[string]any{
+		"iss": r.idp.Issuer(), "aud": testoidc.ClientID, "sub": "forged", "preferred_username": "forged",
+		"iat": e.clock().Unix(), "exp": e.clock().Add(time.Hour).Unix(), "groups": []string{"clamfleet-admins"},
+	}) + ".c2ln"
+	for name, extra := range map[string]string{
+		"no code":      "",
+		"a bogus code": "&code=not-a-code-the-provider-issued",
+	} {
+		b := e.browser()
+		loc, _ := url.Parse(authURL(t, r.start(b, "")))
+		st := url.QueryEscape(loc.Query().Get("state"))
+		got := b.get("/login/oidc/callback?state=" + st + "&id_token=" + url.QueryEscape(forged) + "&access_token=x" + extra)
+		if got.status == http.StatusSeeOther || e.cookieFor(b) != nil {
+			t.Fatalf("%s: a front-channel id_token signed someone in (%d)", name, got.status)
+		}
+		if e.count(`SELECT count(*) FROM users`) != 0 || e.count(`SELECT count(*) FROM user_sessions`) != 0 {
+			t.Fatalf("%s: a user or a session was created from a front-channel token", name)
 		}
 	}
 }
