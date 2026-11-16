@@ -1,0 +1,67 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# SPDX-FileCopyrightText: The ClamFleet Authors
+#
+# nfpm configuration of the clamfleet-server package (deb and rpm from this one file). Built by
+# `make packages`, which runs nfpm once per format (-p deb, -p rpm) with two variables:
+#   VERSION     the package version (semver; a pre-release such as 0.6.0-rc1 becomes 0.6.0~rc1 in a deb)
+#   NFPM_ARCH   amd64
+# goreleaser (milestone 6c) reads this file unchanged. The server is not confined by AppArmor or SELinux.
+name: clamfleet-server
+arch: ${NFPM_ARCH}
+platform: linux
+version: ${VERSION}
+section: admin
+priority: optional
+maintainer: The ClamFleet Authors <hi@madalin.me>
+description: |
+  ClamFleet server: collects the reports and detections of the agents, shows the fleet in a web
+  console, sends alerts and exports metrics. The database is SQLite. The first installation creates the
+  secret key file; back it up apart from the database.
+vendor: The ClamFleet Authors
+homepage: https://github.com/clamfleet/clamfleet
+license: AGPL-3.0-only
+depends:
+  - systemd
+
+contents:
+  - src: bin/clamfleet-server
+    dst: /usr/bin/clamfleet-server
+    file_info: {mode: 0755, owner: root, group: root}
+  - dst: /etc/clamfleet
+    type: dir
+    file_info: {mode: 0755, owner: root, group: root}
+  # root:root 0640 here, and the postinstall gives it to the server group: the group does not exist
+  # before the script runs on a first install, and a package cannot be owned by a missing group.
+  - src: deploy/server.yaml.example
+    dst: /etc/clamfleet/server.yaml
+    type: config|noreplace
+    file_info: {mode: 0640, owner: root, group: root}
+  - src: deploy/systemd/clamfleet-server.service
+    dst: /usr/lib/systemd/system/clamfleet-server.service
+    file_info: {mode: 0644, owner: root, group: root}
+  - src: deploy/systemd/clamfleet-server-backup.service
+    dst: /usr/lib/systemd/system/clamfleet-server-backup.service
+    file_info: {mode: 0644, owner: root, group: root}
+  - src: deploy/systemd/clamfleet-server-backup.timer
+    dst: /usr/lib/systemd/system/clamfleet-server-backup.timer
+    file_info: {mode: 0644, owner: root, group: root}
+  - src: deploy/systemd/sysusers/clamfleet-server.conf
+    dst: /usr/lib/sysusers.d/clamfleet-server.conf
+    file_info: {mode: 0644, owner: root, group: root}
+  - src: deploy/systemd/tmpfiles/clamfleet-server.conf
+    dst: /usr/lib/tmpfiles.d/clamfleet-server.conf
+    file_info: {mode: 0644, owner: root, group: root}
+  - src: README.md
+    dst: /usr/share/doc/clamfleet-server/README.md
+    file_info: {mode: 0644, owner: root, group: root}
+  - src: deploy/server.yaml.example
+    dst: /usr/share/doc/clamfleet-server/server.yaml.example
+    file_info: {mode: 0644, owner: root, group: root}
+  - src: LICENSE
+    dst: /usr/share/doc/clamfleet-server/LICENSE
+    file_info: {mode: 0644, owner: root, group: root}
+
+scripts:
+  postinstall: deploy/packaging/scripts/server-postinstall.sh
+  preremove: deploy/packaging/scripts/server-preremove.sh
+  postremove: deploy/packaging/scripts/server-postremove.sh

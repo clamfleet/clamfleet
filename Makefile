@@ -9,12 +9,24 @@ BIN := bin
 VERSION ?= 0.0.0-dev
 LDFLAGS := -s -w -X github.com/clamfleet/clamfleet/internal/version.Version=$(VERSION)
 
-.PHONY: build vet staticcheck test scripts-test sqlc-check generate check e2e e2e-apparmor e2e-web fixtures webfixture web-fixture
+.PHONY: build vet staticcheck test scripts-test sqlc-check generate check packages e2e e2e-apparmor e2e-web fixtures webfixture web-fixture
 
 # Both binaries are static (CGO_ENABLED=0: the server uses pure-Go SQLite).
 build:
 	CGO_ENABLED=0 $(GO) build -trimpath -ldflags '$(LDFLAGS)' -o $(BIN)/clamfleet-agent ./cmd/clamfleet-agent
 	CGO_ENABLED=0 $(GO) build -trimpath -ldflags '$(LDFLAGS)' -o $(BIN)/clamfleet-server ./cmd/clamfleet-server
+
+# Packages (milestone 6): .deb and .rpm of the agent and the server into dist/, built by nfpm, which is a
+# build-time tool only (pinned in CLAUDE.md, run with `go run` like sqlc; nothing of it is in the binaries).
+# VERSION is semver; a pre-release such as 0.6.0-rc1 becomes 0.6.0~rc1 in a deb. amd64 only (arm64 is 6c).
+NFPM_VERSION := v2.49.0
+NFPM := $(GO) run github.com/goreleaser/nfpm/v2/cmd/nfpm@$(NFPM_VERSION)
+packages: build
+	rm -rf dist && mkdir dist
+	set -e; for pkg in agent server; do for fmt in deb rpm; do \
+		VERSION=$(VERSION) NFPM_ARCH=amd64 $(NFPM) package -f deploy/packaging/nfpm-$$pkg.yaml -p $$fmt -t dist/; \
+	done; done
+	ls -l dist
 
 vet:
 	$(GO) vet ./...
@@ -34,6 +46,7 @@ scripts-test:
 	./deploy/test/reset_test.sh
 	./deploy/test/units_test.sh
 	./deploy/test/selinux_test.sh
+	./deploy/test/packages_test.sh
 
 # sqlc is a build-time tool only (pinned in CLAUDE.md): the generated code uses database/sql.
 generate:
