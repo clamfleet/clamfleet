@@ -415,7 +415,7 @@ func TestPruneEventsByArrivalInBatchesWithCascades(t *testing.T) {
 	rec(t, s, h.ID, event("a", aid(50), t0.Add(-365*24*time.Hour), "/spooled", "S"), cutoff.Add(time.Hour))
 	rec(t, s, h.ID, event("a", aid(51), t0, "/edge", "S"), cutoff)
 	exec(t, s, `UPDATE events SET alert_pending = 0`) // alerts planned: the guard of PruneEvents is tested apart
-	n, err := s.PruneEvents(ctx, cutoff, 2) // three batches: 2, 2, 1
+	n, err := s.PruneEvents(ctx, cutoff, 2)           // three batches: 2, 2, 1
 	if err != nil || n != 5 {
 		t.Fatalf("pruned %d err %v, want 5", n, err)
 	}
