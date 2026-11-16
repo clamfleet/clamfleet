@@ -38,6 +38,7 @@ func (s *syncBuf) String() string              { s.mu.Lock(); defer s.mu.Unlock(
 
 // liveServer is a running `clamfleet-server serve` child process.
 type liveServer struct {
+	pid    int // for signals (SIGHUP)
 	addr   string
 	env    []string
 	stderr *syncBuf
@@ -91,7 +92,7 @@ func startServe(t *testing.T, tls testtls.Bundle, db string, extraEnv ...string)
 	}()
 	select {
 	case a := <-addrCh:
-		return &liveServer{addr: a, env: env, stderr: stderr}
+		return &liveServer{pid: cmd.Process.Pid, addr: a, env: env, stderr: stderr}
 	case <-time.After(20 * time.Second):
 		t.Fatalf("server did not start:\n%s", stderr.String())
 		return nil

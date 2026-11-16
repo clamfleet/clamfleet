@@ -180,6 +180,26 @@ func newFlags(name string, stderr io.Writer) (*flag.FlagSet, *string) {
 
 func (a *app) serve(ctx context.Context, args []string) int {
 	restrictiveUmask()
+	// SIGHUP (systemctl reload) re-reads the TLS files. It is caught from the very
+	// start: the default action of SIGHUP is to terminate, and a reload that arrives
+	// while the database is still migrating must not kill the server.
+	hup := make(chan os.Signal, 1)
+	signal.Notify(hup, syscall.SIGHUP)
+	defer signal.Stop(hup)
+	reload := make(chan struct{}, 1)
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-hup:
+				select {
+				case reload <- struct{}{}:
+				default: // a reload is already queued
+				}
+			}
+		}
+	}()
 	fs, cfgFlag := newFlags("serve", a.stderr)
 	lvl := fs.String("log-level", "info", "debug, info, warn or error (info logs every request; debug adds health checks)")
 	if err := fs.Parse(args); err != nil {
@@ -284,7 +304,7 @@ func (a *app) serve(ctx context.Context, args []string) int {
 		defer func() { loopDone <- struct{}{} }()
 		server.RunRetention(loopCtx, st, a.now, cfg.Retention, log, retentionTick.C)
 	}()
-	err = server.Serve(ctx, cfg, h, log)
+	err = server.ServeReload(ctx, cfg, h, log, reload)
 	// Wait for the loops before the deferred st.Close(): an evaluation cut off by
 	// a closing database would log a spurious error at every shutdown.
 	stopLoop()
