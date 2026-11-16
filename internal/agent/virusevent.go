@@ -31,7 +31,7 @@ import (
 //     "event" (extra arguments such as --config are fine);
 //   - "other": anything else, including a wrapper script, which the operator
 //     has to wire to `clamfleet-agent event` and which we cannot see into.
-//     The health rule therefore stays quiet for "other" (decision 6).
+//     The health rule therefore stays quiet for "other" (M5 decision 6).
 func ParseVirusEvent(conf []byte) string {
 	sc := bufio.NewScanner(bytes.NewReader(conf))
 	// A very long line is not a VirusEvent we can judge; Scan stops with an

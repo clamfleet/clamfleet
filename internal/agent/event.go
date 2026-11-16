@@ -42,7 +42,7 @@ const (
 // eventWatchdog bounds the whole command: clamd waits for it.
 const eventWatchdog = 10 * time.Second
 
-// EncodePath applies the path convention of decision 16, so two different
+// EncodePath applies the path convention of M5 decision 16, so two different
 // file names never become the same string:
 //   - a backslash becomes two;
 //   - each byte that is not part of valid UTF-8 becomes \xNN (lowercase hex);

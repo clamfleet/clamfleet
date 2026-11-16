@@ -301,7 +301,7 @@ func TestRecordEventDuplicate(t *testing.T) {
 	}
 }
 
-// Decision 2: deleting a host cascades to everything that belongs to it; the
+// M2 decision 2: deleting a host cascades to everything that belongs to it; the
 // audit trail, which carries only a name snapshot, stays.
 func TestDeleteHostCascades(t *testing.T) {
 	ctx := context.Background()

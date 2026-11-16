@@ -66,7 +66,7 @@ func TestPolicyCheckAddr(t *testing.T) {
 	}
 }
 
-// Decision 19: plaintext only to loopback or private addresses.
+// M4 decision 19: plaintext only to loopback or private addresses.
 func TestCheckPlaintext(t *testing.T) {
 	for addr, ok := range map[string]bool{
 		"127.0.0.1": true, "::1": true, "10.0.0.5": true, "192.168.0.9": true, "100.64.1.1": true, "fd12::1": true,
@@ -91,7 +91,7 @@ func TestValidateWebhookURL(t *testing.T) {
 		{"https hostname", "https://hooks.example/T/" + marker, defaultPolicy(), true},
 		{"https with port", "https://hooks.example:8443/x/" + marker, defaultPolicy(), true},
 		{"http private literal", "http://10.0.0.5:8080/" + marker, defaultPolicy(), true},
-		{"http hostname (checked at dial)", "http://receiver.lan/" + marker, defaultPolicy(), true},
+		{"http hostname (checked at dial)", "http://receiver.example/" + marker, defaultPolicy(), true},
 		{"https public literal", "https://203.0.113.5/" + marker, defaultPolicy(), true},
 		{"userinfo", "https://user:pw@hooks.example/" + marker, defaultPolicy(), false},
 		{"userinfo name only", "https://" + marker + "@hooks.example/", defaultPolicy(), false},

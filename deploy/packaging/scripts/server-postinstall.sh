@@ -7,7 +7,7 @@
 # idempotent; a failing step exits non-zero and the package completes on the next
 # `dpkg --configure -a` / `dnf reinstall`.
 #
-# The key file (decision 9): created only on the FIRST install and only if it is absent,
+# The key file (M6 decision 9): created only on the FIRST install and only if it is absent,
 # so an upgrade or a re-run never replaces the key that protects stored secrets (replacing
 # it would make every sealed TOTP secret and webhook URL unreadable). It lives outside the
 # database on purpose: back it up separately (docs/operations.md).

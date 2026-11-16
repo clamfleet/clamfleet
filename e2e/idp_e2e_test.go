@@ -417,7 +417,7 @@ func TestOIDCAgainstKeycloak(t *testing.T) {
 	}
 
 	// The group changes in Keycloak: alice leaves the admin group and joins the viewer group. The next
-	// sign-in has the new role, on the same row (decision 20: the role follows the provider at every sign-in).
+	// sign-in has the new role, on the same row (M6 decision 20: the role follows the provider at every sign-in).
 	kcadm(t, `U=$($K get users -r clamfleet -q username=alice --fields id --format csv --noquotes)
 AG=$($K get groups -r clamfleet -q search=`+adminsGroup+` --fields id --format csv --noquotes | head -1)
 VG=$($K get groups -r clamfleet -q search=`+viewerGroup+` --fields id --format csv --noquotes | head -1)

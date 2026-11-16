@@ -76,7 +76,7 @@ check: vet staticcheck sqlc-check test scripts-test
 # The AppArmor VM (milestone 5, decision 7): CFA_EXEC is the command prefix that runs a command
 # in the VM, CFA_HOST the ssh target of the Incus host that holds it. Also no defaults.
 # The AlmaLinux 9 VM (milestone 6, decision 11): CFE_EXEC and CFE_HOST, the same way. Also no defaults.
-# The identity-provider container (milestone 6b, decision 11): CFI_EXEC and CFI_HOST, the same way. Also no defaults.
+# The identity-provider container (M6 decision 11): CFI_EXEC and CFI_HOST, the same way. Also no defaults.
 export CFT_EXEC INCUS_HOST CFA_EXEC CFA_HOST CFE_EXEC CFE_HOST CFI_EXEC CFI_HOST
 
 e2e:

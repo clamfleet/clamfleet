@@ -326,7 +326,7 @@ func TestHealthyHost(t *testing.T) {
 	if r.Freshclam.LastError != nil {
 		t.Errorf("freshclam.last_error = %v, want null", r.Freshclam.LastError)
 	}
-	// Records which source worked (decision Q8): the journal, because the
+	// Records which source worked (M1 Q8): the journal, because the
 	// agent user is in group systemd-journal.
 	if j := sh(t, "journalctl -u clamav-freshclam -o cat --no-pager -q | grep -c 'update process started'"); j == "0" {
 		t.Errorf("the journal holds no freshclam run, so the result came from the log file")
@@ -370,7 +370,7 @@ func TestClamdStoppedIsNotRestartedByTheAgent(t *testing.T) {
 			if r.Sigs.Daily == nil || r.Sigs.Main == nil {
 				t.Errorf("signatures must still be reported: %+v", r.Sigs)
 			}
-			// The decision Q4 proof: the agent must not have started clamd.
+			// The M1 Q4 proof: the agent must not have started clamd.
 			if got := sh(t, "systemctl is-active clamav-daemon.service || true"); got != "inactive" {
 				t.Errorf("after the report clamd is %q: the agent started it", got)
 			}
@@ -381,7 +381,7 @@ func TestClamdStoppedIsNotRestartedByTheAgent(t *testing.T) {
 // A freshclam that cannot reach its mirror: a real unit, started with a
 // drop-in that points freshclam at an unreachable loopback mirror (never the
 // real CDN, which rate-limits). The failure must reach the report through the
-// systemd journal (decision Q8), and the unit state must follow start/stop.
+// systemd journal (M1 Q8), and the unit state must follow start/stop.
 func TestFreshclamFailingThenStopped(t *testing.T) {
 	fresh(t)
 	sh(t, `
@@ -470,7 +470,7 @@ func TestFreshclamLogUnreadableAfterRotation(t *testing.T) {
 	sh(t, "logrotate -f /etc/logrotate.d/clamav-freshclam")
 	got := sh(t, "stat -c '%U:%G %a' /var/log/clamav/freshclam.log")
 	if got != "clamav:adm 640" {
-		t.Fatalf("Debian's logrotate no longer recreates the log as clamav:adm 640 (got %q): revisit decision Q8", got)
+		t.Fatalf("Debian's logrotate no longer recreates the log as clamav:adm 640 (got %q): revisit M1 Q8", got)
 	}
 
 	// Journal available: unchanged result, no warning about the log.

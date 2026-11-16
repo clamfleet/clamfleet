@@ -297,7 +297,7 @@ func TestSendWorldReadableTokenFileWarnsOnce(t *testing.T) {
 	}
 }
 
-// mTLS (decision 11): the agent presents its client certificate; without one
+// mTLS (M2 decision 11): the agent presents its client certificate; without one
 // the server's handshake fails.
 func TestSendPresentsClientCertificate(t *testing.T) {
 	dir := t.TempDir()

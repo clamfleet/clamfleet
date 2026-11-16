@@ -105,7 +105,7 @@ func seedWebhookTarget(t *testing.T, db, name, hookURL string, ring *secrets.Key
 	return key
 }
 
-// Decision 10: an alert-target secret the key cannot open does NOT stop the
+// M4 decision 10: an alert-target secret the key cannot open does NOT stop the
 // server (email and the other targets keep working); it logs the count and the fix.
 func TestServeStartsWithAnUnopenableWebhookSecret(t *testing.T) {
 	tlsb, err := testtls.New(t.TempDir())

@@ -474,7 +474,7 @@ func TestFreshEventDuringSlowIngest(t *testing.T) {
 }
 
 // 300 detections wait in the spool during an outage. After the restart a fresh
-// one overtakes them (decision 14): its alert arrives within 30 s, and all 300
+// one overtakes them (M5 decision 14): its alert arrives within 30 s, and all 300
 // arrive eventually.
 func TestFreshEventDuringBacklog(t *testing.T) {
 	rig := newDetectionRig(t, nil, "")

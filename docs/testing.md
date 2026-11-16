@@ -461,7 +461,7 @@ under `form-action 'self'` (see [auth.md](auth.md)).
 
 ## The IdP container (`make e2e-idp`)
 
-OpenLDAP and Keycloak in a throwaway Debian 13 container, `clamfleet-idp`, on the Incus host (milestone 6b, decision 11). The
+OpenLDAP and Keycloak in a throwaway Debian 13 container, `clamfleet-idp`, on the Incus host (M6 decision 11). The
 real `clamfleet-server` runs **inside** it, so nothing is exposed: slapd is on `127.0.0.1:389`, Keycloak on `127.0.0.1:8080`
 and the console on `127.0.0.1:8443`, all inside the container. Set `CFI_EXEC` (the command prefix that runs a command in it, such
 as `ssh <host> sudo incus exec clamfleet-idp --`) and `CFI_HOST` (the ssh target of the Incus host) in the environment or in

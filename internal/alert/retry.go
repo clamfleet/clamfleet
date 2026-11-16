@@ -5,7 +5,7 @@
 // (docs/plans/milestone-4.md 4.4). Pure: no clock and no randomness of its
 // own; the caller passes "now" and a jitter source.
 //
-// Schedule (decision 5): at most 5 attempts per delivery, at planning and then
+// Schedule (M4 decision 5): at most 5 attempts per delivery, at planning and then
 // +1, +5, +15 and +60 minutes after the previous attempt FINISHED (about 81
 // minutes in all), each with +-10% jitter. A Retry-After from the receiver
 // raises the delay (never lowers it), capped at 60 minutes.

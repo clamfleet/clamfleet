@@ -23,7 +23,7 @@ import (
 	"github.com/clamfleet/clamfleet/internal/store"
 )
 
-// RoleMap maps what a provider says about a user to a role (decision 20).
+// RoleMap maps what a provider says about a user to a role (M6 decision 20).
 //
 // Rule: admin wins if any admin value matches; otherwise viewer if any viewer value
 // matches; otherwise there is NO role and the sign-in is refused (no access by default).

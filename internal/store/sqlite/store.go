@@ -5,7 +5,7 @@
 //
 // Responsibilities: transactions (report write path, rotate/revoke with its
 // audit row), conversion between domain types and SQL rows (unix-second
-// integers for time, decision 1), and the read-pool/write-connection split:
+// integers for time, M2 decision 1), and the read-pool/write-connection split:
 // reads use s.r, everything that writes uses a transaction on s.w.
 // Dependencies: the generated sqlcdb package, internal/store, internal/proto.
 package sqlite

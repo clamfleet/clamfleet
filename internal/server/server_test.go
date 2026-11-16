@@ -178,7 +178,7 @@ func TestServePlaintextOnLoopback(t *testing.T) {
 
 func mtls(c *Config, b testtls.Bundle) { c.TLS.ClientCA = b.CA }
 
-// Decision 11: with tls.client_ca set, a client without a valid certificate
+// M2 decision 11: with tls.client_ca set, a client without a valid certificate
 // cannot even finish the handshake.
 func TestMTLSHandshakeWithoutClientCertFails(t *testing.T) {
 	r := start(t, mtls)

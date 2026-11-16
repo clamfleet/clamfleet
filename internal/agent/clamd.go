@@ -96,7 +96,7 @@ func ParseLocalSocket(conf []byte) (string, error) {
 // avoids IDSESSION state. The reply is read up to the first NUL; an EOF after
 // some data is accepted too. Side effect: opens a unix socket connection,
 // which on a socket-activated clamd STARTS the service, so callers must check
-// the unit state first (decision Q4).
+// the unit state first (M1 Q4).
 func clamdCommand(ctx context.Context, socket, cmd string, timeout time.Duration) (string, error) {
 	d := net.Dialer{Timeout: timeout}
 	conn, err := d.DialContext(ctx, "unix", socket)

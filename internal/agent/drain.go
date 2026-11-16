@@ -6,7 +6,7 @@
 // Responsibilities:
 //   - the EVENT lane: detections younger than a minute first (newest first),
 //     so a fresh EICAR test is not stuck behind a backlog after an outage
-//     (decision 14), then the backlog oldest first;
+//     (M5 decision 14), then the backlog oldest first;
 //   - the REPORT lane: the newest heartbeat first, then the older ones marked
 //     replay=true (history only for the server) and paced at 2 per second;
 //   - delivery rules: delete only after a 2xx, quarantine what the server calls

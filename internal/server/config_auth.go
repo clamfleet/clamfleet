@@ -26,7 +26,7 @@ import (
 type AuthLDAP struct {
 	Enabled bool `yaml:"enabled"`
 	// URL is ldaps://host[:port] or ldap://host[:port]. ldap:// needs StartTLS unless
-	// the host is loopback (decision 22: LDAP carries every user's password).
+	// the host is loopback (M6 decision 22: LDAP carries every user's password).
 	URL      string `yaml:"url"`
 	StartTLS bool   `yaml:"start_tls"`
 	// CAFile adds trust anchors (PEM) to the system roots; verification is never skipped.
@@ -130,7 +130,7 @@ func (l AuthLDAP) Validate() error {
 	case u.Scheme == "ldaps" && l.StartTLS:
 		return fmt.Errorf("auth.ldap.start_tls does not apply to an ldaps:// URL (it is encrypted from the first byte): use ldap:// with start_tls, or ldaps:// without it")
 	case u.Scheme == "ldap" && !l.StartTLS && !config.IsLoopbackHost(u.Hostname()):
-		// Decision 22: no plaintext LDAP beyond the same machine, not even on a private network.
+		// M6 decision 22: no plaintext LDAP beyond the same machine, not even on a private network.
 		return fmt.Errorf("auth.ldap.url %q would send every user's password unencrypted: use ldaps:// or set auth.ldap.start_tls (plaintext is only allowed to a directory on this machine)", l.URL)
 	}
 	if err := validateTimeout("auth.ldap.timeout", l.Timeout); err != nil {

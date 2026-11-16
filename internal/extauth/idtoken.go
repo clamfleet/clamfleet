@@ -3,7 +3,7 @@
 
 // idtoken.go: the checks on an OpenID Connect ID token (docs/plans/milestone-6.md 4.17).
 //
-// THE SIGNATURE IS NOT VERIFIED, on purpose (decision 17; OIDC Core 1.0 section 3.1.3.7
+// THE SIGNATURE IS NOT VERIFIED, on purpose (M6 decision 17; OIDC Core 1.0 section 3.1.3.7
 // rule 6): the token reaches us straight from the provider's token endpoint over a TLS
 // connection WE validated, in answer to a code only this server holds the verifier for, and
 // that is what the specification allows in place of checking the signature. There is no JOSE

@@ -367,7 +367,7 @@ func TestTOTPEnrolmentGate(t *testing.T) {
 	}
 }
 
-// Rule (decision 21): the exempt list is explicit. A source that is not on it is GATED, so a source
+// Rule (M6 decision 21): the exempt list is explicit. A source that is not on it is GATED, so a source
 // a later milestone adds ("saml") fails safe. The session check below is the first line; this test
 // opens it (Sources lists saml) to prove the second line holds on its own.
 func TestTOTPGateGatesAnUnknownSource(t *testing.T) {

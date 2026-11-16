@@ -222,7 +222,7 @@ func TestRestartGrace(t *testing.T) {
 	}
 }
 
-// Decision 4: the interval comes from the agent, clamped 10 s .. 24 h, with the
+// M3 decision 4: the interval comes from the agent, clamped 10 s .. 24 h, with the
 // server default as fallback.
 func TestIntervalSelection(t *testing.T) {
 	th := DefaultThresholds()

@@ -292,7 +292,7 @@ func (a *app) findUser(ctx context.Context, log *slog.Logger, st store.Store, id
 
 // externalRefusal is the reason a command does not apply to an external user, or "" when it does:
 // their role, password and second factor belong to the provider and are overwritten or ignored there
-// (decision 20). disable and enable apply to everyone and take effect at once.
+// (M6 decision 20). disable and enable apply to everyone and take effect at once.
 func externalRefusal(cmd string, u store.User) string {
 	var what string
 	switch u.AuthSource {

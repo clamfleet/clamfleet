@@ -40,7 +40,7 @@ import (
 // Policy decides which destination addresses a webhook may reach.
 type Policy struct {
 	// AllowPrivate allows RFC 1918, 100.64.0.0/10 and fc00::/7. It also governs
-	// plaintext to private addresses (decision 19): off means https to public
+	// plaintext to private addresses (M4 decision 19): off means https to public
 	// addresses only, plus loopback when AllowLoopback is on.
 	AllowPrivate bool
 	// AllowLoopback allows 127.0.0.0/8, ::1 and the localhost names.
@@ -257,7 +257,7 @@ func (p Policy) CheckAddr(a netip.Addr) error {
 	return nil
 }
 
-// CheckPlaintext applies decision 19 to an address: plaintext (http, SMTP
+// CheckPlaintext applies M4 decision 19 to an address: plaintext (http, SMTP
 // without TLS) only to loopback and private addresses, never to a public one.
 // It judges a translation address by the IPv4 inside it, so a NAT64 form of a
 // public address is public.
@@ -315,7 +315,7 @@ func NetDialer(p Policy, plaintext bool, timeout time.Duration) *net.Dialer {
 // SafeDialer is the resolve-filter-dial step.
 type SafeDialer struct {
 	Policy Policy
-	// Plaintext: the connection carries no TLS, so decision 19 applies on top of
+	// Plaintext: the connection carries no TLS, so M4 decision 19 applies on top of
 	// the policy (the dialled address must be loopback or private).
 	Plaintext bool
 	// Resolver resolves host names; nil means net.DefaultResolver.

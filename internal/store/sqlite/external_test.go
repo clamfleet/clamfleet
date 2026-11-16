@@ -93,7 +93,7 @@ func TestExternalLoginFindsTheUserByExternalIDAndRefreshesIt(t *testing.T) {
 	}
 }
 
-// Rule (decision 19): an email held by another user refuses the sign-in and changes nothing, in every
+// Rule (M6 decision 19): an email held by another user refuses the sign-in and changes nothing, in every
 // direction: a new external user against a local one, against another external one, and an existing external
 // user whose directory email moved into a collision. The local user's row and sessions are untouched.
 func TestExternalLoginRefusesAnEmailOfAnotherUser(t *testing.T) {

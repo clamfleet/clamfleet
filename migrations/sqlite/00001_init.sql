@@ -6,10 +6,10 @@
 -- What is hard to change later (SQLite can only do it by rebuilding the table)
 -- is fixed here: column types and the foreign key actions.
 --
--- Rule: every timestamp is INTEGER unix seconds, UTC (decision 1). The store
+-- Rule: every timestamp is INTEGER unix seconds, UTC (M2 decision 1). The store
 -- layer converts; no time.Time ever reaches the driver.
 --
--- Rule: deleting a host cascades to everything that belongs to it (decision 2).
+-- Rule: deleting a host cascades to everything that belongs to it (M2 decision 2).
 -- Long-term retention of detections is the customer's central logging job.
 
 -- +goose Up

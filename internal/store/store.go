@@ -41,7 +41,7 @@ var (
 	// ErrUserDisabled: the user exists and is disabled (an external sign-in is refused).
 	ErrUserDisabled = errors.New("user disabled")
 	// ErrEmailInUse: the email an external identity presents belongs to ANOTHER user. External
-	// and local accounts are never linked by email (decision 19: that is the classic account
+	// and local accounts are never linked by email (M6 decision 19: that is the classic account
 	// takeover), so the sign-in is refused and nothing is written.
 	ErrEmailInUse = errors.New("email in use by another user")
 	// ErrTooManyOIDCStates: too many OIDC sign-ins are in progress (MaxOIDCStates). Starting one

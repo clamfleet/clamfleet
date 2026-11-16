@@ -245,7 +245,7 @@ func Evaluate(in Input, th Thresholds) Result {
 	}
 	if r.Services.Freshclam != "active" {
 		// not-found and unknown count: a freshclam that is not running is why
-		// signatures go old, whichever way it is missing (decision 6).
+		// signatures go old, whichever way it is missing (M3 decision 6).
 		state := r.Services.Freshclam
 		if state == "" {
 			state = proto.ServiceUnknown

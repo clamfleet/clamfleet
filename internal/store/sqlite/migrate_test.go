@@ -136,7 +136,7 @@ func TestMigration00002OnExistingData(t *testing.T) {
 }
 
 // The state_changes cascade (M2 decision 2) and the users table shape that
-// decision 11 fixes: email may be NULL for several rows, but not duplicated.
+// M3 decision 11 fixes: email may be NULL for several rows, but not duplicated.
 func TestMigration00002ConstraintsAndCascade(t *testing.T) {
 	s := openTemp(t)
 	h := addHost(t, s, "web01")

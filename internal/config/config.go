@@ -12,7 +12,7 @@
 // caller afterwards.
 //
 // Dependency: go.yaml.in/yaml/v3, the maintained continuation of the
-// unmaintained gopkg.in/yaml.v3 (the spec names the latter; decision Q2).
+// unmaintained gopkg.in/yaml.v3 (the spec names the latter; M1 Q2).
 package config
 
 import (

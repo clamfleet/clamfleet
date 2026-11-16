@@ -146,7 +146,7 @@ func TestLDAPSignInCreatesTheUserAndASession(t *testing.T) {
 	}
 }
 
-// Decision 19: the identity is the entryUUID. After a rename (and a new mail) the SAME user signs in.
+// M6 decision 19: the identity is the entryUUID. After a rename (and a new mail) the SAME user signs in.
 func TestLDAPRenamedEntryIsTheSameUser(t *testing.T) {
 	r := newLDAPRig(t, func(l *server.AuthLDAP) { l.UserBaseDN = ldapBase })
 	e := newEnv(t, r.opt(t))
@@ -270,7 +270,7 @@ func TestLDAPGroupMappingAndRemoval(t *testing.T) {
 	}
 }
 
-// Decision 18: a local account with exactly the typed email is tried first, and LDAP is never asked.
+// M6 decision 18: a local account with exactly the typed email is tried first, and LDAP is never asked.
 func TestLDAPLocalFirst(t *testing.T) {
 	r := newLDAPRig(t, nil)
 	e := newEnv(t, r.opt(t))
@@ -293,7 +293,7 @@ func TestLDAPLocalFirst(t *testing.T) {
 	}
 }
 
-// Decision 19: signing in by uid with a directory mail that belongs to a local user is refused. Nothing is
+// M6 decision 19: signing in by uid with a directory mail that belongs to a local user is refused. Nothing is
 // linked, created or changed, and the local user's session survives.
 func TestLDAPEmailOfALocalUserIsRefused(t *testing.T) {
 	r := newLDAPRig(t, nil)
@@ -349,7 +349,7 @@ func TestLDAPFaultsAre503AndDoNotCountAgainstTheUser(t *testing.T) {
 	}
 }
 
-// Decision 21: LDAP users are not gated by totp_required (documented password-only), the TOTP pages refuse
+// M6 decision 21: LDAP users are not gated by totp_required (documented password-only), the TOTP pages refuse
 // them, and a disabled user is refused at the next sign-in.
 func TestLDAPUsersAreNotTOTPGatedAndCanBeDisabled(t *testing.T) {
 	r := newLDAPRig(t, nil)

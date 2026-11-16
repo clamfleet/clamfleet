@@ -84,7 +84,7 @@ func Routes() []Route {
 		{"GET", "/{$}", AuthUser},
 		{"GET", "/fleet/rows", AuthUser},
 		{"GET", "/hosts/{name}", AuthUser},
-		// Detections (M5). Everyone signed in sees them (paths included, decision 12); only
+		// Detections (M5). Everyone signed in sees them (paths included, M5 decision 12); only
 		// admins acknowledge. "/events/ack" and "/events/{id}/ack" differ in segment count, so
 		// they cannot shadow each other.
 		{"GET", "/events", AuthUser},

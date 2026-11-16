@@ -53,7 +53,7 @@ type TLS struct {
 
 // Units names the systemd units. An empty name means "not present on this
 // host". For Clamd it also means "not managed by systemd": the socket is then
-// probed without a unit check (decision Q4); a non-empty name that systemd does
+// probed without a unit check (M1 Q4); a non-empty name that systemd does
 // not know is an error, never a license to probe.
 type Units struct {
 	Clamd     string `yaml:"clamd"`

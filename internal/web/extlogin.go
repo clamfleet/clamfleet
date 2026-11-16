@@ -7,9 +7,9 @@
 //
 // Rules, all deliberate (docs/plans/milestone-6.md 4.15 to 4.19; docs/auth.md):
 //   - A local account with exactly the typed email is tried first and LDAP is then never
-//     asked (decision 18): a directory entry cannot shadow a local break-glass admin.
+//     asked (M6 decision 18): a directory entry cannot shadow a local break-glass admin.
 //   - The identity of an external user is the provider's stable id, never the email, and
-//     an email that belongs to ANOTHER user refuses the sign-in (decision 19). Nothing is
+//     an email that belongs to ANOTHER user refuses the sign-in (M6 decision 19). Nothing is
 //     linked automatically: that is the classic account takeover.
 //   - Refusals and faults are told apart. A wrong password, an unknown name or a missing
 //     role is the user's: the generic text (or "no role"), audited with the real reason,

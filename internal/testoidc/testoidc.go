@@ -19,7 +19,7 @@
 // error from the authorization endpoint.
 //
 // The ID token is signed with a throwaway value because ClamFleet does not verify the
-// signature (OIDC Core section 3.1.3.7 rule 6; decision 17): it takes the token straight
+// signature (OIDC Core section 3.1.3.7 rule 6; M6 decision 17): it takes the token straight
 // from the token endpoint over a TLS connection it validated. A fake that signed properly
 // would suggest a check that does not exist.
 //

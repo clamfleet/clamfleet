@@ -5,8 +5,9 @@ SPDX-FileCopyrightText: The ClamFleet Authors
 
 # ClamFleet: working rules
 
-Central management for ClamAV on Linux fleets. Spec: `docs/HANDOVER.md`. Current plan:
-`docs/plans/milestone-1.md` (local only, gitignored; its section 10 holds the maintainer's decisions and overrides the rest).
+Central management for ClamAV on Linux fleets. Spec: `docs/HANDOVER.md`. Maintainer decisions, cited in code as
+"M4 decision 19": `docs/decisions.md` (the milestone plans are local, gitignored working notes; a cited decision
+that is missing from the log gets a line there in the same change).
 
 ## Commands
 
@@ -31,8 +32,7 @@ Central management for ClamAV on Linux fleets. Spec: `docs/HANDOVER.md`. Current
 - No dependency beyond the table in spec section 5, using the maintained successor where the spec
   names an unmaintained module (`go.yaml.in/yaml/v3`, not `gopkg.in/yaml.v3`). Ask before adding any other.
 - Environment prefixes: `CLAMFLEET_AGENT_` for the agent; `CLAMFLEET_SERVER_` is the server's (`internal/server`); the
-  agent neither reads nor warns about it, and the server likewise ignores `CLAMFLEET_AGENT_`. The decisions are in `docs/plans/milestone-1.md` sections 10 and 11
-  (`docs/plans` is local and gitignored, so it is not in a fresh clone).
+  agent neither reads nor warns about it, and the server likewise ignores `CLAMFLEET_AGENT_`. The decisions are in `docs/decisions.md` (Milestone 1).
 - Payload structs in `internal/proto` and config keys are public interfaces. Do not change them without a schema bump.
 - The alert payload (`internal/alert/payload.go`, pinned by `internal/alert/testdata/*.golden.json`, documented in `docs/alerts.md`) is a public interface: changes need a schema decision.
 - Time goes through an injected clock, never `time.Now()` inside a collector.

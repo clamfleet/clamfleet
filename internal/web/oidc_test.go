@@ -377,7 +377,7 @@ func TestOIDCUnverifiedEmailIsNotStored(t *testing.T) {
 	}
 }
 
-// Decision 19, router level: the email an IdP presents may not belong to another user, however it arrives.
+// M6 decision 19, router level: the email an IdP presents may not belong to another user, however it arrives.
 func TestOIDCEmailCollisionsAreRefused(t *testing.T) {
 	r := newOIDCRig(t, nil)
 	e := r.e
@@ -506,7 +506,7 @@ func TestOIDCStartRefusesCrossSitePosts(t *testing.T) {
 	}
 }
 
-// Decision 21: an OIDC user is not gated by totp_required (the provider owns the second factor).
+// M6 decision 21: an OIDC user is not gated by totp_required (the provider owns the second factor).
 func TestOIDCUsersAreNotTOTPGated(t *testing.T) {
 	r := newOIDCRig(t, func(c *server.Config) { c.Auth.Local.TOTPRequired = true })
 	b := r.e.browser()
@@ -713,7 +713,7 @@ func TestOIDCRefusalPathsLogNoCodeOrState(t *testing.T) {
 
 // Only the code flow exists: the callback never reads an id_token (or access_token) from the URL, however
 // well formed and however mapped to an admin. A front-channel token would need signature verification, which
-// this implementation does not do (decision 17, docs/auth.md), so accepting one would be a forgery hole.
+// this implementation does not do (M6 decision 17, docs/auth.md), so accepting one would be a forgery hole.
 func TestOIDCCallbackIgnoresAFrontChannelIDToken(t *testing.T) {
 	r := newOIDCRig(t, nil)
 	e := r.e
