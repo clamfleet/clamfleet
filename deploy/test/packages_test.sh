@@ -356,6 +356,7 @@ expect "purge: the state directory is gone" test ! -e "$T/var/agent"
 cleanup
 new_env
 sed -n '/^\tpurge)/,/^\t\t;;/p' "$src/agent-postremove.sh" | sed 's/#.*$//' >"$T/purge-branch"
+expect "purge: the purge branch was extracted (an empty extract would pass the glob check)" test -s "$T/purge-branch"
 expect "purge: the purge branch uses no shell glob" bash -c "! grep -E '/\*|\.\[|\*\.' '$T/purge-branch'"
 expect "purge: the script has no per-entry loop (no check-then-use)" bash -c "! grep -E 'for entry|purge_tree|is_mount' '$src/agent-postremove.sh'"
 cleanup
