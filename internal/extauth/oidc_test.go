@@ -371,3 +371,29 @@ func TestOIDCErrorsCarryNoSecrets(t *testing.T) {
 func tlsFor(pool *x509.CertPool) *tls.Config {
 	return &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12}
 }
+
+// http endpoints are allowed only when the issuer itself is http on loopback. Under an https issuer even a
+// loopback http token endpoint is refused: the client secret and the code would travel in clear.
+func TestOIDCPlainHTTPEndpointsOnlyUnderALoopbackHTTPIssuer(t *testing.T) {
+	r := newOIDCRig(t)
+	r.srv.SetScript(testoidc.Script{TokenEndpoint: "http://127.0.0.1:9/token"})
+	if _, err := r.client(t).Begin(context.Background()); !errors.Is(err, ErrUnavailable) || !strings.Contains(err.Error(), "token_endpoint") {
+		t.Fatalf("https issuer, loopback http token endpoint: %v", err)
+	}
+	// A plain-http loopback provider (tests, Keycloak in the e2e container) keeps working.
+	srv, err := testoidc.Start(testoidc.Options{RedirectURIs: []string{redirectURL}, Now: func() time.Time { return r.clock }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(srv.Close)
+	cfg := r.cfg
+	cfg.Issuer = srv.Issuer()
+	cfg.RootCAs = nil
+	c, err := NewOIDCClient(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Begin(context.Background()); err != nil {
+		t.Fatalf("http loopback issuer with http endpoints: %v", err)
+	}
+}

@@ -96,7 +96,7 @@ type OIDCClient struct {
 
 // NewOIDCClient validates cfg and returns the client. It does no I/O (discovery is lazy).
 func NewOIDCClient(cfg OIDCConfig) (*OIDCClient, error) {
-	if err := checkEndpoint(cfg.Issuer); err != nil {
+	if err := checkEndpoint(cfg.Issuer, true); err != nil {
 		return nil, fmt.Errorf("oidc: issuer: %w", err)
 	}
 	if cfg.ClientID == "" || cfg.ClientSecret == "" || cfg.RedirectURL == "" || cfg.RoleClaim == "" {
@@ -127,11 +127,18 @@ func NewOIDCClient(cfg OIDCConfig) (*OIDCClient, error) {
 	return c, nil
 }
 
-// checkEndpoint: an absolute https URL, or http for a loopback host.
-func checkEndpoint(raw string) error {
+// checkEndpoint: an absolute https URL, or http for a loopback host. allowHTTP says whether http is
+// allowed at all: it is for the issuer itself (a loopback test provider), and for the endpoints in
+// its discovery document ONLY when the issuer is http on loopback too. An https issuer whose
+// document points at a plain-http endpoint, even on loopback, is refused: the client secret and the
+// code would travel unencrypted to wherever the document says.
+func checkEndpoint(raw string, allowHTTP bool) error {
 	u, err := url.Parse(raw)
 	if err != nil || u.Host == "" || u.User != nil || (u.Scheme != "https" && u.Scheme != "http") {
 		return errors.New("not an https URL")
+	}
+	if u.Scheme == "http" && !allowHTTP {
+		return errors.New("plain http endpoint under an https issuer")
 	}
 	if u.Scheme == "http" && !config.IsLoopbackHost(u.Hostname()) {
 		return errors.New("plain http to a host that is not loopback")
@@ -259,7 +266,7 @@ func (c *OIDCClient) discover(ctx context.Context) (*discovery, error) {
 		return nil, fmt.Errorf("%w: discovery issuer does not match auth.oidc.issuer", ErrUnavailable)
 	}
 	for name, ep := range map[string]string{"authorization_endpoint": doc.AuthorizationEndpoint, "token_endpoint": doc.TokenEndpoint} {
-		if err := checkEndpoint(ep); err != nil {
+		if err := checkEndpoint(ep, strings.HasPrefix(c.cfg.Issuer, "http://")); err != nil {
 			return nil, fmt.Errorf("%w: discovery %s: %v", ErrUnavailable, name, err)
 		}
 	}
