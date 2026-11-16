@@ -556,8 +556,15 @@ func TestDebFailedUpgradeLeavesDataAlone(t *testing.T) {
 	// Fix the directory: the next restart succeeds with a backup, migrates, and only now prunes.
 	sh(t, "chmod 0700 /var/lib/clamfleet-server/backups; systemctl reset-failed clamfleet-server || true; systemctl restart clamfleet-server")
 	sh(t, "for _ in $(seq 1 30); do journalctl -u clamfleet-server -o cat --no-pager -q | grep -q 'old audit rows pruned' && exit 0; sleep 1; done; journalctl -u clamfleet-server --no-pager >&2; exit 1")
-	if n := sh(t, "ls /var/lib/clamfleet-server/backups | grep -c '^pre-migrate-v6-to-v7-' || true"); n != "1" {
-		t.Fatalf("want one pre-migrate-v6-to-v7 backup, got %s", n)
+	// The old package is at the newest production migration and the overlay adds exactly one: derive the
+	// versions from the migration files, so the next real migration does not break this test again.
+	files, err := filepath.Glob(filepath.Join(repoRoot, "migrations", "sqlite", "*.sql"))
+	if err != nil || len(files) == 0 {
+		t.Fatalf("cannot count the migrations: %v", err)
+	}
+	wantName := fmt.Sprintf("pre-migrate-v%d-to-v%d-", len(files), len(files)+1)
+	if n := sh(t, "ls /var/lib/clamfleet-server/backups | grep -c '^"+wantName+"' || true"); n != "1" {
+		t.Fatalf("want one %s backup, got %s", wantName, n)
 	}
 	j = journal(t, "clamfleet-server")
 	for _, msg := range []string{"old reports pruned", "old events pruned", "old state changes pruned", "old alert history pruned"} {
