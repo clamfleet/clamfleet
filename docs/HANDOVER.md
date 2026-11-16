@@ -348,7 +348,7 @@ General requirements for every milestone:
 
 ## 15. Open questions
 
-These are not decided. The agent must ask before implementing anything that depends on them.
+Questions 1, 3, 4 and 5 are decided (marked below). Question 2, the final project name, is still open: the agent must ask before implementing anything that depends on it.
 
 1. Decided: AGPL-3.0-only (see `LICENSE`).
 2. Final project name. Open until the maintainer confirms "ClamFleet". Name check of 2026-11-16 (a search, not legal advice):
