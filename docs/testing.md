@@ -221,9 +221,11 @@ start; a detection through the packaged agent (the test a `0640` agent.yaml woul
 (exit 1, `last_scan.json`, clamd never started while stopped, its socket unit included); the retention acceptance
 (`hack/seeddb` writes a database with rows of known ages, `retention.reports_days: 14`); `/metrics`; an upgrade from
 `0.6.0~e2e1` to `0.6.0~e2e2` that keeps the configuration edit and the key file and restarts both services; remove and
-purge (the database and key survive); and a purge across a tmpfs mount. **Not covered:** a failed upgrade with an
-unwritable `backup.dir`, which needs a test-only migration between two builds of the same code; the behaviour is proven
-through the real binary in `cmd/clamfleet-server` (`TestMigrationStopsWhenTheBackupFails`).
+purge (the database and key survive); a purge across a tmpfs mount (nothing is removed, the mount is named); and
+`TestDebFailedUpgradeLeavesDataAlone`: the new package is built with `make packages TAGS=e2e_migration`, a
+test-only migration (`migrations/e2e_overlay.go`, never in a release build) so the upgrade changes the schema; with an
+unwritable `backup.dir` the restarted server refuses to migrate, keeps restarting (`Restart=on-failure`), leaves the schema
+and every old row alone (no prune), and recovers with a `pre-migrate-v6-to-v7` backup once the directory is fixed.
 
 ### The AlmaLinux 9 VM (`make e2e-el9`)
 

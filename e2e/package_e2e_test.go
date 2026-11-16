@@ -13,12 +13,9 @@
 // does what the install notice tells an administrator to do (a host, a token, the
 // VirusEvent line). The earlier suites run from bare binaries and keep doing so.
 //
-// Not covered here, and why: a failed upgrade (the backup directory made unwritable
-// before an upgrade that brings a migration) needs a schema change between two
-// builds of the SAME code, which means a test-only migration overlay [A20]. The
-// backup-before-migrating behaviour is proven through the real binary in
-// cmd/clamfleet-server (TestMigrationStopsWhenTheBackupFails, TestServeBacksUpBeforeMigrating)
-// and the upgrade here runs without a schema change.
+// The failed upgrade (an unwritable backup.dir before an upgrade that brings a migration) uses a
+// test-only migration overlay behind the e2e_migration build tag (migrations/e2e_overlay.go): the
+// "new" package is built with it, so the two packages differ by one schema change.
 package e2e
 
 import (
@@ -478,4 +475,101 @@ func TestDebPurgeAcrossAMount(t *testing.T) {
 	}
 	// With a mount inside, the purge removes NOTHING (it never walks a tree it cannot fully leave).
 	sh(t, "test -f /var/lib/clamfleet/last_scan.json")
+}
+
+// A failed upgrade leaves the data alone (plan 6.4). The "new" package is built with the test-only
+// migration overlay (-tags e2e_migration, migrations/e2e_overlay.go), so upgrading to it means a schema
+// change. The backup directory is unwritable when the upgrade restarts the server, so the backup before the
+// migration fails and the server must: refuse to migrate (schema unchanged), prune NOTHING (the seeded
+// rows are older than the default retention, which the server was running with a long retention to
+// prove the baseline), restart in the loop Restart=on-failure gives it, and recover by itself once the
+// directory is fixed, with a pre-migrate backup.
+func TestDebFailedUpgradeLeavesDataAlone(t *testing.T) {
+	installOld(t)
+	seed := filepath.Join(t.TempDir(), "seeddb")
+	if err := build(seed, "hack/seeddb"); err != nil {
+		t.Fatal(err)
+	}
+	pushBinary(t, seed, "seeddb")
+	sh(t, "systemctl stop clamfleet-server")
+	sh(t, "rm -f /tmp/seed.db; /usr/local/bin/seeddb --db /tmp/seed.db --now \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\" >/dev/null; "+
+		"rm -f /var/lib/clamfleet-server/clamfleet.db*; install -o clamfleet-server -g clamfleet-server -m 600 /tmp/seed.db /var/lib/clamfleet-server/clamfleet.db; rm /tmp/seed.db")
+	// A long retention while the old server runs: the first pass prunes nothing, so every seeded row exists.
+	for _, e := range []string{
+		"s/^  reports_days: 30 /  reports_days: 90 /", "s/^  events_days: 365 /  events_days: 3650 /",
+		"s/^  state_changes_days: 365 /  state_changes_days: 3650 /", "s/^  alert_log_days: 90 /  alert_log_days: 3650 /",
+		"s/^  audit_days: 365 /  audit_days: 3650 /",
+	} {
+		sedConfig(t, "/etc/clamfleet/server.yaml", e)
+	}
+	sh(t, "systemctl start clamfleet-server")
+	sh(t, "for _ in $(seq 1 20); do systemctl is-active --quiet clamfleet-server && exit 0; sleep 0.5; done; exit 1")
+	var before struct {
+		ReportCount int `json:"report_count"`
+		EventCount  int `json:"event_count"`
+	}
+	if err := json.Unmarshal([]byte(pkgCLI(t, "host", "show", "seed01", "--json")), &before); err != nil || before.ReportCount != 4 || before.EventCount != 3 {
+		t.Fatalf("baseline with the long retention: %+v %v, want 4 reports and 3 events", before, err)
+	}
+	if n := sh(t, "journalctl -u clamfleet-server -o cat --no-pager -q | grep -c 'pruned' || true"); n != "0" {
+		t.Fatalf("the baseline pass pruned something (%s lines)", n)
+	}
+	// Back to the default retention WITHOUT restarting, and an unwritable backup directory.
+	for _, e := range []string{
+		"s/^  reports_days: 90 /  reports_days: 30 /", "s/^  events_days: 3650 /  events_days: 365 /",
+		"s/^  state_changes_days: 3650 /  state_changes_days: 365 /", "s/^  alert_log_days: 3650 /  alert_log_days: 90 /",
+		"s/^  audit_days: 3650 /  audit_days: 365 /",
+	} {
+		sedConfig(t, "/etc/clamfleet/server.yaml", e)
+	}
+	sh(t, "install -d -o clamfleet-server -g clamfleet-server -m 0500 /var/lib/clamfleet-server/backups")
+
+	dir := t.TempDir()
+	cmd := exec.Command("make", "-C", repoRoot, "packages", "VERSION="+pkgVersionNew, "PKG_DIR="+dir, "TAGS=e2e_migration")
+	if o, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("make packages (e2e2 with the overlay): %v\n%s", err, o)
+	}
+	agent, server := debFile(t, dir, "clamfleet-agent", debNew), debFile(t, dir, "clamfleet-server", debNew)
+	pushPackages(t, agent, server)
+	out := aptInstall(t, filepath.Base(server), filepath.Base(agent))
+	if !strings.Contains(out, "Unpacking clamfleet-server ("+debNew+") over ("+debOld+")") {
+		t.Fatalf("not an upgrade:\n%s", out)
+	}
+
+	// The restarted server refuses to migrate and keeps restarting (Restart=on-failure).
+	sh(t, "for _ in $(seq 1 40); do [ \"$(systemctl show -p NRestarts --value clamfleet-server)\" -ge 1 ] && exit 0; sleep 1; done; journalctl -u clamfleet-server --no-pager >&2; exit 1")
+	j := journal(t, "clamfleet-server")
+	if !strings.Contains(j, "the migration was not run") {
+		t.Fatalf("the server did not refuse the migration:\n%s", j)
+	}
+	if strings.Contains(j, "old reports pruned") || strings.Contains(j, "old audit rows pruned") {
+		t.Fatalf("a retention prune ran although the backup failed:\n%s", j)
+	}
+	// The schema is unchanged: the new binary says the database is out of date.
+	if got := sh(t, "runuser -u clamfleet-server -- "+pkgServer+" host list 2>&1 || true"); !strings.Contains(got, "out of date") {
+		t.Fatalf("the database does not look un-migrated: %s", got)
+	}
+	if n := sh(t, "ls /var/lib/clamfleet-server/backups | grep -c pre-migrate || true"); n != "0" {
+		t.Fatalf("%s pre-migrate backups exist although the directory was unwritable", n)
+	}
+
+	// Fix the directory: the next restart succeeds with a backup, migrates, and only now prunes.
+	sh(t, "chmod 0700 /var/lib/clamfleet-server/backups; systemctl reset-failed clamfleet-server || true; systemctl restart clamfleet-server")
+	sh(t, "for _ in $(seq 1 30); do journalctl -u clamfleet-server -o cat --no-pager -q | grep -q 'old audit rows pruned' && exit 0; sleep 1; done; journalctl -u clamfleet-server --no-pager >&2; exit 1")
+	if n := sh(t, "ls /var/lib/clamfleet-server/backups | grep -c '^pre-migrate-v6-to-v7-' || true"); n != "1" {
+		t.Fatalf("want one pre-migrate-v6-to-v7 backup, got %s", n)
+	}
+	j = journal(t, "clamfleet-server")
+	for _, msg := range []string{"old reports pruned", "old events pruned", "old state changes pruned", "old alert history pruned"} {
+		if !strings.Contains(j, msg) {
+			t.Errorf("no %q line after recovery (the old rows were gone before): %s", msg, j)
+		}
+	}
+	var after struct {
+		ReportCount int `json:"report_count"`
+		EventCount  int `json:"event_count"`
+	}
+	if err := json.Unmarshal([]byte(pkgCLI(t, "host", "show", "seed01", "--json")), &after); err != nil || after.ReportCount != 3 || after.EventCount != 2 {
+		t.Fatalf("after recovery: %+v %v, want 3 reports and 2 events (the old rows pruned only now)", after, err)
+	}
 }
