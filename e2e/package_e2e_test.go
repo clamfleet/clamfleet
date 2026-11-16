@@ -99,6 +99,7 @@ func installOld(t *testing.T) {
 	agent, server := debFile(t, dist, "clamfleet-agent", debOld), debFile(t, dist, "clamfleet-server", debOld)
 	pushPackages(t, agent, server)
 	aptInstall(t, filepath.Base(server), filepath.Base(agent))
+	waitServerHealthy(t)
 }
 
 const (
@@ -119,9 +120,23 @@ func sedConfig(t *testing.T, file, expr string) {
 	sh(t, "cp "+file+" /tmp/before.yaml; sed -i '"+expr+"' "+file+"; if cmp -s /tmp/before.yaml "+file+"; then echo 'sed changed nothing: "+expr+"' >&2; exit 1; fi")
 }
 
+// waitServerHealthy waits until the packaged server answers GET /healthz with 200, for at most 30 s,
+// and fails with the unit's journal otherwise. It replaces `systemctl is-active`: the unit is Type=simple,
+// so it is "active" from the exec, before the database is migrated and the port is bound, and a curl
+// right after that was refused (exit 7), which failed TestMetricsScrape about 1 run in 10. Type=notify
+// would fix it in the unit but its start timeout would include the pre-migration backup (milestone 6c,
+// decision 17), so the readiness check stays here.
+func waitServerHealthy(t *testing.T) {
+	t.Helper()
+	sh(t, "for _ in $(seq 1 60); do "+
+		"[ \"$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8443/healthz || true)\" = 200 ] && exit 0; sleep 0.5; done; "+
+		"journalctl -u clamfleet-server --no-pager >&2; echo 'server did not answer /healthz within 30 s' >&2; exit 1")
+}
+
 func restartServer(t *testing.T) {
 	t.Helper()
-	sh(t, "systemctl restart clamfleet-server; for _ in $(seq 1 20); do systemctl is-active --quiet clamfleet-server && exit 0; sleep 0.5; done; journalctl -u clamfleet-server --no-pager >&2; exit 1")
+	sh(t, "systemctl restart clamfleet-server")
+	waitServerHealthy(t)
 }
 
 // registerAgent does what the install notice says: a host on the server, its token in a
@@ -178,7 +193,7 @@ func noErrorLines(t *testing.T, units ...string) {
 func TestDebInstallAndStart(t *testing.T) {
 	installOld(t)
 
-	sh(t, "for _ in $(seq 1 10); do systemctl is-active --quiet clamfleet-server && exit 0; sleep 1; done; exit 1")
+	waitServerHealthy(t)
 	listeners := sh(t, "ss -ltnH | awk '{print $4}' | grep ':8443$' || true")
 	if listeners != "127.0.0.1:8443" {
 		t.Fatalf("the server listens on %q, want 127.0.0.1:8443 only", listeners)
@@ -503,7 +518,7 @@ func TestDebFailedUpgradeLeavesDataAlone(t *testing.T) {
 		sedConfig(t, "/etc/clamfleet/server.yaml", e)
 	}
 	sh(t, "systemctl start clamfleet-server")
-	sh(t, "for _ in $(seq 1 20); do systemctl is-active --quiet clamfleet-server && exit 0; sleep 0.5; done; exit 1")
+	waitServerHealthy(t)
 	var before struct {
 		ReportCount int `json:"report_count"`
 		EventCount  int `json:"event_count"`

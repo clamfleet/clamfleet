@@ -65,6 +65,7 @@ func el9Fresh(t *testing.T) {
 func el9Registered(t *testing.T) {
 	t.Helper()
 	sh(t, "systemctl enable --now clamfleet-server")
+	waitServerHealthy(t)
 	registerAgent(t)
 	waitReport(t, 30*time.Second)
 }
@@ -153,7 +154,7 @@ func TestEL9RpmInstallAndStart(t *testing.T) {
 		t.Fatalf("clamfleet-server is %q after install, want disabled (the RHEL family follows the preset)", got)
 	}
 	sh(t, "systemctl enable --now clamfleet-server")
-	sh(t, "for _ in $(seq 1 10); do systemctl is-active --quiet clamfleet-server && exit 0; sleep 1; done; journalctl -u clamfleet-server --no-pager >&2; exit 1")
+	waitServerHealthy(t)
 	if l := sh(t, "ss -ltnH | awk '{print $4}' | grep ':8443$' || true"); l != "127.0.0.1:8443" {
 		t.Fatalf("the server listens on %q, want 127.0.0.1:8443 only", l)
 	}
