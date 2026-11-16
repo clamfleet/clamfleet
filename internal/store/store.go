@@ -38,6 +38,12 @@ var (
 	// (or disabled and enabled again) after the caller verified the credential. A login gets no session; a
 	// self-service password change is refused. Nothing was written.
 	ErrCredentialChanged = errors.New("credential changed")
+	// ErrUserDisabled: the user exists and is disabled (an external sign-in is refused).
+	ErrUserDisabled = errors.New("user disabled")
+	// ErrEmailInUse: the email an external identity presents belongs to ANOTHER user. External
+	// and local accounts are never linked by email (decision 19: that is the classic account
+	// takeover), so the sign-in is refused and nothing is written.
+	ErrEmailInUse = errors.New("email in use by another user")
 )
 
 // Actor kinds of an audit row: the admin CLI, or a signed-in console user.
@@ -71,6 +77,8 @@ const (
 	ActionUserLogin         = "user.login"
 	ActionUserLoginFailed   = "user.login.failed"
 	ActionUserLogout        = "user.logout"
+	// ActionUserRoleMapped: an external user's role changed at sign-in because their groups or claim did.
+	ActionUserRoleMapped = "user.role.mapped"
 )
 
 // Target kinds of an audit row.
@@ -442,6 +450,54 @@ type UserStore interface {
 	RecordAudit(ctx context.Context, now time.Time, a Audit, action, targetKind, target string, detail map[string]string) error
 }
 
+// ExternalIdentity is what an identity provider vouched for at one sign-in (LDAP or OIDC).
+type ExternalIdentity struct {
+	// Source is AuthLDAP or AuthOIDC.
+	Source string
+	// ExternalID is the stable identifier: the LDAP id attribute (hex for a binary objectGUID),
+	// or the OIDC issuer + " " + subject. Never a DN, which changes on a rename.
+	ExternalID string
+	// Email is normalised, or "" when there is none (a directory entry without mail, or an OIDC
+	// email the provider does not mark verified).
+	Email        string
+	DisplayName  string
+	ExternalName string // LDAP user name / OIDC preferred_username
+	Role         string // from the mapping; never empty here
+}
+
+// OIDCState is one OIDC sign-in in progress (oidc_login_states).
+type OIDCState struct {
+	TokenHash    []byte // SHA-256 of the state cookie token
+	State        string // the URL state parameter
+	Nonce        string
+	CodeVerifier string // PKCE; never logged
+	NextPath     string
+	CreatedAt    time.Time
+	ExpiresAt    time.Time
+}
+
+// ExternalStore persists users of external sign-in and the OIDC login states.
+type ExternalStore interface {
+	// ExternalLogin runs in ONE write transaction:
+	//  1. find the user by (Source, ExternalID), or insert one (no password, no TOTP);
+	//  2. ErrUserDisabled for a disabled user;
+	//  3. ErrEmailInUse when the email is held by any OTHER user. Nothing is linked or changed;
+	//     this also covers an EXISTING external user whose email changed into a collision (the
+	//     stored email stays as it was);
+	//  4. update email, display name, external name and role (audit user.role.mapped {from,to}
+	//     when the role changes);
+	//  5. insert the session s (from webauth.PrepareSession; UserID is set here);
+	//  6. set last_login_at and write user.login with detail.
+	// An error rolls everything back, a user created in step 1 included.
+	ExternalLogin(ctx context.Context, id ExternalIdentity, s Session, now time.Time, a Audit, detail map[string]string) (User, error)
+	// CreateOIDCState stores a sign-in in progress.
+	CreateOIDCState(ctx context.Context, st OIDCState) error
+	// TakeOIDCState deletes and returns the state for the cookie hash (DELETE ... RETURNING):
+	// ErrNotFound when it was used already, expired or never existed. One-time by construction.
+	TakeOIDCState(ctx context.Context, tokenHash []byte, now time.Time) (OIDCState, error)
+	DeleteExpiredOIDCStates(ctx context.Context, now time.Time) (int64, error)
+}
+
 // SessionStore persists console sessions.
 type SessionStore interface {
 	// CreateSession is conditional on Session.PasswordHash, see there.
@@ -462,6 +518,7 @@ type Store interface {
 	HealthStore
 	UserStore
 	SessionStore
+	ExternalStore
 	TOTPStore
 	AlertStore
 	EventStore
