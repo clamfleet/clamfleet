@@ -100,7 +100,6 @@ type code struct {
 	nonce     string
 	challenge string
 	redirect  string
-	used      bool
 }
 
 // Server is a running fake provider.

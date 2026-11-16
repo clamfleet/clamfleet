@@ -53,7 +53,14 @@ var ErrRefused = errors.New("sign-in refused")
 var ErrUnavailable = errors.New("directory unavailable")
 
 // Refusal is an ErrRefused with the reason for the audit row.
-type Refusal struct{ Reason string }
+type Refusal struct {
+	Reason string
+	// NoRole is true when the user authenticated (the password was right, or the provider vouched
+	// for them) but no group or claim maps to a role. The web layer tells them so ("No role
+	// assigned to your account"): it reveals nothing to someone without the credential, and it is
+	// not a wrong guess, so it does not count against the throttle.
+	NoRole bool
+}
 
 func (r *Refusal) Error() string { return "sign-in refused: " + r.Reason }
 func (r *Refusal) Unwrap() error { return ErrRefused }
@@ -218,7 +225,7 @@ func (d *Directory) Authenticate(ctx context.Context, username, password string)
 	}
 	role, ok := d.roles.Resolve(groups)
 	if !ok {
-		return Identity{}, refused("ldap: no role")
+		return Identity{}, &Refusal{Reason: "ldap: no role", NoRole: true}
 	}
 
 	out := Identity{DN: entry.DN}
