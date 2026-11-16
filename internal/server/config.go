@@ -57,6 +57,37 @@ type Config struct {
 	Alert     Alert     `yaml:"alert"`
 	SMTP      SMTP      `yaml:"smtp"`
 	Retention Retention `yaml:"retention"`
+	Backup    Backup    `yaml:"backup"`
+}
+
+// Backup configures `clamfleet-server backup` and the automatic backup before a
+// migration (milestone 6, plan 4.4 and 4.5).
+type Backup struct {
+	// Dir holds the backups: absolute, a real directory owned by the server user
+	// with mode 0700 (the command checks it). It defaults under the state directory.
+	Dir string `yaml:"dir"`
+	// Keep is how many regular backups `backup` leaves (0 = keep every backup).
+	// Pre-migration backups are kept separately: the newest 3.
+	Keep int `yaml:"keep"`
+}
+
+// Bounds of backup.keep.
+const (
+	MaxBackupKeep     = 365
+	DefaultBackupKeep = 7
+	// DefaultBackupDir is inside the state directory, which is 0700 for the server user.
+	DefaultBackupDir = "/var/lib/clamfleet-server/backups"
+)
+
+// Validate checks the backup keys.
+func (b Backup) Validate() error {
+	if !filepath.IsAbs(b.Dir) {
+		return fmt.Errorf("backup.dir must be an absolute path, got %q", b.Dir)
+	}
+	if b.Keep < 0 || b.Keep > MaxBackupKeep {
+		return fmt.Errorf("backup.keep must be between 0 (keep every backup) and %d, got %d", MaxBackupKeep, b.Keep)
+	}
+	return nil
 }
 
 // Retention says how long data is kept, in days, per table (spec 8.2; plan
@@ -390,6 +421,7 @@ func DefaultConfig() Config {
 		},
 		SMTP:      SMTP{Port: 587, TLS: "starttls", Timeout: 30 * time.Second},
 		Retention: DefaultRetention(),
+		Backup:    Backup{Dir: DefaultBackupDir, Keep: DefaultBackupKeep},
 	}
 }
 
@@ -434,6 +466,9 @@ func (c Config) Validate() error {
 		return err
 	}
 	if err := c.Retention.Validate(); err != nil {
+		return err
+	}
+	if err := c.Backup.Validate(); err != nil {
 		return err
 	}
 	if c.Listen == "" {

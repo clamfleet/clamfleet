@@ -61,6 +61,8 @@ const usage = `usage: clamfleet-server <command>
 commands:
   serve [--config FILE] [--log-level LEVEL]   run the server (migrates the database first)
   migrate [--config FILE]                     create or upgrade the database schema
+  backup [--config FILE] [--dir DIR] [--keep N] [--verify]
+                                              write a consistent copy of the database; prints its path (run as the server user)
   host add NAME                               register a host; prints its token once
   host list [--json]                          list hosts with their state
   host show NAME [--json]                     show one host: state, reasons, history, newest report
@@ -113,6 +115,8 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return a.serve(ctx, args[1:])
 	case "migrate":
 		return a.migrate(ctx, args[1:])
+	case "backup":
+		return a.backup(ctx, args[1:])
 	case "host":
 		return a.host(ctx, args[1:])
 	case "user":

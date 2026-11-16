@@ -31,6 +31,7 @@ func TestEnvNamesMatchDocumentedTable(t *testing.T) {
 		"CLAMFLEET_SERVER_AUTH_COOKIE_SECURE", "CLAMFLEET_SERVER_AUTH_LOCAL_ENABLED",
 		"CLAMFLEET_SERVER_AUTH_LOCAL_TOTP_REQUIRED",
 		"CLAMFLEET_SERVER_AUTH_SESSION_IDLE", "CLAMFLEET_SERVER_AUTH_SESSION_MAX_AGE",
+		"CLAMFLEET_SERVER_BACKUP_DIR", "CLAMFLEET_SERVER_BACKUP_KEEP",
 		"CLAMFLEET_SERVER_DB_PATH",
 		"CLAMFLEET_SERVER_HEALTH_BEHIND_WARN", "CLAMFLEET_SERVER_HEALTH_DAILY_CRIT_HOURS",
 		"CLAMFLEET_SERVER_HEALTH_DAILY_WARN_HOURS", "CLAMFLEET_SERVER_HEALTH_DEFAULT_INTERVAL",
@@ -115,6 +116,9 @@ func TestValidate(t *testing.T) {
 		}
 		if tc.c.Retention == (Retention{}) {
 			tc.c.Retention = DefaultConfig().Retention
+		}
+		if tc.c.Backup == (Backup{}) {
+			tc.c.Backup = DefaultConfig().Backup
 		}
 		if tc.c.Alert.Webhook.Timeout == 0 {
 			tc.c.Alert = DefaultConfig().Alert
@@ -389,5 +393,29 @@ func TestRetentionKeysFromFileAndEnv(t *testing.T) {
 	want := Retention{ReportsDays: 14, EventsDays: 365, StateChangesDays: 45, AlertLogDays: 40, AuditDays: 90}
 	if c.Retention != want {
 		t.Fatalf("%+v, want %+v", c.Retention, want)
+	}
+}
+
+func TestBackupConfig(t *testing.T) {
+	c := DefaultConfig()
+	if c.Backup.Dir != "/var/lib/clamfleet-server/backups" || c.Backup.Keep != 7 {
+		t.Fatalf("%+v", c.Backup)
+	}
+	for _, keep := range []int{0, 1, 365} {
+		c.Backup.Keep = keep
+		if err := c.Backup.Validate(); err != nil {
+			t.Errorf("keep %d: %v", keep, err)
+		}
+	}
+	for _, keep := range []int{-1, 366} {
+		c.Backup.Keep = keep
+		if err := c.Backup.Validate(); err == nil || !strings.Contains(err.Error(), "backup.keep") {
+			t.Errorf("keep %d accepted: %v", keep, err)
+		}
+	}
+	c.Backup.Keep = 7
+	c.Backup.Dir = "relative/dir"
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "backup.dir") {
+		t.Fatalf("a relative backup.dir was accepted: %v", err)
 	}
 }

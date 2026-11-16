@@ -76,6 +76,12 @@ retention:
   state_changes_days: 365 # 30 to 3650: health state history
   alert_log_days: 90      # 30 to 3650: alert attempts, finished deliveries, closed detection windows
   audit_days: 365         # 90 to 3650: the audit log (emails and client IPs)
+# Backups: `sudo -u clamfleet-server clamfleet-server backup` writes a consistent copy of the database here
+# (the key file is NOT in it: back that up separately). A backup holds every row, also paths older than the
+# retention, so keep it as private as the database. Environment: CLAMFLEET_SERVER_BACKUP_DIR and _KEEP.
+backup:
+  dir: /var/lib/clamfleet-server/backups   # a real directory, mode 0700, owned by the server user (created if missing)
+  keep: 7                                  # 0 to 365 newest backups kept by `backup`; 0 keeps them all
 # Email alerts. Empty host = email is off (creating an email target is refused).
 smtp:
   host: ""                # e.g. smtp.example
