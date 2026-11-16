@@ -36,8 +36,9 @@ type CreateExternalSessionParams struct {
 	UserID    int64
 }
 
-// Conditional on the user not being disabled and on the auth_version read in the same
-// transaction; an external user has no password hash to compare.
+// Conditional on the user not being disabled. There is no auth_version or password-hash check
+// as in CreateSession: the user is read and the session inserted in the same write transaction
+// (ExternalLogin), so nothing can change in between, and an external user has no hash to compare.
 func (q *Queries) CreateExternalSession(ctx context.Context, arg CreateExternalSessionParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, createExternalSession,
 		arg.TokenHash,

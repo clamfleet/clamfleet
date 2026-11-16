@@ -24,8 +24,9 @@ UPDATE users SET email = sqlc.arg(email), display_name = sqlc.arg(display_name),
 WHERE id = sqlc.arg(id);
 
 -- name: CreateExternalSession :execrows
--- Conditional on the user not being disabled and on the auth_version read in the same
--- transaction; an external user has no password hash to compare.
+-- Conditional on the user not being disabled. There is no auth_version or password-hash check
+-- as in CreateSession: the user is read and the session inserted in the same write transaction
+-- (ExternalLogin), so nothing can change in between, and an external user has no hash to compare.
 INSERT INTO user_sessions (token_hash, user_id, csrf_token, created_at, last_seen_at, expires_at)
 SELECT sqlc.arg(token_hash), u.id, sqlc.arg(csrf_token), sqlc.arg(now), sqlc.arg(now), sqlc.arg(expires_at)
 FROM users u
