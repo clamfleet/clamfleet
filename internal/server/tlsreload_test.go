@@ -392,3 +392,41 @@ func pemDecode(b []byte) ([]byte, []byte) {
 	}
 	return blk.Bytes, rest
 }
+
+// didResume connects twice with one session cache (a full round trip each time, so TLS 1.3 session
+// tickets are read) and reports whether the SECOND handshake resumed the first session.
+func (e *reloadEnv) didResume(t *testing.T, client *tls.Certificate) bool {
+	t.Helper()
+	cache := tls.NewLRUClientSessionCache(8)
+	var resumed bool
+	for i := 0; i < 2; i++ {
+		cfg := &tls.Config{InsecureSkipVerify: true, ClientSessionCache: cache}
+		if client != nil {
+			cfg.Certificates = []tls.Certificate{*client}
+		}
+		conn, err := tls.Dial("tcp", e.addr, cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		conn.SetDeadline(time.Now().Add(5 * time.Second))
+		conn.Write([]byte("GET / HTTP/1.0\r\n\r\n"))
+		io.ReadAll(conn)
+		resumed = conn.ConnectionState().DidResume
+		conn.Close()
+	}
+	return resumed
+}
+
+// Rule: under mTLS no session is ever resumed, so every connection is a full handshake against the
+// CURRENT client CA. The control case proves the probe can see a resumption: without mTLS tickets are
+// on and the second handshake does resume. Mutation: tickets left on under mTLS.
+func TestTLSSessionTicketsAreOffUnderMTLS(t *testing.T) {
+	mtls := startReload(t, true)
+	if mtls.didResume(t, clientCert(t, mtls.a)) {
+		t.Fatal("a session was resumed under mTLS: tickets must be off so a CA change cannot be skipped")
+	}
+	plain := startReload(t, false)
+	if !plain.didResume(t, nil) {
+		t.Fatal("control: without mTLS the second handshake should resume (tickets on); the probe cannot see resumption")
+	}
+}
