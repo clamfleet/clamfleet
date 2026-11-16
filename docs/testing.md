@@ -17,8 +17,8 @@ signs in with a cookie-jar client and an injected clock, and posts real agent re
 `cmd/clamfleet-server` and `hack/webfixture` tests build the binaries themselves, which `go test` does not
 see as inputs: use `go test -count=1` when you change code they cover, or a cached "ok" proves nothing.
 
-`staticcheck` and `sqlc` must be installed (`go install honnef.co/go/tools/cmd/staticcheck@v0.8.2`;
-2026.2.2 supports Go 1.27; `CGO_ENABLED=0 go install github.com/sqlc-dev/sqlc/cmd/sqlc@v1.31.1`).
+`staticcheck` and `sqlc` must be installed: `make tools` installs the versions the Makefile pins (staticcheck v0.8.2,
+which is 2026.2.2 and supports Go 1.27; sqlc v1.31.1).
 `sqlc diff` fails when `internal/store/sqlite/sqlcdb` is stale: run `make generate`. The tests inject the clock, the time zone, `systemctl`/`journalctl` and the
 hostname, and replay recorded clamd sessions from `internal/agent/testdata`; none of them reads
 the real date or touches the machine.
@@ -42,6 +42,45 @@ the store to prove restart behaviour. `internal/web/alerts_test.go` goes through
 loopback webhook receiver and the SMTP fake. `cmd/clamfleet-server` tests run the real binaries (serve
 refusals, an alert delivered after the real agent reports a down clamd, the CLI's refusal to take a URL as an
 argument, key rotation and `key check`). Everything binds loopback only.
+
+## CI (`.github/workflows/ci.yml`)
+
+Four jobs. Their names are the repository's required status checks, so a rename blocks merges until the ruleset is
+changed first.
+
+| Job | Runs on | What it proves |
+|---|---|---|
+| `check` | every pull request (drafts too), every push to `develop` and `main`, weekly | `make ci`: vet, staticcheck, `sqlc diff`, the unit and script tests through the test gate, actionlint on the workflows, `go mod tidy -diff`, `go mod verify`, gofmt. About 5 minutes. |
+| `e2e` | ready pull requests and pushes | the e2e suite in a container with a real ClamAV and systemd (below, "The e2e suite in Docker") |
+| `web` | ready pull requests and pushes | the Playwright browser tests of the console (`make e2e-web`), the layer that sees a dead button |
+| `dco` | pull requests | every commit carries a `Signed-off-by` with the author's email (`hack/ci/dco.sh`) |
+
+**Draft pull requests run only `check`.** A draft cannot be merged, and marking it ready for review starts the full run.
+A job skipped by its `if:` reports success to a required check, which is safe only because of that rule;
+`deploy/test/workflows_test.sh` allows exactly this `if:` on the required jobs and no other.
+
+`make ci` is `make check` with `hack/testgate` in place of plain `go test`, plus `lint-workflows`, `go mod tidy -diff`,
+`go mod verify` and a gofmt check. Run it before you push. The gate reads `go test -json`, prints the output as text, and
+fails on a failed test, on a **skipped** test, on a package that does not build, and on a stream in which nothing passed.
+`go test` itself exits 0 for a skip, and a test that skips itself at run time cannot fail when the feature breaks. There is
+no allowlist: a test that cannot run in a CI job is excluded by a build tag in a reviewed change. `-expect-pkg ./e2e -tags e2e`
+also fails the run unless the set of top-level tests that passed equals the set the package declares (the go tool evaluates
+the build constraints, `go/parser` reads the files; subtests and `TestMain` do not count), so a narrowed `-run` or a test
+that never ran cannot pass. The gate has its own unit tests (`hack/testgate`).
+
+`-count=1` is used everywhere: the `cmd/*` and `hack/webfixture` tests build binaries that the test result cache cannot see.
+
+The workflows follow rules that `deploy/test/workflows_test.sh` (part of `make check`) and actionlint enforce: GitHub-owned
+actions only, each pinned by full commit SHA with its version in a comment; per-job `permissions:` and
+`persist-credentials: false`; no `pull_request_target` or `workflow_run`; no secrets in these jobs (pull requests from forks
+run them). The script is a guardrail over a list of patterns, not a proof that a workflow is safe.
+
+Other `make check` tests added for CI: `deploy/test/headers_test.sh` (every tracked file has both SPDX lines, or is a listed
+exception with its reason) and `deploy/test/dco_test.sh` (the sign-off check against a temporary repository, including a range
+that was never fetched, which must fail and not look empty).
+
+Tools are pinned in the Makefile and installed with `make tools` (staticcheck, sqlc); actionlint runs through `go run` at its
+pinned version. None of them is in `go.mod`.
 
 ## End-to-end tests (`make e2e`)
 

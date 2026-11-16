@@ -11,7 +11,9 @@ that is missing from the log gets a line there in the same change).
 
 ## Commands
 
-- `make check`: `go vet`, `staticcheck`, `sqlc diff`, `go test ./...` and `scripts-test` (the shell tests of `deploy/test`: fake ssh, the systemd units and SELinux module statically, and the package maintainer scripts under stub commands; no container needed).
+- `make check`: `go vet`, `staticcheck`, `sqlc diff`, `go test ./...` and `scripts-test` (the shell tests of `deploy/test`: fake ssh and fake docker, the systemd units and SELinux module statically, the package maintainer scripts under stub commands, the SPDX header, workflow policy and sign-off checks; no container needed).
+- `make ci`: what CI's `check` job runs: `make check` without plain `go test`, plus `actionlint`, `go mod tidy -diff`, `go mod verify`, `gofmt`, and the test gate (`hack/testgate`, which fails on a skipped test as well as a failed one). `make tools` installs the pinned staticcheck and sqlc.
+- `make e2e-image` and `make e2e-docker`: the e2e suite in a Debian 13 systemd container with no network (`deploy/test/ci`), through the test gate with `-expect-pkg`. Needs Docker, which the maintainer's machine does not have: CI is where it runs; `make e2e` is the local equivalent.
 - `make packages VERSION=x.y.z`: the `.deb` and `.rpm` of the agent and the server into `dist/`, built by nfpm (`deploy/packaging`, build-time only).
 - `make e2e`: runs the agent inside the `clamfleet-test` Incus container. Read `docs/testing.md` first.
 - `make webfixture`: builds `bin/webfixture`, a throwaway console on 127.0.0.1 with seeded users and hosts for browser tests (see `docs/testing.md`, "Browser fixture").
@@ -22,10 +24,11 @@ that is missing from the log gets a line there in the same change).
 - Tests in `cmd/*` and `hack/webfixture` build binaries that `go test` caching cannot see: use `-count=1` when changing code they cover.
 - `make fixtures`: re-records `internal/agent/testdata` from the container. Never hand-edit recorded files.
 - `make generate` runs sqlc over `migrations/sqlite` and `internal/store/sqlite/queries`; `make check` runs `sqlc diff`. Never hand-edit `internal/store/sqlite/sqlcdb`.
-- Tools: Go 1.27.4 (`go 1.26.0` in go.mod), staticcheck 2026.2.2 (v0.8.2), sqlc v1.31.1 (`CGO_ENABLED=0 go install github.com/sqlc-dev/sqlc/cmd/sqlc@v1.31.1`, build-time only), nfpm v2.49.0 (`go run github.com/goreleaser/nfpm/v2/cmd/nfpm@v2.49.0`, pinned as `NFPM_VERSION` in the Makefile, build-time only, nothing installed).
+- Tools: Go 1.27.4 (`go 1.26.0` in go.mod), staticcheck 2026.2.2 (v0.8.2), sqlc v1.31.1 (build-time only), actionlint v1.7.12 (`go run`), nfpm v2.49.0 (`go run`, build-time only, nothing installed). The Makefile holds every pin (`STATICCHECK_VERSION`, `SQLC_VERSION`, `ACTIONLINT_VERSION`, `NFPM_VERSION`); `make tools` installs staticcheck and sqlc. Tools are never added to go.mod.
 
 ## Rules
 
+- The repository is public: **PR bodies, comments, commit messages and CI logs never name homelab hosts, private paths or private notes** (`docs/plans`, the maintainer's machines). Say "the Incus host", not its name.
 - Licence AGPL-3.0-only. Every source, script and config file starts with
   `SPDX-License-Identifier: AGPL-3.0-only` and `SPDX-FileCopyrightText: The ClamFleet Authors`.
   Files that cannot carry a header (JSON, binary fixtures) are covered by `internal/agent/testdata/README.md`.
@@ -48,3 +51,6 @@ that is missing from the log gets a line there in the same change).
 - Admin commands of `clamfleet-server` run as the server user (`sudo -u clamfleet-server`), not as root, for audit attribution and least privilege. Creating the database as root (`sudo clamfleet-server migrate` on a fresh install) leaves a root-owned file the server user cannot open, so `migrate` and `serve` refuse to create it when the effective user does not own its directory.
 - The TOTP gate exempts only the listed external sources (`exemptSources` in `internal/webauth/middleware.go`: `ldap`, `oidc`). An unknown source is gated, and a session whose user's source is not in `Manager.Sources` is no session. A new sign-in source needs both lists, deliberately.
 - External users are never linked to a local account: an email held by another user refuses the sign-in. LDAP and OIDC secrets live only in files under the key-file rule. No secret, code, token, verifier or failed-search DN in a log line or an audit row.
+- Commits are signed off (`git commit -s`, DCO): `hack/ci/dco.sh` fails a pull request whose commit lacks a `Signed-off-by` with the author's email.
+- Workflows (`.github/workflows`, rules in `deploy/test/workflows_test.sh`): GitHub-owned actions only, each pinned by full commit SHA with its version in a comment; per-job `permissions:` and `persist-credentials: false`; never `pull_request_target` or `workflow_run`; `secrets` only in the release workflow's `sign` job, which runs no build tool. The required checks are the job names `check`, `e2e`, `web`, `dco`: a rename blocks merges until the ruleset is updated first.
+- A skipped test is a failed test in CI (`hack/testgate`). Exclude a test from a CI job with a build tag in a reviewed change, never with a runtime `t.Skip`.
