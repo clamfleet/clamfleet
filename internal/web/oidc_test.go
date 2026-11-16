@@ -9,6 +9,7 @@ import (
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"html"
 	"net/http"
 	"net/url"
@@ -81,6 +82,7 @@ func newOIDCRig(t *testing.T, mut func(*server.Config)) *oidcRig {
 	e = newEnv(t, func(d *server.Deps) {
 		d.Console = cfg.Auth
 		d.OIDC = late
+		d.TrustedProxies, _ = server.ParseTrustedProxies(cfg.TrustedProxies)
 	})
 	cfg.PublicURL = e.srv.URL
 	if err := cfg.Validate(); err != nil {
@@ -758,5 +760,36 @@ func TestOIDCStartsAreBoundedPerClientIP(t *testing.T) {
 	e.advance(11 * time.Minute)
 	if p := r.start(e.browser(), ""); p.status != 200 {
 		t.Fatalf("after the states expired: %d", p.status)
+	}
+}
+
+// The per-IP bound keys on the client address the console trusts (api.ClientIP): behind a trusted proxy two
+// X-Forwarded-For clients have a budget each, and from an untrusted peer the header is ignored, so rotating it
+// buys nothing.
+func TestOIDCStartLimitKeysOnTheTrustedProxyClientIP(t *testing.T) {
+	startAs := func(r *oidcRig, xff string) int {
+		return r.e.browser().do("POST", "/login/oidc", map[string]string{"Sec-Fetch-Site": "same-origin", "X-Forwarded-For": xff}, url.Values{}).status
+	}
+	trusted := newOIDCRig(t, func(c *server.Config) { c.TrustedProxies = []string{"127.0.0.1"} })
+	for i := 0; i < server.MaxOIDCStartsPerIP; i++ {
+		if got := startAs(trusted, "192.0.2.1"); got != 200 {
+			t.Fatalf("client A start %d: %d", i, got)
+		}
+	}
+	if got := startAs(trusted, "192.0.2.1"); got != http.StatusTooManyRequests {
+		t.Fatalf("client A over its bound: %d", got)
+	}
+	if got := startAs(trusted, "192.0.2.2"); got != 200 {
+		t.Fatalf("client B was refused for client A's starts: %d (the bound must key on the forwarded client, not the proxy)", got)
+	}
+
+	untrusted := newOIDCRig(t, nil)
+	for i := 0; i < server.MaxOIDCStartsPerIP; i++ {
+		if got := startAs(untrusted, fmt.Sprintf("192.0.2.%d", i+10)); got != 200 {
+			t.Fatalf("start %d: %d", i, got)
+		}
+	}
+	if got := startAs(untrusted, "198.51.100.99"); got != http.StatusTooManyRequests {
+		t.Fatalf("a fresh X-Forwarded-For from an untrusted peer got a fresh budget: %d", got)
 	}
 }
