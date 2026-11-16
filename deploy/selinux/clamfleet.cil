@@ -1,0 +1,53 @@
+; SPDX-License-Identifier: AGPL-3.0-only
+; SPDX-FileCopyrightText: The ClamFleet Authors
+;
+; SELinux module for the ClamFleet agent on the RHEL 9 family (milestone 6, plan 4.13).
+; Install and remove it at priority 300 ONLY: `semodule -X 300 -i clamfleet.cil` and
+; `semodule -X 300 -r clamfleet`. A plain `semodule -r` removes at the default priority
+; and would leave this module loaded.
+;
+; What it is for. clamd runs the VirusEvent command (`clamfleet-agent event`) in its own
+; domain, antivirus_t, and that command must write one file into the spool. Under the
+; targeted policy it cannot: the spool is var_lib_t, which antivirus_t may not write.
+; Without this module every detection is dropped on the floor (clamd's journal shows
+; "event not spooled ... permission denied") and nothing alerts.
+;
+; What it gives, and to whom. antivirus_t is the domain of clamd, freshclam AND clamonacc
+; alike, so every rule below is granted to all three. The rules are therefore written
+; ONLY on our own type, clamfleet_spool_t, which labels nothing but the event spool and
+; the spool's accounting file:
+;   /var/lib/clamfleet/spool/events(/.*)?   where clamd's user writes one file per detection
+;   /var/lib/clamfleet/spool/usage          the accounting file `event` updates under a lock
+; freshclam and clamonacc may therefore also write there. They run as clamd's own group,
+; which the milestone 5 trust boundary already trusts to originate events (docs/detections.md).
+; The agent's other directories (spool/reports, spool/quarantine) and the token stay
+; var_lib_t / etc_t and are out of reach of antivirus_t: tested by TestSELinuxEventCannotWriteElsewhere.
+;
+; What it does NOT need, proven on AlmaLinux 9.8 (policy of that release) with the AVC log:
+;   - no exec rule: antivirus_t may already execute shell_exec_t and bin_t files without a
+;     transition (`sesearch -A -s antivirus_t -t bin_t -c file`), and clamd starts
+;     /bin/sh -c "<VirusEvent>" that way;
+;   - no rule for var_lib_t (searching /var/lib/clamfleet and spool/) and none for etc_t
+;     (reading /etc/clamfleet/agent.yaml): the stock policy already grants both.
+; So NO rule in this module is written on a stock type. TestSELinuxRuleSet fails when the
+; module adds anything else to `sesearch -A -s antivirus_t`.
+;
+; The agent service (`run`, unconfined_service_t) reads and deletes in clamfleet_spool_t
+; with no extra rules: unconfined domains may access every file type.
+;
+; Known stock denial, unrelated to us and not fixed here: clamd reads /selinux/enforce.
+
+(type clamfleet_spool_t)
+(roletype object_r clamfleet_spool_t)
+; file_type is what makes this a labelable file type (and what unconfined access is granted on).
+(typeattributeset file_type (clamfleet_spool_t))
+
+(filecon "/var/lib/clamfleet/spool/events(/.*)?" any (system_u object_r clamfleet_spool_t ((s0) (s0))))
+(filecon "/var/lib/clamfleet/spool/usage" file (system_u object_r clamfleet_spool_t ((s0) (s0))))
+
+; Directory: look up and stat the entries, open and fsync the directory, create and remove
+; the temporary file and the final hard link. `read` is needed to open the directory for fsync.
+(allow antivirus_t clamfleet_spool_t (dir (search getattr open read write add_name remove_name)))
+; Files: create the temp file, write it, chmod it (setattr), hard-link it to its final name,
+; remove the temp name, and read, write and flock the shared accounting file (lock).
+(allow antivirus_t clamfleet_spool_t (file (create open read write getattr setattr lock link unlink)))
