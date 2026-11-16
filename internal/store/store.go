@@ -323,15 +323,17 @@ func TruncateForAudit(s string) string {
 
 // User is a console account.
 type User struct {
-	ID          int64      `json:"id"`
-	Email       string     `json:"email"`
-	DisplayName string     `json:"display_name"`
-	Role        string     `json:"role"`
-	AuthSource  string     `json:"auth_source"`
-	Disabled    bool       `json:"disabled"`
-	MustChange  bool       `json:"password_must_change"`
-	CreatedAt   time.Time  `json:"created_at"`
-	LastLoginAt *time.Time `json:"last_login_at"`
+	ID          int64  `json:"id"`
+	Email       string `json:"email"`
+	DisplayName string `json:"display_name"`
+	Role        string `json:"role"`
+	AuthSource  string `json:"auth_source"`
+	// ExternalName is the LDAP user name or OIDC preferred_username ("" for local users).
+	ExternalName string     `json:"external_name"`
+	Disabled     bool       `json:"disabled"`
+	MustChange   bool       `json:"password_must_change"`
+	CreatedAt    time.Time  `json:"created_at"`
+	LastLoginAt  *time.Time `json:"last_login_at"`
 	// PasswordHash is the PHC string; it is never serialised and empty for
 	// accounts without a local password.
 	PasswordHash string `json:"-"`

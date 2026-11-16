@@ -13,7 +13,7 @@ import (
 // With the tag the set is the production one plus exactly one extra migration.
 func TestOverlayAddsOneMigration(t *testing.T) {
 	got, _ := fs.Glob(FS(), "sqlite/*.sql")
-	if len(got) != 7 || got[6] != "sqlite/00007_e2e_overlay.sql" {
+	if len(got) != 8 || got[7] != "sqlite/00008_e2e_overlay.sql" {
 		t.Fatalf("%v", got)
 	}
 }

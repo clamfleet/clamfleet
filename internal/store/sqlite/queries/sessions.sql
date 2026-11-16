@@ -22,7 +22,7 @@ WHERE u.id = sqlc.arg(user_id) AND u.password_hash = sqlc.arg(expected_hash) AND
 -- on the very next request. The expiry checks live in the WHERE clause, not in
 -- Go, so an expired row can never be returned by mistake.
 SELECT s.id, s.user_id, s.csrf_token, s.last_seen_at, u.email, u.display_name, u.role,
-       u.password_must_change, u.auth_source, u.totp_enabled_at
+       u.password_must_change, u.auth_source, u.totp_enabled_at, u.external_name
 FROM user_sessions s JOIN users u ON u.id = s.user_id
 WHERE s.token_hash = sqlc.arg(token_hash)
   AND s.expires_at > sqlc.arg(now)

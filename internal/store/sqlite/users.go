@@ -44,6 +44,7 @@ type userRow struct {
 	AuthVersion        int64
 	TotpEnabledAt      sql.NullInt64
 	TotpFailures       int64
+	ExternalName       sql.NullString
 }
 
 func toUser(r userRow) store.User {
@@ -52,7 +53,7 @@ func toUser(r userRow) store.User {
 		AuthSource: r.AuthSource, Disabled: r.DisabledAt.Valid, MustChange: r.PasswordMustChange != 0,
 		CreatedAt: time.Unix(r.CreatedAt, 0).UTC(), LastLoginAt: nullTime(r.LastLoginAt),
 		PasswordHash: r.PasswordHash.String, AuthVersion: r.AuthVersion,
-		TOTPEnabled: r.TotpEnabledAt.Valid, TOTPFailures: int(r.TotpFailures),
+		TOTPEnabled: r.TotpEnabledAt.Valid, TOTPFailures: int(r.TotpFailures), ExternalName: r.ExternalName.String,
 	}
 }
 
@@ -297,7 +298,7 @@ func (s *Store) SessionByTokenHash(ctx context.Context, hash []byte, now time.Ti
 	return store.SessionPrincipal{
 		SessionID: r.ID, UserID: r.UserID, Email: r.Email.String, Name: r.DisplayName.String, Role: r.Role,
 		CSRF: r.CsrfToken, MustChange: r.PasswordMustChange != 0, LastSeen: time.Unix(r.LastSeenAt, 0).UTC(),
-		AuthSource: r.AuthSource, TOTPEnabled: r.TotpEnabledAt.Valid,
+		AuthSource: r.AuthSource, TOTPEnabled: r.TotpEnabledAt.Valid, ExternalName: r.ExternalName.String,
 	}, nil
 }
 

@@ -60,7 +60,7 @@ func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (int64, 
 const listUsers = `-- name: ListUsers :many
 SELECT id, email, display_name, role, auth_source, password_hash, password_must_change,
        password_changed_at, disabled_at, created_at, last_login_at, auth_version,
-       totp_enabled_at, totp_failures
+       totp_enabled_at, totp_failures, external_name
 FROM users ORDER BY email
 `
 
@@ -79,6 +79,7 @@ type ListUsersRow struct {
 	AuthVersion        int64
 	TotpEnabledAt      sql.NullInt64
 	TotpFailures       int64
+	ExternalName       sql.NullString
 }
 
 func (q *Queries) ListUsers(ctx context.Context) ([]ListUsersRow, error) {
@@ -105,6 +106,7 @@ func (q *Queries) ListUsers(ctx context.Context) ([]ListUsersRow, error) {
 			&i.AuthVersion,
 			&i.TotpEnabledAt,
 			&i.TotpFailures,
+			&i.ExternalName,
 		); err != nil {
 			return nil, err
 		}
@@ -268,7 +270,7 @@ func (q *Queries) SetUserRole(ctx context.Context, arg SetUserRoleParams) (int64
 const userByEmail = `-- name: UserByEmail :one
 SELECT id, email, display_name, role, auth_source, password_hash, password_must_change,
        password_changed_at, disabled_at, created_at, last_login_at, auth_version,
-       totp_enabled_at, totp_failures
+       totp_enabled_at, totp_failures, external_name
 FROM users WHERE email = ?1
 `
 
@@ -287,6 +289,7 @@ type UserByEmailRow struct {
 	AuthVersion        int64
 	TotpEnabledAt      sql.NullInt64
 	TotpFailures       int64
+	ExternalName       sql.NullString
 }
 
 func (q *Queries) UserByEmail(ctx context.Context, email sql.NullString) (UserByEmailRow, error) {
@@ -307,6 +310,7 @@ func (q *Queries) UserByEmail(ctx context.Context, email sql.NullString) (UserBy
 		&i.AuthVersion,
 		&i.TotpEnabledAt,
 		&i.TotpFailures,
+		&i.ExternalName,
 	)
 	return i, err
 }
@@ -314,7 +318,7 @@ func (q *Queries) UserByEmail(ctx context.Context, email sql.NullString) (UserBy
 const userByID = `-- name: UserByID :one
 SELECT id, email, display_name, role, auth_source, password_hash, password_must_change,
        password_changed_at, disabled_at, created_at, last_login_at, auth_version,
-       totp_enabled_at, totp_failures
+       totp_enabled_at, totp_failures, external_name
 FROM users WHERE id = ?1
 `
 
@@ -333,6 +337,7 @@ type UserByIDRow struct {
 	AuthVersion        int64
 	TotpEnabledAt      sql.NullInt64
 	TotpFailures       int64
+	ExternalName       sql.NullString
 }
 
 func (q *Queries) UserByID(ctx context.Context, id int64) (UserByIDRow, error) {
@@ -353,6 +358,7 @@ func (q *Queries) UserByID(ctx context.Context, id int64) (UserByIDRow, error) {
 		&i.AuthVersion,
 		&i.TotpEnabledAt,
 		&i.TotpFailures,
+		&i.ExternalName,
 	)
 	return i, err
 }
