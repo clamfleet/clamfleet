@@ -168,6 +168,11 @@ func (a *app) loadConfig(log *slog.Logger, flagValue string) (server.Config, err
 	if err == nil {
 		err = cfg.Validate()
 	}
+	if err == nil {
+		for _, w := range cfg.Warnings() {
+			log.Warn(w)
+		}
+	}
 	return cfg, err
 }
 

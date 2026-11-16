@@ -155,3 +155,13 @@ func TestBackupOfADamagedDatabaseFails(t *testing.T) {
 		}
 	}
 }
+
+// The warning reaches the log of the real binary (stderr), and the command still works.
+func TestBackupDirOutsideTheStateDirectoryIsLogged(t *testing.T) {
+	_, env := newDB(t)
+	dir := privateDir(t)
+	r := runServer(t, append(env, "CLAMFLEET_SERVER_BACKUP_DIR="+dir), "backup")
+	if r.code != 0 || !strings.Contains(r.stderr, "ReadWritePaths="+dir) {
+		t.Fatalf("%+v", r)
+	}
+}

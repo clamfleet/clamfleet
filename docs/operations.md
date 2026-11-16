@@ -42,6 +42,19 @@ by the user running the backup; it is created if missing. `backup.keep` (default
 the regular backups. `--verify` opens the copy and checks `integrity_check` and the schema version. A lock stops
 two backups from running at once, and a failure before publication leaves neither a final nor a temporary file.
 
+**A `backup.dir` outside `/var/lib/clamfleet-server` is read-only for the packaged units** (`ProtectSystem=strict`
+makes the state directory the only writable place). Without a drop-in the daily backup fails and so does the
+backup before a migration, so the next upgrade that brings one ends in a restart loop. Add the directory to both
+services (and keep it `0700`, owned by `clamfleet-server`):
+
+```
+# systemctl edit clamfleet-server        and        systemctl edit clamfleet-server-backup
+[Service]
+ReadWritePaths=/srv/clamfleet-backups
+```
+
+The server logs a warning at start (and `backup` logs it) when `backup.dir` is outside the state directory.
+
 `clamfleet-server-backup.timer` runs `backup --verify` daily (`RandomizedDelaySec=1h`, `Persistent=true`) and ships
 **disabled**: `systemctl enable --now clamfleet-server-backup.timer`.
 

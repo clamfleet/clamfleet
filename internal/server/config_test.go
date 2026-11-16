@@ -443,3 +443,27 @@ func TestConfigurationDocMatchesTheEnvNames(t *testing.T) {
 		t.Errorf("docs/configuration.md documents %s, which is not a server setting", n)
 	}
 }
+
+// A backup.dir outside the state directory is read-only under the packaged units: warn, never refuse.
+func TestBackupDirOutsideTheStateDirectoryWarns(t *testing.T) {
+	c := DefaultConfig()
+	if w := c.Warnings(); len(w) != 0 {
+		t.Fatalf("the default backup.dir warns: %v", w)
+	}
+	for _, d := range []string{"/var/lib/clamfleet-server", "/var/lib/clamfleet-server/other/", "/var/lib/clamfleet-server/../clamfleet-server/b"} {
+		c.Backup.Dir = d
+		if w := c.Warnings(); len(w) != 0 {
+			t.Errorf("%s warns: %v", d, w)
+		}
+	}
+	for _, d := range []string{"/srv/backups", "/var/lib/clamfleet-server2/b", "/var/lib/clamfleet-server/../x"} {
+		c.Backup.Dir = d
+		w := c.Warnings()
+		if len(w) != 1 || !strings.Contains(w[0], "ReadWritePaths="+filepath.Clean(d)) {
+			t.Errorf("%s: warnings %v, want one naming the drop-in", d, w)
+		}
+		if err := c.Validate(); err != nil {
+			t.Errorf("%s: a warning must not be an error: %v", d, err)
+		}
+	}
+}

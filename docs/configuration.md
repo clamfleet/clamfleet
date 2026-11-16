@@ -61,7 +61,7 @@ live in files with the key-file permission rule (not readable by others), never 
 | `retention.state_changes_days` | `CLAMFLEET_SERVER_RETENTION_STATE_CHANGES_DAYS` | `365` | 30 to 3650. |
 | `retention.alert_log_days` | `CLAMFLEET_SERVER_RETENTION_ALERT_LOG_DAYS` | `90` | 30 to 3650. |
 | `retention.audit_days` | `CLAMFLEET_SERVER_RETENTION_AUDIT_DAYS` | `365` | 90 to 3650. |
-| `backup.dir` | `CLAMFLEET_SERVER_BACKUP_DIR` | `/var/lib/clamfleet-server/backups` | Absolute; a real directory, mode 0700, owned by the server user. |
+| `backup.dir` | `CLAMFLEET_SERVER_BACKUP_DIR` | `/var/lib/clamfleet-server/backups` | Absolute; a real directory, mode 0700, owned by the server user. **Outside `/var/lib/clamfleet-server` it is read-only under the packaged units** until a `ReadWritePaths=` drop-in adds it (operations.md); a warning is logged. |
 | `backup.keep` | `CLAMFLEET_SERVER_BACKUP_KEEP` | `7` | 0 to 365; 0 keeps every backup. |
 | `metrics.enabled` | `CLAMFLEET_SERVER_METRICS_ENABLED` | `false` | Off: `GET /metrics` is a 404. |
 | `metrics.token_file` | `CLAMFLEET_SERVER_METRICS_TOKEN_FILE` | empty | Required when enabled; at least 32 bytes. |

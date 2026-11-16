@@ -73,6 +73,23 @@ type Backup struct {
 	Keep int `yaml:"keep"`
 }
 
+// stateDir is the directory the packaged unit makes writable (StateDirectory=clamfleet-server).
+const packagedStateDir = "/var/lib/clamfleet-server"
+
+// Warnings returns non-fatal configuration problems for the caller to log. Today: a backup.dir
+// outside the state directory. The packaged unit has ProtectSystem=strict, so such a directory is
+// read-only for the service and for the backup timer unless a drop-in adds it to ReadWritePaths=;
+// without it the daily backup fails and so does the backup before a migration (the next upgrade
+// that brings one would refuse to start).
+func (c Config) Warnings() []string {
+	var w []string
+	d := filepath.Clean(c.Backup.Dir)
+	if d != packagedStateDir && !strings.HasPrefix(d, packagedStateDir+"/") {
+		w = append(w, fmt.Sprintf("backup.dir %s is outside %s: under the packaged systemd units (ProtectSystem=strict) it is read-only unless a drop-in adds ReadWritePaths=%s; see docs/operations.md", d, packagedStateDir, d))
+	}
+	return w
+}
+
 // Bounds of backup.keep.
 const (
 	MaxBackupKeep     = 365
