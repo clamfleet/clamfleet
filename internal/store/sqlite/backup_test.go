@@ -514,3 +514,17 @@ func TestBackupDoesNotCreateADirectoryUnderAnotherUsersParent(t *testing.T) {
 		t.Fatalf("the directory was created anyway (%v)", serr)
 	}
 }
+
+// Rule: the verify connection's DSN is built with url.URL like dsn(), so a backup directory whose name
+// holds ? # or % still verifies. With string concatenation the copy is looked up under a truncated name.
+func TestBackupVerifyHandlesSpecialCharactersInTheDirectory(t *testing.T) {
+	s := openTemp(t)
+	addHost(t, s, "a")
+	dir := filepath.Join(t.TempDir(), "bk?x#y%20z")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Backup(context.Background(), bopts(dir)); err != nil {
+		t.Fatalf("backup --verify in a directory with special characters: %v", err)
+	}
+}

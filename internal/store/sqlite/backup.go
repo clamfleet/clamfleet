@@ -37,6 +37,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -406,7 +407,9 @@ func syncDir(dir string) error {
 // verifyCopy opens the copy read-only and checks it is a sound database at the
 // source's schema version.
 func verifyCopy(ctx context.Context, path string, wantVersion int64) error {
-	db, err := sql.Open("sqlite", "file:"+path+"?mode=ro")
+	// url.URL, as dsn() does: a path with ? # or % must not be read as part of the query.
+	u := url.URL{Scheme: "file", Path: path, RawQuery: "mode=ro"}
+	db, err := sql.Open("sqlite", u.String())
 	if err != nil {
 		return err
 	}
