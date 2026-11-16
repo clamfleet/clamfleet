@@ -186,6 +186,10 @@ func (r *recordingStore) PruneEvents(_ context.Context, b time.Time, _ int) (int
 	r.rec("events", b)
 	return 0, nil
 }
+func (r *recordingStore) PruneAlertHistory(_ context.Context, b time.Time, _ int) (int64, error) {
+	r.rec("alert_history", b)
+	return 0, nil
+}
 func (r *recordingStore) PruneAlertWindows(_ context.Context, b time.Time, _ int) (int64, error) {
 	r.rec("windows", b)
 	return 0, nil
@@ -220,10 +224,10 @@ func TestRetentionPassPrunesEveryTableThenOptimizes(t *testing.T) {
 		t.Fatal("pass failed")
 	}
 	calls, _ := rs.snapshot()
-	if strings.Join(calls, ",") != "events,state_changes,reports,windows,audit,optimize" {
+	if strings.Join(calls, ",") != "events,state_changes,reports,alert_history,windows,audit,optimize" {
 		t.Fatalf("calls %v", calls)
 	}
-	for k, d := range map[string]int{"events": 100, "state_changes": 200, "reports": 20, "audit": 300} {
+	for k, d := range map[string]int{"events": 100, "state_changes": 200, "reports": 20, "audit": 300, "alert_history": 90, "windows": 90} {
 		if want := fixedNow.Add(-days(d)); !rs.cutoffs[k].Equal(want) {
 			t.Errorf("%s cutoff %v, want %v", k, rs.cutoffs[k], want)
 		}

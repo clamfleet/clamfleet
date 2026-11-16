@@ -180,8 +180,8 @@ the dispatcher at once; the 5 s tick still catches due retries and windows.
   own text, never a response body, a URL path or a secret. See it on the Alerts page or with
   `clamfleet-server alert log`. A crash during an attempt shows as `interrupted`; a delivery whose last attempt
   was interrupted ends as failed, so a delivery that crashes the server is not retried forever.
-- Finished deliveries and log rows are pruned after 90 days (not configurable until the retention block of a
-  later milestone). Pending deliveries are never pruned.
+- Finished deliveries, log rows and closed detection windows are pruned after `retention.alert_log_days`
+  (default 90, 30 to 3650) by the daily retention pass. Pending deliveries are never pruned.
 - The server logs one JSON line `"alert"` per planned alert (kind, host, from, to, alert_id), an info line per
   delivery and a warning per retry, so log forwarders see alerts too.
 

@@ -5,7 +5,7 @@
 // extended in milestone 6 section 4.3).
 //
 // Responsibilities: RunRetention deletes, per the retention.* keys, events,
-// state changes, reports, the closed detection windows and the audit log, in
+// state changes, reports, alert history, the closed detection windows and the audit log, in
 // batches so no write transaction runs long, then runs PRAGMA optimize. Alert
 // deliveries and log rows of an event or state change go with it by cascade.
 // Rows whose alert is unfinished are kept by the store (see its prune queries).
@@ -26,7 +26,6 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/clamfleet/clamfleet/internal/alert"
 	"github.com/clamfleet/clamfleet/internal/store"
 )
 
@@ -41,6 +40,8 @@ const (
 type RetentionStore interface {
 	store.EventStore
 	store.RetentionStore
+	// PruneAlertHistory deletes alert_log rows and finished deliveries (pending ones never).
+	PruneAlertHistory(ctx context.Context, before time.Time, batch int) (int64, error)
 }
 
 // RunRetention prunes at once and then whenever a tick finds the last prune
@@ -64,8 +65,8 @@ func RunRetention(ctx context.Context, st RetentionStore, now func() time.Time, 
 
 func days(n int) time.Duration { return time.Duration(n) * 24 * time.Hour }
 
-// pruneOnce runs every prune in order (events, state changes, reports, windows,
-// audit) and then Optimize. It reports whether all of them ran without error.
+// pruneOnce runs every prune in order (events, state changes, reports, alert history,
+// closed windows, audit) and then Optimize. It reports whether all of them ran without error.
 func pruneOnce(ctx context.Context, st RetentionStore, now time.Time, r Retention, log *slog.Logger) bool {
 	ok := true
 	step := func(what, msg string, n int64, err error) {
@@ -83,7 +84,9 @@ func pruneOnce(ctx context.Context, st RetentionStore, now time.Time, r Retentio
 	step("state changes", "old state changes pruned", n, err)
 	n, err = st.PruneReports(ctx, now.Add(-days(r.ReportsDays)), retentionBatch)
 	step("reports", "old reports pruned", n, err)
-	n, err = st.PruneAlertWindows(ctx, now.Add(-alert.Retention), retentionBatch)
+	n, err = st.PruneAlertHistory(ctx, now.Add(-days(r.AlertLogDays)), retentionBatch)
+	step("alert history", "old alert history pruned", n, err)
+	n, err = st.PruneAlertWindows(ctx, now.Add(-days(r.AlertLogDays)), retentionBatch)
 	step("detection windows", "old detection windows pruned", n, err)
 	n, err = st.PruneAudit(ctx, now.Add(-days(r.AuditDays)), retentionBatch)
 	step("audit rows", "old audit rows pruned", n, err)
