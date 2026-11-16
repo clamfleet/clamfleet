@@ -395,3 +395,25 @@ func TestLDAPConcurrencyIsBounded(t *testing.T) {
 		t.Fatalf("semaphore capacity %d", cap(d.sem))
 	}
 }
+
+// The user's DN goes into the group filter ESCAPED. A DN may legally hold ( ) and *, so an unescaped
+// {dn} lets an entry name change the filter (here it would not even parse, and with a "*" it could
+// match every group). The fake shows what arrived on the wire, and the user still gets the right role.
+func TestLDAPGroupSearchEscapesTheDNWithFilterMetacharacters(t *testing.T) {
+	r := newRig(t, false)
+	weirdDN := "uid=a*b(c),ou=people," + base
+	r.srv.Add(weirdDN, map[string][]string{"objectClass": {"inetOrgPerson"}, "uid": {"a*b(c)"}, "entryUUID": {"weird-1"}})
+	r.srv.SetPassword(weirdDN, "weird-pw")
+	r.srv.Add(adminsDN, map[string][]string{"objectClass": {"groupOfNames"}, "cn": {"admins"}, "member": {weirdDN}})
+	r.cfg.GroupAttribute, r.cfg.GroupBaseDN = "", "ou=groups,"+base
+	r.cfg.GroupFilter = "(&(objectClass=groupOfNames)(member={dn}))"
+	id, err := r.dir(t).Authenticate(context.Background(), "a*b(c)", "weird-pw")
+	if err != nil || id.Role != "admin" {
+		t.Fatalf("%+v %v", id, err)
+	}
+	ss := r.srv.Searches()
+	want := `(&(objectClass=groupOfNames)(member=uid=a\2ab\28c\29,ou=people,` + base + `))`
+	if len(ss) != 2 || ss[1].Filter != want {
+		t.Fatalf("group filter on the wire:\n got %v\nwant %s", ss, want)
+	}
+}
