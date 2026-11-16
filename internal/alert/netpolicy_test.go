@@ -91,7 +91,7 @@ func TestValidateWebhookURL(t *testing.T) {
 		{"https hostname", "https://hooks.example/T/" + marker, defaultPolicy(), true},
 		{"https with port", "https://hooks.example:8443/x/" + marker, defaultPolicy(), true},
 		{"http private literal", "http://10.0.0.5:8080/" + marker, defaultPolicy(), true},
-		{"http hostname (checked at dial)", "http://receiver.lan/" + marker, defaultPolicy(), true},
+		{"http hostname (checked at dial)", "http://receiver.example/" + marker, defaultPolicy(), true},
 		{"https public literal", "https://203.0.113.5/" + marker, defaultPolicy(), true},
 		{"userinfo", "https://user:pw@hooks.example/" + marker, defaultPolicy(), false},
 		{"userinfo name only", "https://" + marker + "@hooks.example/", defaultPolicy(), false},

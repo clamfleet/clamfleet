@@ -272,14 +272,14 @@ func TestSMTPPlaintextPolicy(t *testing.T) {
 		srv := startSMTP(t, testsmtp.Options{})
 		d := &recordingDial{to: srv.Addr}
 		s := smtpSender(srv, SMTPNone)
-		s.Config.Host = "relay.lan"
+		s.Config.Host = "relay.example"
 		s.Resolver, s.Dial = &scriptedResolver{answers: [][]netip.Addr{addrs("64:ff9b::7f00:1")}}, d.dial
 		if r := s.Send(context.Background(), testMessage("ops@x.example")); r.Outcome != OutcomeSent || d.list() != "64:ff9b::7f00:1" {
 			t.Fatalf("%+v dialled %q", r, d.list())
 		}
 		d2 := &recordingDial{to: srv.Addr}
 		s2 := smtpSender(srv, SMTPNone)
-		s2.Config.Host = "relay.lan"
+		s2.Config.Host = "relay.example"
 		s2.Resolver, s2.Dial = &scriptedResolver{answers: [][]netip.Addr{addrs("2002:7f00:1::1")}}, d2.dial
 		if r := s2.Send(context.Background(), testMessage("ops@x.example")); r.Outcome != OutcomePermanent || d2.list() != "" {
 			t.Fatalf("6to4 relay: %+v dialled %q", r, d2.list())
@@ -295,7 +295,7 @@ func TestSMTPPlaintextPolicy(t *testing.T) {
 		srv := startSMTP(t, testsmtp.Options{})
 		d2 := &recordingDial{to: srv.Addr}
 		s2 := smtpSender(srv, SMTPNone)
-		s2.Config.Host = "relay.lan"
+		s2.Config.Host = "relay.example"
 		s2.NAT64 = []netip.Prefix{netip.MustParsePrefix("64:ff9b:1::/96")}
 		s2.Resolver, s2.Dial = &scriptedResolver{answers: [][]netip.Addr{addrs("64:ff9b:1::a00:1")}}, d2.dial
 		if r := s2.Send(context.Background(), testMessage("ops@x.example")); r.Outcome != OutcomeSent {
@@ -306,7 +306,7 @@ func TestSMTPPlaintextPolicy(t *testing.T) {
 		srv := startSMTP(t, testsmtp.Options{})
 		d := &recordingDial{to: srv.Addr}
 		s := smtpSender(srv, SMTPNone)
-		s.Config.Host = "relay.lan"
+		s.Config.Host = "relay.example"
 		s.Resolver, s.Dial = &scriptedResolver{answers: [][]netip.Addr{addrs("10.0.0.25")}}, d.dial
 		if r := s.Send(context.Background(), testMessage("ops@x.example")); r.Outcome != OutcomeSent || d.list() != "10.0.0.25" {
 			t.Fatalf("%+v dialled %q", r, d.list())
@@ -315,7 +315,7 @@ func TestSMTPPlaintextPolicy(t *testing.T) {
 	t.Run("credentials never go to a private, non-loopback relay in clear", func(t *testing.T) {
 		srv := startSMTP(t, testsmtp.Options{AuthMechs: []string{"PLAIN"}, Username: "u", Password: "p"})
 		s := smtpSender(srv, SMTPNone)
-		s.Config.Host, s.Config.Username, s.Config.Password = "relay.lan", "u", "p"
+		s.Config.Host, s.Config.Username, s.Config.Password = "relay.example", "u", "p"
 		s.Resolver = &scriptedResolver{answers: [][]netip.Addr{addrs("10.0.0.25")}}
 		s.Dial = func(ctx context.Context, network, address string) (net.Conn, error) {
 			c, err := (&net.Dialer{}).DialContext(ctx, network, srv.Addr)

@@ -90,7 +90,7 @@ func TestAlertConfigValidate(t *testing.T) {
 		{"none to a private literal", withSMTP(func(m *SMTP) { m.Host, m.TLS = "10.0.0.25", "none" }), ""},
 		{"none to a CGNAT literal", withSMTP(func(m *SMTP) { m.Host, m.TLS = "100.64.1.1", "none" }), ""},
 		{"none to ipv6 loopback", withSMTP(func(m *SMTP) { m.Host, m.TLS = "::1", "none" }), ""},
-		{"none to a hostname (checked at dial)", withSMTP(func(m *SMTP) { m.Host, m.TLS = "relay.lan", "none" }), ""},
+		{"none to a hostname (checked at dial)", withSMTP(func(m *SMTP) { m.Host, m.TLS = "relay.example", "none" }), ""},
 		{"none with credentials to loopback", withSMTP(func(m *SMTP) {
 			m.Host, m.TLS, m.Username, m.PasswordFile = "127.0.0.1", "none", "u", "/etc/clamfleet/p"
 		}), ""},
@@ -101,7 +101,7 @@ func TestAlertConfigValidate(t *testing.T) {
 			m.Host, m.TLS, m.Username, m.PasswordFile = "10.0.0.25", "none", "u", "/etc/clamfleet/p"
 		}), "clear"},
 		{"none with credentials to a hostname", withSMTP(func(m *SMTP) {
-			m.Host, m.TLS, m.Username, m.PasswordFile = "relay.lan", "none", "u", "/etc/clamfleet/p"
+			m.Host, m.TLS, m.Username, m.PasswordFile = "relay.example", "none", "u", "/etc/clamfleet/p"
 		}), "clear"},
 		{"starttls to a public literal is fine", withSMTP(func(m *SMTP) { m.Host = "203.0.113.5" }), ""},
 		{"smtp keys are not checked while host is empty", mut(func(c *Config) { c.SMTP.Port = 0 }), ""},
