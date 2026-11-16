@@ -456,3 +456,22 @@ func TestLDAPSignInReplacesThePresentedSession(t *testing.T) {
 		t.Fatalf("the presented session was not deleted: %d sessions", e.count(`SELECT count(*) FROM user_sessions`))
 	}
 }
+
+// An over-long user name reaches the directory layer at its real length and is refused there: it must not be
+// cut to 254 bytes and then searched. The audit row still holds the cut text.
+func TestLDAPOverlongUsernameIsRefusedUncut(t *testing.T) {
+	r := newLDAPRig(t, nil)
+	e := newEnv(t, r.opt(t))
+	long := strings.Repeat("a", 300)
+	b := e.browser()
+	if p := b.loginAs(long, "pw"); p.status != 200 || e.cookieFor(b) != nil || !strings.Contains(p.body, "Invalid email or password.") {
+		t.Fatalf("%d", p.status)
+	}
+	if n := len(r.srv.Searches()) + len(r.srv.Binds()); n != 0 {
+		t.Fatalf("the directory saw %d operations for a 300-byte name", n)
+	}
+	got := e.auditDetails("user.login.failed")
+	if len(got) != 1 || !strings.Contains(got[0], "ldap: invalid user name") || strings.Contains(got[0], long) {
+		t.Fatalf("%v", got)
+	}
+}

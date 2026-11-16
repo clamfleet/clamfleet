@@ -91,7 +91,11 @@ func (w *Web) loginSubmit(rw http.ResponseWriter, r *http.Request) {
 		w.render(rw, http.StatusForbidden, "login", w.loginView(r, next, ""))
 		return
 	}
-	email := store.TruncateForAudit(r.PostForm.Get("email"))
+	// rawIdentifier is what was typed; email is the same cut to 254 bytes for the audit row, the throttle
+	// key and the local lookup. LDAP gets the RAW value: its own length check (256 bytes) must see the
+	// real length, and a cut one would turn an unusable 300-byte name into a valid search.
+	rawIdentifier := r.PostForm.Get("email")
+	email := store.TruncateForAudit(rawIdentifier)
 	password := r.PostForm.Get("password")
 	ip := w.ClientIP(r)
 
@@ -119,7 +123,7 @@ func (w *Web) loginSubmit(rw http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if !local {
-			w.ldapLogin(rw, r, email, password, next, ip, &outcome)
+			w.ldapLogin(rw, r, rawIdentifier, password, next, ip, &outcome)
 			return
 		}
 	}
