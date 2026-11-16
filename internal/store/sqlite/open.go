@@ -49,6 +49,9 @@ type Store struct {
 	r    *sql.DB // read pool, query_only
 	prov *goose.Provider
 
+	// onPruneTx is a test hook: pruneBatches calls it before each batch
+	// transaction, so a test can count them. Always nil in production.
+	onPruneTx func()
 	// afterTokenUpdate is a test hook: SetToken calls it between the token
 	// update and the audit insert, so a test can prove that a failure there
 	// rolls both back. Always nil in production.
