@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# SPDX-FileCopyrightText: The ClamFleet Authors
+#
+# Blank issues are off so that every report arrives through a form (versions, redaction). The
+# vulnerability link goes to GitHub's private reporting, which only the maintainer sees; it works
+# once the repository is public and the setting is on (docs/releasing.md).
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/clamfleet/clamfleet/security/advisories/new
+    about: Privately, not in a public issue. See SECURITY.md.

@@ -1,0 +1,41 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# SPDX-FileCopyrightText: The ClamFleet Authors
+#
+# The feature form. The last question matters most to the maintainer: the agent's payloads, the
+# configuration keys and the alert payload are public interfaces, and a change to one needs a schema
+# decision before any code.
+name: Feature request
+description: Suggest something ClamFleet should do
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What are you trying to do, and what stops you? Describe the need, not only the solution.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Your proposal
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives you considered
+      description: Including doing it outside ClamFleet.
+    validations:
+      required: false
+  - type: dropdown
+    id: interfaces
+    attributes:
+      label: Does it change a payload, a configuration key or the alert payload?
+      description: These are public interfaces (CONTRIBUTING.md). "I do not know" is a fine answer.
+      options:
+        - "No"
+        - "Yes"
+        - I do not know
+    validations:
+      required: true
