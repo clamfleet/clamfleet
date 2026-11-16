@@ -109,6 +109,9 @@ local admin. Anything else is looked up in the directory.
   factor matters, use OIDC and let the provider enforce it.
 - **Timing:** when LDAP is on, the response time can tell whether an email has a *local* account (the local path hashes,
   the LDAP path binds). The throttle bounds probing. This is accepted and stated here rather than hidden.
+- **The throttle's key is the name as typed**, so `alice` and `alice@example.org` are two keys, and an attacker can rotate
+  spellings. The directory's own lockout policy (OpenLDAP `ppolicy`, AD account lockout) is the real defence against password
+  guessing; turn it on.
 - At most **4 sign-ins** talk to the directory at once; each connection lives for one sign-in, and each operation is
   bounded by `auth.ldap.timeout` (default 10 s).
 
