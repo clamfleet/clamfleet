@@ -1,15 +1,29 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # SPDX-FileCopyrightText: The ClamFleet Authors
 #
-# Developer entry points. `make check` is what CI will run.
-# staticcheck and sqlc must be installed separately (see CLAUDE.md for the pinned version).
+# Developer entry points. `make check` is what developers run; CI runs `make ci`, which adds the
+# workflow lint, the module hygiene checks and the no-skip test gate (docs/testing.md, "CI").
+# staticcheck and sqlc must be installed: `make tools` installs the pinned versions below.
 
 GO ?= go
 BIN := bin
 VERSION ?= 0.0.0-dev
 LDFLAGS := -s -w -X github.com/clamfleet/clamfleet/internal/version.Version=$(VERSION)
 
-.PHONY: build vet staticcheck test scripts-test sqlc-check generate check packages e2e e2e-apparmor e2e-el9 e2e-idp e2e-web fixtures webfixture web-fixture
+.PHONY: tools build vet staticcheck test scripts-test sqlc-check generate check packages e2e e2e-apparmor e2e-el9 e2e-idp e2e-web fixtures webfixture web-fixture
+
+# Build-time tools and their pins. The same versions are in CLAUDE.md and docs/testing.md: change all
+# together. They are installed with `go install`, never added to go.mod (the Go `tool` directive would
+# put the tools' modules into go.sum, and a contributor's build must not depend on a linter).
+# sqlc is built with CGO disabled (as CLAUDE.md prescribes): the binary then needs no C toolchain.
+STATICCHECK_VERSION := v0.8.2
+SQLC_VERSION := v1.31.1
+ACTIONLINT_VERSION := v1.7.12
+
+tools:
+	$(GO) install honnef.co/go/tools/cmd/staticcheck@$(STATICCHECK_VERSION)
+	CGO_ENABLED=0 $(GO) install github.com/sqlc-dev/sqlc/cmd/sqlc@$(SQLC_VERSION)
+	$(GO) install github.com/rhysd/actionlint/cmd/actionlint@$(ACTIONLINT_VERSION)
 
 # Both binaries are static (CGO_ENABLED=0: the server uses pure-Go SQLite).
 # E2E_BUILD_TAGS: extra build tags, only for the package upgrade e2e (e2e_migration: a test-only
