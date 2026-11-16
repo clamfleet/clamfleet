@@ -164,6 +164,8 @@ readable by others, or the server refuses to start; keep it out of your database
 | `retention.audit_days` | `CLAMFLEET_SERVER_RETENTION_AUDIT_DAYS` | `365` (90 to 3650; audit rows hold emails and client IPs) |
 | `backup.dir` | `CLAMFLEET_SERVER_BACKUP_DIR` | `/var/lib/clamfleet-server/backups` (absolute; a real directory, mode 0700, owned by the server user) |
 | `backup.keep` | `CLAMFLEET_SERVER_BACKUP_KEEP` | `7` (0 to 365; 0 keeps every backup) |
+| `metrics.enabled` | `CLAMFLEET_SERVER_METRICS_ENABLED` | `false` (`GET /metrics` answers 404 while off) |
+| `metrics.token_file` | `CLAMFLEET_SERVER_METRICS_TOKEN_FILE` | empty; required when enabled: absolute path of a file with the bearer token (at least 32 bytes, `root:clamfleet-server 0640`) |
 | `public_url` | `CLAMFLEET_SERVER_PUBLIC_URL` | empty (links in alerts are null) |
 | `alert.cooldown` | `CLAMFLEET_SERVER_ALERT_COOLDOWN` | `15m` (0 to 24h; 0 = no holds) |
 | `alert.webhook.timeout` | `CLAMFLEET_SERVER_ALERT_WEBHOOK_TIMEOUT` | `10s` (1s to 30s per attempt) |

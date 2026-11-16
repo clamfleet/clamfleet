@@ -82,6 +82,13 @@ retention:
 backup:
   dir: /var/lib/clamfleet-server/backups   # a real directory, mode 0700, owned by the server user (created if missing)
   keep: 7                                  # 0 to 365 newest backups kept by `backup`; 0 keeps them all
+# Prometheus metrics at GET /metrics (host names, states and counts; never a path or a signature).
+# Off by default. When on, a bearer token is required, read from a file that follows the key-file rule
+# (root:clamfleet-server 0640). Generate one: openssl rand -base64 48 > FILE. Prometheus: authorization.credentials_file.
+# Environment: CLAMFLEET_SERVER_METRICS_ENABLED and CLAMFLEET_SERVER_METRICS_TOKEN_FILE.
+metrics:
+  enabled: false
+  token_file: ""          # e.g. /etc/clamfleet/metrics-token (at least 32 bytes)
 # Email alerts. Empty host = email is off (creating an email target is refused).
 smtp:
   host: ""                # e.g. smtp.example

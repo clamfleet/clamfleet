@@ -58,6 +58,7 @@ type Config struct {
 	SMTP      SMTP      `yaml:"smtp"`
 	Retention Retention `yaml:"retention"`
 	Backup    Backup    `yaml:"backup"`
+	Metrics   Metrics   `yaml:"metrics"`
 }
 
 // Backup configures `clamfleet-server backup` and the automatic backup before a
@@ -469,6 +470,9 @@ func (c Config) Validate() error {
 		return err
 	}
 	if err := c.Backup.Validate(); err != nil {
+		return err
+	}
+	if err := c.Metrics.Validate(); err != nil {
 		return err
 	}
 	if c.Listen == "" {
