@@ -666,6 +666,22 @@ func TestOIDCRefusalPathsLogNoCodeOrState(t *testing.T) {
 		t.Fatalf("mismatch: %d", got.status)
 	}
 
+	// Refused by Exchange: the code is redeemed but the ID token fails a check (a wrong nonce), which logs
+	// "oidc: sign-in refused" with the check's reason from the Exchange branch.
+	r.idp.SetScript(testoidc.Script{Claims: func(c map[string]any) { c["nonce"] = "wrong" }})
+	b = e.browser()
+	cb = r.choose(t, authURL(t, r.start(b, "")), "ann")
+	note("exchange-refused", cb)
+	if got := b.get(cb); got.status != 403 {
+		t.Fatalf("exchange refusal: %d", got.status)
+	}
+	if tk := r.idp.Tokens(); tk[len(tk)-1].IDToken == "" {
+		t.Fatal("the provider did not issue the token the test is about")
+	} else {
+		secrets["exchange-refused id token"] = tk[len(tk)-1].IDToken
+	}
+	r.idp.SetScript(testoidc.Script{})
+
 	// The provider's error path.
 	b = e.browser()
 	loc := mustURL(authURL(t, r.start(b, "")))
