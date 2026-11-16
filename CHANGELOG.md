@@ -10,6 +10,19 @@ All notable changes are listed here. The format follows Keep a Changelog; versio
 ## Unreleased
 
 ### Added
+- Milestone 6b, external sign-in (see `docs/auth.md`). **LDAP** (one directory; search, then bind; `ldaps://` or StartTLS, plaintext
+  only to loopback; the name escaped into the filter; an empty password refused before any network I/O; the identity is the
+  `entryUUID` or `objectGUID`, never the DN; groups from `memberOf` or a search) and **OpenID Connect** (one provider; the
+  authorization code flow with PKCE S256, `state`, `nonce`, a one-time state row bound to a `__Host-clamfleet_oidc` SameSite=Lax cookie;
+  discovery on the standard library; no JOSE library, the ID token is taken from the token endpoint over TLS as OIDC Core 3.1.3.7
+  allows, and every claim is checked) next to local accounts, in any combination. Roles come from groups or a claim at every
+  sign-in; a user with no role is refused. External users are created at first sign-in and never linked to a local account: an email
+  that belongs to another user refuses the sign-in. The login form takes "Email or user name" (a local account with exactly that
+  email is tried first); a "Single sign-on" button starts OIDC. `user list` shows the source; `set-role`, `reset-password` and
+  `reset-totp` refuse external users; `disable` and `enable` take `ldap:NAME` or `oidc:NAME`. New server keys `auth.ldap.*` and
+  `auth.oidc.*` (both off by default; secrets only in files), routes `POST /login/oidc` and `GET /login/oidc/callback`, migration
+  `00007` (`users.external_name`, `oidc_login_states`), `make e2e-idp` (OpenLDAP and Keycloak in a throwaway container) and
+  `webfixture --sso`. New dependency: `github.com/go-ldap/ldap/v3` (MIT) with `go-asn1-ber/asn1-ber` and `Azure/go-ntlmssp`.
 - Milestone 6a, operations and packaging (see `docs/install.md`, `docs/operations.md`, `docs/configuration.md`).
   **Packages:** `clamfleet-agent` and `clamfleet-server` as `.deb` and `.rpm` (nfpm v2.49.0), with systemd units
   (hardened), sysusers.d and tmpfiles.d files, example configs as conffiles, our own AppArmor profile (Debian) or an
@@ -25,10 +38,25 @@ All notable changes are listed here. The format follows Keep a Changelog; versio
   runtime dependency.
 
 ### Fixed
+- Milestone 6b: **the TOTP gate** was "source is local", so any user of another source skipped `auth.local.totp_required`. It now
+  exempts only `ldap` and `oidc`; an unknown source is gated, and a session of an unknown source is no session at all.
 - Milestone 6a: **event prune** deleted events whose alert was still being delivered, or that were held in an open
   detection window; they are now kept until the alert is finished. **NAT64:** a webhook or SMTP address that carries an
   IPv4 address (`64:ff9b::/96`, your own prefixes in `alert.webhook.nat64_prefixes`) is judged by the IPv4 inside it;
   6to4, Teredo, IPv4-compatible, SIIT and the local-use range of an unlisted translator are blocked.
+
+### Upgrade notes (milestone 6b)
+- **Disabling a sign-in method ends its users' sessions.** A session is valid only while its user's source is enabled. That includes
+  `auth.local.enabled: false`, which in milestone 3 left existing local sessions working: they now end at the next request.
+- **The TOTP requirement exempts only `ldap` and `oidc`**; LDAP sign-ins are password-only (the server warns at start when LDAP and
+  `auth.local.totp_required` are both on). Use OIDC where a second factor matters.
+- Migration `00007` is additive; an M6a binary refuses a `00007` database (upgrade the server first). The e2e-only overlay migration
+  moved from `00007` to `00008`.
+- `user list` has a SOURCE column (its first column is now USER: the email, or `source:name`). `--json` is unchanged except for the
+  new `external_name` and `external_id` fields.
+- `POST /login/oidc` answers with a page, not a redirect (the console's `form-action 'self'` policy would block a redirect), and
+  starting a sign-in needs no session: rate limit it in your reverse proxy. The console's Content-Security-Policy is unchanged.
+- Active Directory configuration is documented and untested.
 
 ### Upgrade notes (milestone 6a)
 - **The first retention pass** can delete a large part of `reports` (kept since milestone 2): in batches, logged by count.

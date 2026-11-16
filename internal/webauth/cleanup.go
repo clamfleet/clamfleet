@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // SPDX-FileCopyrightText: The ClamFleet Authors
 
-// cleanup.go: removes expired session and login-challenge rows. Expired ones
+// cleanup.go: removes expired session, login-challenge and OIDC login-state rows. Expired ones
 // are already refused by the lookups; this only keeps the tables from growing.
 package webauth
 
@@ -17,6 +17,7 @@ import (
 type CleanupStore interface {
 	store.SessionStore
 	DeleteExpiredChallenges(ctx context.Context, now time.Time) (int64, error)
+	DeleteExpiredOIDCStates(ctx context.Context, now time.Time) (int64, error)
 }
 
 // RunCleanup deletes expired sessions and login challenges at once and then on
@@ -37,6 +38,13 @@ func RunCleanup(ctx context.Context, st CleanupStore, now func() time.Time, idle
 			log.Error("cannot delete expired login challenges", "error", err.Error())
 		case c > 0:
 			log.Info("expired login challenges removed", "count", c)
+		}
+		o, err := st.DeleteExpiredOIDCStates(ctx, now())
+		switch {
+		case err != nil && ctx.Err() == nil:
+			log.Error("cannot delete expired OIDC login states", "error", err.Error())
+		case o > 0:
+			log.Info("expired OIDC login states removed", "count", o)
 		}
 		select {
 		case <-ctx.Done():

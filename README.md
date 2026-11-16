@@ -95,6 +95,8 @@ make packages VERSION=x.y.z   # .deb and .rpm of the agent and the server into d
 make e2e        # end-to-end tests inside a ClamAV container, including the packages; needs setup
 make e2e-apparmor   # the detection path on a Debian 13 VM with AppArmor enforcing (docs/testing.md)
 make e2e-el9        # the rpm and the detection path on an AlmaLinux 9 VM with SELinux enforcing (docs/testing.md)
+make e2e-idp        # the real server against OpenLDAP and Keycloak in a throwaway container (docs/testing.md)
+make e2e-web        # Playwright browser tests of the console, including OIDC and LDAP sign-in (e2e/web)
 make web-fixture   # a throwaway console on 127.0.0.1 with seeded users and hosts, for browser tests (docs/testing.md)
 ```
 
@@ -165,6 +167,7 @@ readable by others, or the server refuses to start; keep it out of your database
 | `health.eval_interval` | `CLAMFLEET_SERVER_HEALTH_EVAL_INTERVAL` | `60s` (1s to 60s) |
 | `auth.local.enabled` | `CLAMFLEET_SERVER_AUTH_LOCAL_ENABLED` | `true` (email and password accounts) |
 | `auth.local.totp_required` | `CLAMFLEET_SERVER_AUTH_LOCAL_TOTP_REQUIRED` | `false`; `true` makes every local user set up an authenticator app (needs the key file) |
+| `auth.ldap.*`, `auth.oidc.*` | `CLAMFLEET_SERVER_AUTH_LDAP_...`, `CLAMFLEET_SERVER_AUTH_OIDC_...` | both off; every key, default and range is in [docs/configuration.md](docs/configuration.md) and the setup in [docs/auth.md](docs/auth.md) |
 | `auth.session_max_age` | `CLAMFLEET_SERVER_AUTH_SESSION_MAX_AGE` | `12h` (5m to 720h) |
 | `auth.session_idle` | `CLAMFLEET_SERVER_AUTH_SESSION_IDLE` | `1h` (at least 1m; not above the max age) |
 | `auth.cookie_secure` | `CLAMFLEET_SERVER_AUTH_COOKIE_SECURE` | `true`; `false` only for plain-HTTP development (drops `Secure` and the `__Host-` prefix, logs a warning) |
@@ -338,7 +341,7 @@ Things to know:
 
 ## Roadmap
 
-Milestones follow [docs/HANDOVER.md](docs/HANDOVER.md). Milestones 1 to 6a are built, with TOTP two-factor sign-in for local accounts.
+Milestones follow [docs/HANDOVER.md](docs/HANDOVER.md). Milestones 1 to 6b are built, with TOTP two-factor sign-in for local accounts and LDAP and OpenID Connect sign-in.
 
 | # | Deliverable | Status |
 |---|---|---|
@@ -348,16 +351,18 @@ Milestones follow [docs/HANDOVER.md](docs/HANDOVER.md). Milestones 1 to 6a are b
 | 4 | Email and webhook alerting | Built. Tested on Debian 13 only. |
 | 5 | Detection events, spool, events page, acknowledgement | Built. Tested on Debian 13 (container, and a VM with AppArmor enforcing). |
 | 6a | Packages (.deb and .rpm), retention for every table, backup, `/metrics`, TLS reload, NAT64 in the alert policy, `clamfleet-agent scan`, SELinux | Built. Tested on Debian 13 and AlmaLinux 9. |
-| 6b | LDAP and OIDC login | Planned |
+| 6b | LDAP and OpenID Connect sign-in, role mapping from groups or a claim | Built. Tested against OpenLDAP and Keycloak (and in a browser); Active Directory is documented and untested. |
 | 6c | CI, signed releases, checksums, SBOM, project files | Planned |
 
 Built: local accounts with email and password and the roles `viewer` and `admin`, and TOTP two-factor
 sign-in (optional per user, or required for all local users with `auth.local.totp_required`; see `docs/web.md`).
 
-Planned web console sign-in and access control:
+Also built: sign-in with one **LDAP** directory and one **OpenID Connect** provider (for example Keycloak), next to local
+accounts, with the role mapped from groups or a claim at every sign-in (see [docs/auth.md](docs/auth.md); LDAP sign-ins are
+password-only, use OIDC where a second factor matters).
 
-- **LDAP authentication.**
-- **SSO via OpenID Connect**, for example with Keycloak.
+Planned:
+
 - **User management in the console** (users are managed with the CLI for now).
 
 Later: scheduled remote actions (for example "update signatures now" or "scan this path") that

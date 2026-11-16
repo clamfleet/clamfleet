@@ -38,6 +38,15 @@ var (
 	// (or disabled and enabled again) after the caller verified the credential. A login gets no session; a
 	// self-service password change is refused. Nothing was written.
 	ErrCredentialChanged = errors.New("credential changed")
+	// ErrUserDisabled: the user exists and is disabled (an external sign-in is refused).
+	ErrUserDisabled = errors.New("user disabled")
+	// ErrEmailInUse: the email an external identity presents belongs to ANOTHER user. External
+	// and local accounts are never linked by email (decision 19: that is the classic account
+	// takeover), so the sign-in is refused and nothing is written.
+	ErrEmailInUse = errors.New("email in use by another user")
+	// ErrTooManyOIDCStates: too many OIDC sign-ins are in progress (MaxOIDCStates). Starting one
+	// needs no session, so the table must not be growable without bound by an anonymous caller.
+	ErrTooManyOIDCStates = errors.New("too many OIDC sign-ins in progress")
 )
 
 // Actor kinds of an audit row: the admin CLI, or a signed-in console user.
@@ -71,6 +80,8 @@ const (
 	ActionUserLogin         = "user.login"
 	ActionUserLoginFailed   = "user.login.failed"
 	ActionUserLogout        = "user.logout"
+	// ActionUserRoleMapped: an external user's role changed at sign-in because their groups or claim did.
+	ActionUserRoleMapped = "user.role.mapped"
 )
 
 // Target kinds of an audit row.
@@ -279,8 +290,16 @@ const (
 // ValidRole reports whether r is a known role.
 func ValidRole(r string) bool { return r == RoleViewer || r == RoleAdmin }
 
-// AuthLocal is the auth_source of password users.
-const AuthLocal = "local"
+// Identity sources of a console user (users.auth_source). Validated in Go, never by a
+// CHECK constraint (M3 decision 11), so a new source is not a table rebuild.
+const (
+	// AuthLocal is the source of password users.
+	AuthLocal = "local"
+	// AuthLDAP is a user from the configured LDAP directory (auth.ldap).
+	AuthLDAP = "ldap"
+	// AuthOIDC is a user from the configured OpenID Connect provider (auth.oidc).
+	AuthOIDC = "oidc"
+)
 
 // NormalizeEmail lowercases and trims an email and does the sanity check a
 // login name needs: one '@' with text on both sides, at most 254 bytes, no
@@ -315,11 +334,17 @@ func TruncateForAudit(s string) string {
 
 // User is a console account.
 type User struct {
-	ID          int64      `json:"id"`
-	Email       string     `json:"email"`
-	DisplayName string     `json:"display_name"`
-	Role        string     `json:"role"`
-	AuthSource  string     `json:"auth_source"`
+	ID          int64  `json:"id"`
+	Email       string `json:"email"`
+	DisplayName string `json:"display_name"`
+	Role        string `json:"role"`
+	AuthSource  string `json:"auth_source"`
+	// ExternalName is the LDAP user name or OIDC preferred_username ("" for local users).
+	ExternalName string `json:"external_name"`
+	// ExternalID is the provider's stable identifier of an external user (the LDAP id attribute, or
+	// "issuer subject" for OIDC); "" for local users. Shown by `user list --json` so an operator can
+	// tell which directory entry or provider account a user is.
+	ExternalID  string     `json:"external_id"`
 	Disabled    bool       `json:"disabled"`
 	MustChange  bool       `json:"password_must_change"`
 	CreatedAt   time.Time  `json:"created_at"`
@@ -396,6 +421,9 @@ type SessionPrincipal struct {
 	// fresh on every request so a forced-enrolment gate applies at once.
 	AuthSource  string
 	TOTPEnabled bool
+	// ExternalName is users.external_name (empty for local users): the actor label of an
+	// external user without an email.
+	ExternalName string
 }
 
 // UserStore persists console users. Every change that matters writes its audit
@@ -406,6 +434,9 @@ type UserStore interface {
 	// UserByEmail: ErrNotFound when there is none (read pool).
 	UserByEmail(ctx context.Context, email string) (User, error)
 	ListUsers(ctx context.Context) ([]User, error)
+	// UsersByExternalName returns the users of an external source with this external name, oldest
+	// first (the CLI names an external user "source:name"; the caller refuses more than one).
+	UsersByExternalName(ctx context.Context, source, name string) ([]User, error)
 	CountUsers(ctx context.Context) (int64, error)
 	// SetPassword replaces the hash and deletes the user's sessions (all, or all
 	// but KeepSession). ErrNotFound for an unknown id.
@@ -429,6 +460,59 @@ type UserStore interface {
 	RecordAudit(ctx context.Context, now time.Time, a Audit, action, targetKind, target string, detail map[string]string) error
 }
 
+// ExternalIdentity is what an identity provider vouched for at one sign-in (LDAP or OIDC).
+type ExternalIdentity struct {
+	// Source is AuthLDAP or AuthOIDC.
+	Source string
+	// ExternalID is the stable identifier: the LDAP id attribute (hex for a binary objectGUID),
+	// or the OIDC issuer + " " + subject. Never a DN, which changes on a rename.
+	ExternalID string
+	// Email is normalised, or "" when there is none (a directory entry without mail, or an OIDC
+	// email the provider does not mark verified).
+	Email        string
+	DisplayName  string
+	ExternalName string // LDAP user name / OIDC preferred_username
+	Role         string // from the mapping; never empty here
+}
+
+// OIDCState is one OIDC sign-in in progress (oidc_login_states).
+type OIDCState struct {
+	TokenHash    []byte // SHA-256 of the state cookie token
+	State        string // the URL state parameter
+	Nonce        string
+	CodeVerifier string // PKCE; never logged
+	NextPath     string
+	CreatedAt    time.Time
+	ExpiresAt    time.Time
+}
+
+// MaxOIDCStates bounds the sign-ins in progress. A person signing in needs one for under ten
+// minutes; this many at once means someone is filling the table.
+const MaxOIDCStates = 10000
+
+// ExternalStore persists users of external sign-in and the OIDC login states.
+type ExternalStore interface {
+	// ExternalLogin runs in ONE write transaction:
+	//  1. find the user by (Source, ExternalID), or insert one (no password, no TOTP);
+	//  2. ErrUserDisabled for a disabled user;
+	//  3. ErrEmailInUse when the email is held by any OTHER user. Nothing is linked or changed;
+	//     this also covers an EXISTING external user whose email changed into a collision (the
+	//     stored email stays as it was);
+	//  4. update email, display name, external name and role (audit user.role.mapped {from,to}
+	//     when the role changes);
+	//  5. insert the session s (from webauth.PrepareSession; UserID is set here);
+	//  6. set last_login_at and write user.login with detail.
+	// An error rolls everything back, a user created in step 1 included.
+	ExternalLogin(ctx context.Context, id ExternalIdentity, s Session, now time.Time, a Audit, detail map[string]string) (User, error)
+	// CreateOIDCState stores a sign-in in progress, after removing the expired ones; ErrTooManyOIDCStates
+	// when MaxOIDCStates live ones exist.
+	CreateOIDCState(ctx context.Context, st OIDCState) error
+	// TakeOIDCState deletes and returns the state for the cookie hash (DELETE ... RETURNING):
+	// ErrNotFound when it was used already, expired or never existed. One-time by construction.
+	TakeOIDCState(ctx context.Context, tokenHash []byte, now time.Time) (OIDCState, error)
+	DeleteExpiredOIDCStates(ctx context.Context, now time.Time) (int64, error)
+}
+
 // SessionStore persists console sessions.
 type SessionStore interface {
 	// CreateSession is conditional on Session.PasswordHash, see there.
@@ -449,6 +533,7 @@ type Store interface {
 	HealthStore
 	UserStore
 	SessionStore
+	ExternalStore
 	TOTPStore
 	AlertStore
 	EventStore

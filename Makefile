@@ -9,7 +9,7 @@ BIN := bin
 VERSION ?= 0.0.0-dev
 LDFLAGS := -s -w -X github.com/clamfleet/clamfleet/internal/version.Version=$(VERSION)
 
-.PHONY: build vet staticcheck test scripts-test sqlc-check generate check packages e2e e2e-apparmor e2e-el9 e2e-web fixtures webfixture web-fixture
+.PHONY: build vet staticcheck test scripts-test sqlc-check generate check packages e2e e2e-apparmor e2e-el9 e2e-idp e2e-web fixtures webfixture web-fixture
 
 # Both binaries are static (CGO_ENABLED=0: the server uses pure-Go SQLite).
 # E2E_BUILD_TAGS: extra build tags, only for the package upgrade e2e (e2e_migration: a test-only
@@ -39,11 +39,13 @@ vet:
 	$(GO) vet ./...
 	$(GO) vet -tags e2e ./...
 	$(GO) vet -tags "e2e e2e_apparmor e2e_el9" ./...
+	$(GO) vet -tags e2e_idp ./...
 
 staticcheck:
 	staticcheck ./...
 	staticcheck -tags e2e ./...
 	staticcheck -tags "e2e e2e_apparmor e2e_el9" ./...
+	staticcheck -tags e2e_idp ./...
 
 test:
 	$(GO) test ./...
@@ -74,7 +76,8 @@ check: vet staticcheck sqlc-check test scripts-test
 # The AppArmor VM (milestone 5, decision 7): CFA_EXEC is the command prefix that runs a command
 # in the VM, CFA_HOST the ssh target of the Incus host that holds it. Also no defaults.
 # The AlmaLinux 9 VM (milestone 6, decision 11): CFE_EXEC and CFE_HOST, the same way. Also no defaults.
-export CFT_EXEC INCUS_HOST CFA_EXEC CFA_HOST CFE_EXEC CFE_HOST
+# The identity-provider container (milestone 6b, decision 11): CFI_EXEC and CFI_HOST, the same way. Also no defaults.
+export CFT_EXEC INCUS_HOST CFA_EXEC CFA_HOST CFE_EXEC CFE_HOST CFI_EXEC CFI_HOST
 
 e2e:
 	@test -n "$(CFT_EXEC)" -a -n "$(INCUS_HOST)" || { echo "e2e: set CFT_EXEC and INCUS_HOST (environment or local.mk, see local.mk.example)" >&2; exit 1; }
@@ -100,6 +103,16 @@ e2e-el9:
 	$(MAKE) packages VERSION=0.6.0-e2e1
 	CFT_EXEC="$(CFE_EXEC)" INCUS_HOST="$(CFE_HOST)" CT=clamfleet-el9 SNAP=clean READY_FILE=/var/lib/clamav/bytecode.cvd \
 		$(GO) test -tags "e2e e2e_el9" -count=1 -timeout 40m -v -run 'TestEL9|TestSELinux' ./e2e/
+
+# OpenLDAP and Keycloak in the throwaway clamfleet-idp container (docs/testing.md "The IdP container"): the real
+# server signs users in against both. Part of the milestone 6b acceptance; `make e2e` does not run it. Without
+# CFI_EXEC and CFI_HOST it FAILS (it never skips). It is built with the e2e_idp tag and without e2e: this
+# container has no clamd, so the ClamAV suite's TestMain must not run. The same helpers read CFT_EXEC and
+# INCUS_HOST, which this target points at the container.
+e2e-idp:
+	@test -n "$(CFI_EXEC)" -a -n "$(CFI_HOST)" || { echo "e2e-idp: set CFI_EXEC and CFI_HOST (environment or local.mk, see local.mk.example and docs/testing.md)" >&2; exit 1; }
+	CFT_EXEC="$(CFI_EXEC)" INCUS_HOST="$(CFI_HOST)" CT=clamfleet-idp SNAP=clean \
+		$(GO) test -tags e2e_idp -count=1 -timeout 30m -v ./e2e/
 
 fixtures:
 	./deploy/test/capture-fixtures.sh

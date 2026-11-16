@@ -249,7 +249,7 @@ func (w *Web) totpConfirm(rw http.ResponseWriter, r *http.Request) {
 	err = w.Store.EnableTOTP(r.Context(), store.EnableTOTP{
 		UserID: p.UserID, ExpectedVersion: st.AuthVersion, Sealed: permanent, Step: step,
 		RecoveryHashes: hashRecoveryCodes(codes), SessionID: p.SessionID, KeepSession: p.TokenHash,
-	}, w.Now(), store.Audit{Kind: store.ActorUser, Actor: p.Email})
+	}, w.Now(), store.Audit{Kind: store.ActorUser, Actor: p.Actor()})
 	if errors.Is(err, store.ErrCredentialChanged) {
 		w.showTOTP(rw, r, http.StatusConflict, "", "Your account changed while you were setting this up. Nothing was saved. Start again.")
 		return
@@ -290,7 +290,7 @@ func (w *Web) totpRecoveryCodes(rw http.ResponseWriter, r *http.Request) {
 		w.errorPage(rw, r, http.StatusInternalServerError)
 		return
 	}
-	err = w.Store.ReplaceRecoveryCodes(r.Context(), p.UserID, hashRecoveryCodes(codes), w.Now(), store.Audit{Kind: store.ActorUser, Actor: p.Email})
+	err = w.Store.ReplaceRecoveryCodes(r.Context(), p.UserID, hashRecoveryCodes(codes), w.Now(), store.Audit{Kind: store.ActorUser, Actor: p.Actor()})
 	if errors.Is(err, store.ErrCredentialChanged) {
 		w.showTOTP(rw, r, http.StatusConflict, "", "Two-factor sign-in is not turned on, so there are no recovery codes to renew.")
 		return
@@ -318,7 +318,7 @@ func (w *Web) totpDisable(rw http.ResponseWriter, r *http.Request) {
 	if !w.reauthenticate(rw, r, p, func(status int, msg string) { w.showTOTP(rw, r, status, "", msg) }) {
 		return
 	}
-	err := w.Store.DisableTOTP(r.Context(), p.UserID, p.TokenHash, store.ActionTOTPDisable, w.Now(), store.Audit{Kind: store.ActorUser, Actor: p.Email})
+	err := w.Store.DisableTOTP(r.Context(), p.UserID, p.TokenHash, store.ActionTOTPDisable, w.Now(), store.Audit{Kind: store.ActorUser, Actor: p.Actor()})
 	if err != nil {
 		w.Log.Error("totp: cannot turn off", "error", err.Error())
 		w.errorPage(rw, r, http.StatusInternalServerError)

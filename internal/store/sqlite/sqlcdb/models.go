@@ -140,6 +140,16 @@ type HostTag struct {
 	Tag    string
 }
 
+type OidcLoginState struct {
+	TokenHash    []byte
+	State        string
+	Nonce        string
+	CodeVerifier string
+	NextPath     string
+	CreatedAt    int64
+	ExpiresAt    int64
+}
+
 type Report struct {
 	ID         int64
 	HostID     int64
@@ -177,6 +187,7 @@ type User struct {
 	TotpEnabledAt      sql.NullInt64
 	TotpLastStep       sql.NullInt64
 	TotpFailures       int64
+	ExternalName       sql.NullString
 }
 
 type UserLoginChallenge struct {

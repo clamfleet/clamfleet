@@ -4,8 +4,13 @@
 {{define "content"}}
 <h1>Account</h1>
 <div class="card" data-testid="account-page">
-  <p>Signed in as <strong>{{.Principal.Email}}</strong> ({{.Principal.Role}}).</p>
+  <p>Signed in as <strong>{{.Principal.Actor}}</strong> ({{.Principal.Role}}).</p>
+  {{if .Body.External}}
+  <p data-testid="account-external">Sign-in source: <strong data-testid="account-source">{{.Body.SourceLabel}}</strong>{{if .Body.ExternalName}}, user name <code>{{.Body.ExternalName}}</code>{{end}}.
+  This account is managed by your identity provider: its password, second factor and role are changed there.</p>
+  {{end}}
   {{if .Body.MustChange}}<p data-testid="must-change">You have a one-time password. Choose your own password to continue.</p>{{end}}
+  {{if not .Body.External}}
   <h2>Change password</h2>
   <form method="post" action="/account/password" data-testid="account-form">
     <input type="hidden" name="csrf_token" value="{{.CSRF}}">
@@ -18,6 +23,7 @@
     <p class="hint">At least 15 characters, at most 256 bytes. Length counts, not special characters: a few random words make a good password.</p>
     <p><button type="submit" class="primary" data-testid="account-submit">Change password</button></p>
   </form>
+  {{end}}
 </div>
 {{if .Body.TOTPLocal}}
 <div class="card" data-testid="account-totp-card">

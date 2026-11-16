@@ -44,6 +44,8 @@ type userRow struct {
 	AuthVersion        int64
 	TotpEnabledAt      sql.NullInt64
 	TotpFailures       int64
+	ExternalName       sql.NullString
+	ExternalID         sql.NullString
 }
 
 func toUser(r userRow) store.User {
@@ -52,7 +54,7 @@ func toUser(r userRow) store.User {
 		AuthSource: r.AuthSource, Disabled: r.DisabledAt.Valid, MustChange: r.PasswordMustChange != 0,
 		CreatedAt: time.Unix(r.CreatedAt, 0).UTC(), LastLoginAt: nullTime(r.LastLoginAt),
 		PasswordHash: r.PasswordHash.String, AuthVersion: r.AuthVersion,
-		TOTPEnabled: r.TotpEnabledAt.Valid, TOTPFailures: int(r.TotpFailures),
+		TOTPEnabled: r.TotpEnabledAt.Valid, TOTPFailures: int(r.TotpFailures), ExternalName: r.ExternalName.String, ExternalID: r.ExternalID.String,
 	}
 }
 
@@ -136,18 +138,39 @@ func (s *Store) ListUsers(ctx context.Context) ([]store.User, error) {
 	return out, nil
 }
 
+// UsersByExternalName implements store.UserStore.
+func (s *Store) UsersByExternalName(ctx context.Context, source, name string) ([]store.User, error) {
+	rows, err := sqlcdb.New(s.r).UsersByExternalName(ctx, sqlcdb.UsersByExternalNameParams{AuthSource: source, ExternalName: nullStr(name)})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]store.User, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, toUser(userRow(r)))
+	}
+	return out, nil
+}
+
 // CountUsers implements store.UserStore.
 func (s *Store) CountUsers(ctx context.Context) (int64, error) {
 	return sqlcdb.New(s.r).CountUsers(ctx)
 }
 
-// userEmail reads the email inside a write transaction, for the audit target.
+// userEmail reads the name of the user inside a write transaction, for the audit target: the
+// email, or "<source>:<external name>" for an external user without one (an audit row with an empty
+// target would say nothing about whom it concerns).
 func userEmail(ctx context.Context, q *sqlcdb.Queries, id int64) (string, error) {
 	u, err := q.UserByID(ctx, id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", store.ErrNotFound
 	}
-	return u.Email.String, err
+	if err != nil {
+		return "", err
+	}
+	if u.Email.String == "" {
+		return u.AuthSource + ":" + u.ExternalName.String, nil
+	}
+	return u.Email.String, nil
 }
 
 // SetPassword implements store.UserStore.
@@ -297,7 +320,7 @@ func (s *Store) SessionByTokenHash(ctx context.Context, hash []byte, now time.Ti
 	return store.SessionPrincipal{
 		SessionID: r.ID, UserID: r.UserID, Email: r.Email.String, Name: r.DisplayName.String, Role: r.Role,
 		CSRF: r.CsrfToken, MustChange: r.PasswordMustChange != 0, LastSeen: time.Unix(r.LastSeenAt, 0).UTC(),
-		AuthSource: r.AuthSource, TOTPEnabled: r.TotpEnabledAt.Valid,
+		AuthSource: r.AuthSource, TOTPEnabled: r.TotpEnabledAt.Valid, ExternalName: r.ExternalName.String,
 	}, nil
 }
 

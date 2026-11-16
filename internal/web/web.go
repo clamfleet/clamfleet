@@ -77,6 +77,14 @@ type Deps struct {
 	ClientIP func(r *http.Request) string
 	// LocalEnabled is auth.local.enabled: with false the login form refuses.
 	LocalEnabled bool
+	// LDAP signs users in against a directory; nil means auth.ldap is off.
+	LDAP Directory
+	// OIDC signs users in through an OpenID Connect provider; nil means auth.oidc is off.
+	OIDC OIDCProvider
+	// OIDCName is the text of the single sign-on button (auth.oidc.display_name).
+	OIDCName string
+	// OIDCStarts bounds the sign-ins one client IP may have in progress; nil means unbounded (tests of other things).
+	OIDCStarts *webauth.StartLimiter
 	// TOTPRequired is auth.local.totp_required: it changes the wording of the TOTP
 	// pages and forbids turning TOTP off (the gate itself is in webauth.Manager).
 	TOTPRequired bool
@@ -106,7 +114,7 @@ func New(d Deps) *Web {
 		// actions builds the data of the shared host_actions template.
 		"actions": func(name string, hasToken bool, csrf string) hostAction { return hostAction{name, hasToken, csrf} },
 	}
-	for _, p := range []string{"login", "login_totp", "fleet", "host", "admin_hosts", "token_once", "account", "account_totp", "totp_setup", "recovery_codes", "admin_alerts", "alert_target", "secret_once", "alert_test_result", "events", "error"} {
+	for _, p := range []string{"login", "login_totp", "fleet", "host", "admin_hosts", "token_once", "account", "account_totp", "sso_redirect", "totp_setup", "recovery_codes", "admin_alerts", "alert_target", "secret_once", "alert_test_result", "events", "error"} {
 		t := template.New(p).Funcs(funcs)
 		files := []string{"templates/layout.html", "templates/" + p + ".html"}
 		if p == "fleet" {
@@ -135,6 +143,8 @@ func (w *Web) Handlers() map[string]http.HandlerFunc {
 		"GET /static/{file}":                      w.static,
 		"GET /login":                              w.loginPage,
 		"POST /login":                             w.loginSubmit,
+		"POST /login/oidc":                        w.oidcStart,
+		"GET /login/oidc/callback":                w.oidcCallback,
 		"GET /login/totp":                         w.loginTOTPPage,
 		"POST /login/totp":                        w.loginTOTPSubmit,
 		"POST /logout":                            w.logout,
@@ -284,7 +294,8 @@ func (w *Web) errorPage(rw http.ResponseWriter, r *http.Request, status int) {
 		Status     int
 		StatusText string
 		Message    string
-	}{status, http.StatusText(status), msg}
+		TestID     string
+	}{status, http.StatusText(status), msg, ""}
 	w.render(rw, status, "error", w.newView(r, fmt.Sprintf("%d %s", status, http.StatusText(status)), "", body))
 }
 

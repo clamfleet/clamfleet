@@ -438,6 +438,60 @@ admin@fixture.example" without a page load and with no console or CSP error; a r
 is one lower and `fleet-open-<host>` follows. A viewer's page has no `event-ack-*` or `events-bulk-*` at all,
 and a `POST /events/<id>/ack` from the page context with the CSRF token answers 403.
 
+### SSO in the fixture (`--sso`)
+
+`bin/webfixture --sso` starts two in-process fakes on loopback next to the server and switches `auth.oidc` and `auth.ldap`
+on in the real server's configuration (the secrets are in files in the temp directory, as in production):
+`internal/testoidc`, an OpenID Connect provider, and `internal/testldap`, a directory with one user. `fixture.json` gains `sso`:
+`issuer_url`, `button_text`, the provider's user keys `oidc_admin` (`sso-admin`), `oidc_viewer` (`sso-viewer`) and
+`oidc_norole` (`sso-norole`, who has no groups claim at all), and `ldap_admin` (`ldap-admin`, a user name, with a password).
+
+**Two sites.** The console is `https://127.0.0.1:<port>` and the provider `https://localhost:<port2>` (the test certificate
+covers both names). Ports do not make sites different: with both on 127.0.0.1 even a `SameSite=Strict` cookie would be sent
+and the browser test of the Lax state cookie would pass for nothing. `sso.spec.ts` asserts first that the callback request
+carried `Sec-Fetch-Site: cross-site` (read with Playwright's `request.allHeaders()`; the plan had the fixture record it, but
+the browser is the one place that sees the header it actually sent).
+
+`make e2e-web` starts both of its fixtures with `--sso`, so every local sign-in and two-factor spec runs with the SSO button
+and the "Email or user name" field present. The state cookie, the redirect chain, the cross-origin check on the start form and
+the button are only provable in a browser: the first run of `sso.spec.ts` found that Chromium blocks a redirect out of a form
+under `form-action 'self'` (see [auth.md](auth.md)).
+
+## The IdP container (`make e2e-idp`)
+
+OpenLDAP and Keycloak in a throwaway Debian 13 container, `clamfleet-idp`, on the Incus host (milestone 6b, decision 11). The
+real `clamfleet-server` runs **inside** it, so nothing is exposed: slapd is on `127.0.0.1:389`, Keycloak on `127.0.0.1:8080`
+and the console on `127.0.0.1:8443`, all inside the container. Set `CFI_EXEC` (the command prefix that runs a command in it, such
+as `ssh <host> sudo incus exec clamfleet-idp --`) and `CFI_HOST` (the ssh target of the Incus host) in the environment or in
+`local.mk`; without them the target **fails**, it never skips. The container has a snapshot `clean`, restored before every
+scenario by `deploy/test/idp-prepare.sh`, which waits until both providers answer (Keycloak's dev mode needs about a minute).
+
+What the container holds (made by hand by the sysadmin agent on 2026-11-16, **not** scripted in the repository: if you rebuild it,
+rebuild exactly this and take a new `clean` snapshot). All credentials are test-only and are in `e2e/idp_e2e_test.go`.
+
+- **OpenLDAP** (Debian's slapd) with the memberOf overlay, `ldap://127.0.0.1:389` with **StartTLS** (use the IP, not `localhost`: the
+  certificate names `127.0.0.1`), the test CA in `/etc/clamfleet-idp/ca.crt`. Base `dc=example,dc=test`, `ou=people` with `alice`,
+  `bob` and `carol` (password `<name>-test-pw`, mail `<name>@example.test`), `ou=groups` with `cn=clamfleet-admins` (alice) and
+  `cn=clamfleet-viewers` (bob), a read-only service account `cn=clamfleet-ro,dc=example,dc=test`. Carol is in no group.
+- **Keycloak 26.8.2** in `start-dev` on Debian's OpenJDK, bound to loopback (`keycloak.service`, the bootstrap administrator
+  in `/etc/keycloak.env`). Realm `clamfleet`, a confidential client `clamfleet` with **PKCE S256 required** and the redirect URIs
+  `http(s)://127.0.0.1:8443/*`, a Group Membership mapper that puts the short group names in `groups`, and the same three users
+  and two groups. A user in no group gets **no** `groups` claim (missing, not empty).
+- Gotchas of the build: the Incus host's default profile has no disk or network, so `incus launch -s default` and add a NIC on
+  `incusbr0`; switch LLMNR off (systemd-resolved listens on 0.0.0.0:5355 otherwise); Keycloak's login form action contains `&amp;`.
+
+The suite is built with `-tags e2e_idp` and **without** the `e2e` tag (this container has no clamd, and the ClamAV suite's
+`TestMain` restores a ClamAV snapshot). It pushes the server and `e2e/idpdriver`, a small Go program that plays a browser: it
+posts the console's forms and, for OIDC, submits Keycloak's login form (the action is parsed out of the page and unescaped).
+
+- `TestLDAPAgainstOpenLDAP`: sign-in over StartTLS; admin, viewer, and a user in no group refused with the "no role" page and no
+  user created; a wrong password; by uid and by mail; `entryUUID` is the stored identity; after alice moves between groups the next
+  sign-in has the new role on the same row.
+- `TestOIDCAgainstKeycloak`: the code flow with PKCE; the role from the `groups` claim; carol (no claim) refused as "no role";
+  a wrong password never leaves Keycloak; the identity is issuer + subject; after the group changes in Keycloak (through `kcadm.sh`)
+  the next sign-in has the new role.
+- Active Directory is **not** tested (no Samba AD DC): `auth.md` marks it "configuration documented, untested".
+
 ## Re-recording fixtures (`make fixtures`)
 
 `deploy/test/capture-fixtures.sh` re-records `internal/agent/testdata` from the container

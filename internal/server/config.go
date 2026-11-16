@@ -23,6 +23,7 @@ import (
 	"github.com/clamfleet/clamfleet/internal/config"
 	"github.com/clamfleet/clamfleet/internal/health"
 	"github.com/clamfleet/clamfleet/internal/secrets"
+	"github.com/clamfleet/clamfleet/internal/store"
 )
 
 // DefaultConfigPath is used when neither --config nor CLAMFLEET_SERVER_CONFIG is set.
@@ -83,6 +84,10 @@ const packagedStateDir = "/var/lib/clamfleet-server"
 // that brings one would refuse to start).
 func (c Config) Warnings() []string {
 	var w []string
+	if c.Auth.LDAP.Enabled && c.Auth.Local.TOTPRequired {
+		// Decision 21: LDAP has no second factor ClamFleet can enforce.
+		w = append(w, "auth.ldap is enabled and auth.local.totp_required is on: LDAP sign-ins are password-only (totp_required covers local accounts); use auth.oidc where a second factor matters")
+	}
 	d := filepath.Clean(c.Backup.Dir)
 	if d != packagedStateDir && !strings.HasPrefix(d, packagedStateDir+"/") {
 		w = append(w, fmt.Sprintf("backup.dir %s is outside %s: under the packaged systemd units (ProtectSystem=strict) it is read-only unless a drop-in adds ReadWritePaths=%s; see docs/operations.md", d, packagedStateDir, d))
@@ -352,6 +357,9 @@ func (c Config) PublicBase() string { return strings.TrimRight(c.PublicURL, "/")
 // on at the same time later (M6): a local break-glass admin next to SSO.
 type Auth struct {
 	Local AuthLocal `yaml:"local"`
+	// LDAP and OIDC are external sign-in (milestone 6b); both off by default.
+	LDAP AuthLDAP `yaml:"ldap"`
+	OIDC AuthOIDC `yaml:"oidc"`
 	// SessionMaxAge is the absolute lifetime of a session; SessionIdle ends it
 	// after that long without a request (htmx polls count as activity, so an open
 	// fleet tab stays signed in until SessionMaxAge).
@@ -371,6 +379,13 @@ type AuthLocal struct {
 	// first use: until a user has enrolled, their password alone can enrol (docs/web.md).
 	// Turning it on needs a usable secret_key_file (the server refuses to start without).
 	TOTPRequired bool `yaml:"totp_required"`
+}
+
+// EnabledSources is the set of identity sources switched on in this configuration,
+// which is what may hold a console session (webauth.Manager.Sources). A provider that
+// is switched off ends its users' sessions at their next request.
+func (a Auth) EnabledSources() map[string]bool {
+	return map[string]bool{store.AuthLocal: a.Local.Enabled, store.AuthLDAP: a.LDAP.Enabled, store.AuthOIDC: a.OIDC.Enabled}
 }
 
 // Validate checks the auth keys. The bounds keep a typo from creating sessions
@@ -465,7 +480,7 @@ func DefaultConfig() Config {
 			EvalInterval: 60 * time.Second, RequireVirusEvent: true,
 		},
 		Auth: Auth{
-			Local:         AuthLocal{Enabled: true},
+			Local: AuthLocal{Enabled: true}, LDAP: defaultAuthLDAP(), OIDC: defaultAuthOIDC(),
 			SessionMaxAge: 12 * time.Hour, SessionIdle: time.Hour, CookieSecure: true,
 		},
 		Alert: Alert{
@@ -513,6 +528,12 @@ func (c Config) Validate() error {
 		return err
 	}
 	if err := c.Auth.Validate(); err != nil {
+		return err
+	}
+	if err := c.Auth.LDAP.Validate(); err != nil {
+		return err
+	}
+	if err := c.Auth.OIDC.Validate(c.PublicURL); err != nil {
 		return err
 	}
 	if err := c.validateAlerting(); err != nil {

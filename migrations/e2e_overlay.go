@@ -31,7 +31,7 @@ func init() {
 			m[p] = &fstest.MapFile{Data: b}
 			return nil
 		})
-		m["sqlite/00007_e2e_overlay.sql"] = &fstest.MapFile{Data: []byte("-- +goose Up\nCREATE TABLE e2e_overlay_marker (id INTEGER PRIMARY KEY);\n-- +goose Down\nDROP TABLE e2e_overlay_marker;\n")}
+		m["sqlite/00008_e2e_overlay.sql"] = &fstest.MapFile{Data: []byte("-- +goose Up\nCREATE TABLE e2e_overlay_marker (id INTEGER PRIMARY KEY);\n-- +goose Down\nDROP TABLE e2e_overlay_marker;\n")}
 		return m
 	}
 }

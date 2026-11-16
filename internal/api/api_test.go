@@ -542,6 +542,8 @@ func TestRouteTable(t *testing.T) {
 		{Method: "GET", Path: "/static/{file}", Auth: server.AuthPublic},
 		{Method: "GET", Path: "/login", Auth: server.AuthPublic},
 		{Method: "POST", Path: "/login", Auth: server.AuthPublic},
+		{Method: "POST", Path: "/login/oidc", Auth: server.AuthPublic},
+		{Method: "GET", Path: "/login/oidc/callback", Auth: server.AuthPublic},
 		{Method: "GET", Path: "/login/totp", Auth: server.AuthPublic},
 		{Method: "POST", Path: "/login/totp", Auth: server.AuthPublic},
 		{Method: "POST", Path: "/logout", Auth: server.AuthUser},
@@ -614,6 +616,9 @@ func TestRouteTable(t *testing.T) {
 			want := 200
 			if rt.Path == "/login/totp" {
 				want = 303 // public, but needs a login challenge: without one it redirects to /login
+			}
+			if strings.HasPrefix(rt.Path, "/login/oidc") {
+				want = 404 // public, but OIDC is off by default: the routes exist and say "not available"
 			}
 			if r = e.do(rt.Method, path, "", nil); r.status != want {
 				t.Errorf("%s %s: status %d, want %d", rt.Method, rt.Path, r.status, want)

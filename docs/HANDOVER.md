@@ -87,10 +87,12 @@ Prefer the standard library. Add a dependency only where listed.
 | Templates | `html/template` |
 | Front end | htmx, vendored and embedded, no build step |
 | Email | `net/smtp` (stdlib) plus a small in-repo client layer (LOGIN auth, MIME). Decision: M4 plan, decision 11. |
-| Metrics | `prometheus/client_golang` |
+| Metrics | A small in-repo text exposition in the Prometheus format (M6 decision 6), no dependency |
 | Config | YAML (`gopkg.in/yaml.v3`) with environment variable overrides |
 | Logging | `log/slog`, JSON output |
-| Release | `goreleaser` with `nfpm` |
+| LDAP | `github.com/go-ldap/ldap/v3` (M6 decision 16) |
+| OIDC | Standard library only: authorization code flow with PKCE, no JOSE library (M6 decision 17) |
+| Release | `nfpm` (pinned, via `go run`) now, `goreleaser` in 6c |
 
 ## 6. Agent
 
@@ -119,7 +121,7 @@ Prefer the standard library. Add a dependency only where listed.
 ### 6.4 Scan wrapper
 
 - Subcommand `clamfleet-agent scan` runs `clamdscan` with configured paths and writes a summary (start, finish, exit code, files scanned, infected, errors) to `/var/lib/clamfleet/last_scan.json`.
-- Scheduling is done by a systemd timer shipped in the package and disabled by default.
+- Scheduling is a systemd timer shipped disabled. The scan never starts clamd. `scanned` comes from clamdscan's per-file lines.
 
 ### 6.5 Spool
 
@@ -153,7 +155,7 @@ All endpoints under `/v1/`. JSON over HTTPS.
 | `POST /v1/report` | Heartbeat with full current state |
 | `POST /v1/event` | Single detection event |
 | `GET /healthz` | Server liveness |
-| `GET /metrics` | Prometheus metrics (fleet counts per state, per-host signature age, last seen) |
+| `GET /metrics` | Prometheus metrics (fleet counts per state, per-host signature age, last seen). Off by default; when on, it needs a bearer token read from a file |
 
 Responses: `202` on success, `400` on invalid payload, `401` on bad token. Unknown fields in payloads are ignored so that newer agents work with older servers.
 
@@ -218,19 +220,20 @@ foreign_keys=ON
 | --- | --- | --- |
 | `hosts` | id, name (unique), token_hash, first_seen, last_seen, state, state_reason, last_report (JSON text) | Until deleted by an administrator |
 | `host_tags` | host_id, tag | With host |
-| `reports` | id, host_id, ts, payload (JSON text) | Configurable, default 30 days, range 14 to 90 |
+| `reports` | id, host_id, ts, payload (JSON text) | `reports` 30 days (14 to 90) |
 | `events` | id, host_id, ts, path, signature, ack_by, ack_at | Default 12 months |
-| `state_changes` | id, host_id, ts, from_state, to_state, reason | Default 12 months |
+| `state_changes` | id, host_id, ts, from_state, to_state, reason | 365 days (30 to 3650); never while an alert is pending |
 | `alert_targets` | id, type (email or webhook), config (JSON), min_severity, tag_filter | Until deleted |
-| `alert_log` | id, target_id, state_change_id or event_id, ts, status, error | 90 days |
-| `users` | Only if local accounts are added; see section 10 | n/a |
+| `alert_log` | id, target_id, state_change_id or event_id, ts, status, error | 90 days (30 to 3650) |
+| `audit_log` | id, ts, actor, action, target, detail | 365 days (90 to 3650) |
+| `users` | Local, `ldap` and `oidc` sources; see section 10 | n/a |
 
 The 12-month defaults for `events` and `state_changes` suit common audit and log-retention requirements. They must be configurable.
 
 ### 8.3 Maintenance
 
 - Daily retention job deletes in batches (for example 5000 rows per statement) and runs `PRAGMA optimize` afterwards.
-- Backup: CLI command and optional daily job using `VACUUM INTO '<path>'`. Litestream support is documented, not built in.
+- Backup: a `backup` command using `VACUUM INTO` (with `--keep`), plus a timer that ships disabled, and an automatic backup before migrations. Restore steps are in docs/operations.md. Litestream support is documented, not built in.
 
 ## 9. Health evaluation
 
@@ -264,37 +267,13 @@ Server-rendered HTML with htmx. No JavaScript build step.
 | Alert targets | Create, edit, test, delete targets. |
 | Hosts admin | Register host, rotate token, delete host. |
 
-Authentication: pluggable, with three modes selected in config.
+Authentication: one config subtree per provider (M3 decision 3), several on at once.
 
-- `local`: built-in accounts with bcrypt passwords, created by a server CLI command. Default, so the project works with no external identity system.
-- `ldap`: LDAP bind (works with Active Directory, OpenLDAP, FreeIPA).
-- `oidc`: any OpenID Connect provider.
+- `local`: built-in accounts with argon2id passwords, created by a server CLI command. Default, so the project works with no external identity system. TOTP applies to local accounts only.
+- `ldap`: one directory, search then bind (works with OpenLDAP; Active Directory is documented and untested). The login form takes an email or a user name; a local account with that exact email is tried first.
+- `oidc`: one OpenID Connect provider, by a button that starts an authorization code flow with PKCE.
 
-Two roles: `viewer` (read only) and `admin`. For `ldap` and `oidc`, roles are mapped from group membership or a claim, set in config.
-
-## 11. Alerting
-
-- Sources: rows in `state_changes` and new rows in `events`.
-- Alerts fire on transitions only, including recovery to OK.
-- Cooldown per host and target, default 15 minutes, so a flapping host does not flood targets. Changes inside the cooldown are coalesced: at the end of the window one alert reports the current state if it differs from the last one sent, so a recovery is delayed by at most one cooldown and never lost. Detections are never held by the cooldown. Per target, the first N detections of a host in 10 minutes (default 10; 0 = all) are sent one by one; the rest in that window are sent as one summary alert at its end. Every detection is stored and shown on the events page. Summaries are not subject to the cooldown; held detections of a target whose detections are switched off are not summarised.
-- Each target has a minimum severity and an optional tag filter.
-- Email: SMTP with STARTTLS (default, port 587, mandatory once chosen) or implicit TLS (port 465). Plaintext SMTP only to a relay on a loopback or private address, and credentials only over TLS or to loopback (section 13). PLAIN or LOGIN auth; the password is read from a protected file. One message per recipient. Plain text body, quoted-printable.
-- Webhook: HTTP POST with JSON payload below. Optional HMAC-SHA256 signature header using a per-target secret. Retry with exponential backoff, up to 5 attempts. Every attempt is written to `alert_log`. Email deliveries use the same schedule (5 attempts over about 81 minutes). An email counts as delivered at the server's positive reply to the end of DATA.
-
-```json
-{
-  "kind": "state_change",
-  "host": "app01",
-  "tags": ["web", "prod"],
-  "from": "OK",
-  "to": "CRIT",
-  "reason": ["clamd not responding"],
-  "ts": "2026-11-12T10:05:00Z",
-  "url": "https://clamfleet.example/hosts/app01"
-}
-```
-
-For detections, `kind` is `detection` and the payload carries `path` and `signature` instead of `from`, `to` and `reason`.
+Two roles: `viewer` (read only) and `admin`. For `ldap` and `oidc`, the role is mapped from group membership or a claim at every sign-in, and a user with no matching group has no access. External accounts are created at first sign-in and are never linked to a local account. See docs/auth.md.
 
 ## 12. Configuration
 
@@ -304,12 +283,14 @@ Server, `/etc/clamfleet/server.yaml`:
 listen: ":8443"
 tls: {cert: /etc/clamfleet/tls.crt, key: /etc/clamfleet/tls.key}
 db_path: /var/lib/clamfleet/clamfleet.db
-retention: {events_days: 365}   # reports_days and state_changes_days arrive in milestone 6 (the strict config decoder refuses keys that do not exist yet)
+retention: {reports_days: 30, events_days: 365, state_changes_days: 365, alert_log_days: 90, audit_days: 365}
+backup: {dir: /var/lib/clamfleet-server/backups, keep: 7}
+metrics: {enabled: false, token_file: /etc/clamfleet/metrics.token}
 health: {stale_factor: 3, daily_warn_hours: 24, daily_crit_hours: 72, behind_warn: 2}
 public_url: https://clamfleet.example   # links in alerts
 alert: {cooldown: 15m, webhook: {timeout: 10s, allow_private: true, allow_loopback: false}}
 smtp: {host: smtp.example, port: 587, tls: starttls, from: clamfleet@example, username: clamfleet, password_file: /etc/clamfleet/smtp.pass}
-auth: {mode: local}   # or ldap / oidc, see section 10
+auth: {local: {enabled: true}, ldap: {enabled: false}, oidc: {enabled: false}}   # one subtree per provider; every key is in docs/configuration.md and docs/auth.md
 ```
 
 Agent, `/etc/clamfleet/agent.yaml`:
@@ -346,7 +327,7 @@ Every setting can be overridden by an environment variable (`CLAMFLEET_` prefix)
 | 3 | Health evaluator, `state_changes`, fleet page | Stopping clamd turns the host CRIT within one interval. Stopping the agent turns it STALE after 3 intervals. |
 | 4 | Email and webhook alerting | Each transition yields at most one logical alert per target (changes within the cooldown are coalesced into one); a recovery alert is sent; the cooldown is respected; delivery is at least once (receivers deduplicate on the alert id); every attempt and every failure is recorded in `alert_log`. |
 | 5 | Detection events, spool, events page, acknowledgement | An EICAR test file produces an alert within 30 seconds under the conditions of docs/detections.md, on Debian 13 with AppArmor enforcing (`make e2e-apparmor`) and in the ClamAV container. The event survives server downtime via the spool. RHEL 9 and SELinux are verified in milestone 6. |
-| 6 | Packaging, LDAP and OIDC login, `/metrics`, retention job, backup command | .deb and .rpm install and start cleanly. Old rows are removed per config. |
+| 6 | Split into 6a (packaging, retention, backup, `/metrics`, TLS reload, `clamfleet-agent scan` and its timer), 6b (LDAP and OIDC sign-in) and 6c (CI and releases) | .deb and .rpm install and start cleanly. Old rows are removed per config. Verified on Debian 13 (container and AppArmor VM) and AlmaLinux 9 with SELinux enforcing. |
 
 General requirements for every milestone:
 
@@ -372,8 +353,8 @@ These are not decided. The agent must ask before implementing anything that depe
 1. Licence: Apache-2.0 or MIT (permissive), or GPL-2.0 (matches ClamAV itself). Must be decided before the first public commit.
 2. Final project name. Check for conflicts on GitHub, package registries and the ClamAV trademark before publishing.
 3. Decided (M4 decision 17): not in v1; webhook JSON to a collector, and one JSON log line per alert for journald forwarders.
-4. Whether to support a container image for the server in v1, in addition to .deb and .rpm.
-5. Supported distribution list for the agent beyond Debian 12 and RHEL 9.
+4. Decided (M6 decision 13): no container image in v1.
+5. Decided: Debian 13 and the RHEL 9 family (tested on AlmaLinux 9); Debian 12 is untested (M6 decision 12).
 
 ## 16. Instructions for the implementing agent
 

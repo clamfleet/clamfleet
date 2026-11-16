@@ -615,3 +615,55 @@ func TestM5BinaryRefusesAMigration00006Database(t *testing.T) {
 		t.Fatalf("an M5 binary must refuse the database: %v", err)
 	}
 }
+
+// Plan 4.14: 00007 adds users.external_name and the one-time OIDC state table, goes down and up
+// again, and keeps the rows of existing users.
+func TestMigration00007ExternalAuth(t *testing.T) {
+	ctx := context.Background()
+	s := openTemp(t)
+	if v, err := s.SchemaVersion(ctx); err != nil || v < 7 {
+		t.Fatalf("schema version %d, %v: the test needs 00007 applied", v, err)
+	}
+	for _, c := range []string{`SELECT external_name FROM users LIMIT 1`, `SELECT token_hash, state, nonce, code_verifier, next_path, created_at, expires_at FROM oidc_login_states LIMIT 1`} {
+		rows, err := s.w.Query(c)
+		if err != nil {
+			t.Fatalf("%s: %v", c, err)
+		}
+		rows.Close()
+	}
+	if _, err := s.prov.DownTo(ctx, 6); err != nil {
+		t.Fatal(err)
+	}
+	var n int
+	if err := s.w.QueryRow(`SELECT count(*) FROM sqlite_master WHERE name='oidc_login_states'`).Scan(&n); err != nil || n != 0 {
+		t.Fatalf("oidc_login_states survived the down migration (%d, %v)", n, err)
+	}
+	if _, err := s.w.Exec(`SELECT external_name FROM users`); err == nil {
+		t.Fatal("users.external_name survived the down migration")
+	}
+	if err := s.Migrate(ctx); err != nil {
+		t.Fatalf("up again: %v", err)
+	}
+}
+
+// Rule: an M6a binary (migrations up to 00006) must refuse a 00007 database, like every earlier migration.
+func TestM6aBinaryRefusesAMigration00007Database(t *testing.T) {
+	ctx := context.Background()
+	s := openTemp(t)
+	old := fstest.MapFS{}
+	for _, n := range []string{"00001_init.sql", "00002_health_users.sql", "00003_totp.sql", "00004_alerting.sql", "00005_events.sql", "00006_retention.sql"} {
+		b, err := migrations.SQLite.ReadFile("sqlite/" + n)
+		if err != nil {
+			t.Fatal(err)
+		}
+		old[n] = &fstest.MapFile{Data: b}
+	}
+	prov, err := goose.NewProvider(goose.DialectSQLite3, s.w, old, goose.WithDisableGlobalRegistry(true))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m6a := &Store{path: s.path, w: s.w, r: s.r, prov: prov}
+	if err := m6a.checkNotNewer(ctx); err == nil || !strings.Contains(err.Error(), "newer than this binary supports") {
+		t.Fatalf("an M6a binary must refuse the database: %v", err)
+	}
+}

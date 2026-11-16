@@ -286,7 +286,7 @@ func (w *Web) ackEvent(rw http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if acked {
-		w.Log.Info("event acknowledged", "event_id", id, "host", row.Host, "actor", p.Email)
+		w.Log.Info("event acknowledged", "event_id", id, "host", row.Host, "actor", p.Actor())
 	}
 	ret := safeReturn(r.PostForm.Get("return"))
 	if r.Header.Get("HX-Request") == "true" {
@@ -320,7 +320,7 @@ func (w *Web) ackEvents(rw http.ResponseWriter, r *http.Request) {
 		w.errorPage(rw, r, http.StatusInternalServerError)
 		return
 	}
-	w.Log.Info("events acknowledged in bulk", "count", n, "upto", upto, "actor", p.Email)
+	w.Log.Info("events acknowledged in bulk", "count", n, "upto", upto, "actor", p.Actor())
 	q := eventsQuery(store.EventFilter{Host: f.Host, Signature: f.Signature, Ack: store.AckOpen})
 	q.Set("acked", strconv.FormatInt(n, 10))
 	q.Set("of", strconv.FormatInt(max(expected, n), 10))

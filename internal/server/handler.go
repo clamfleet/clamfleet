@@ -20,6 +20,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/netip"
+	"reflect"
 	"time"
 
 	"github.com/clamfleet/clamfleet/internal/agentauth"
@@ -69,6 +70,10 @@ func Routes() []Route {
 		{"GET", "/static/{file}", AuthPublic},
 		{"GET", "/login", AuthPublic},
 		{"POST", "/login", AuthPublic},
+		// OpenID Connect (6b). Public class: no session exists yet. The start form is covered by the
+		// cross-origin check; the callback is a GET that only proceeds with the state cookie.
+		{"POST", "/login/oidc", AuthPublic},
+		{"GET", "/login/oidc/callback", AuthPublic},
 		// The second sign-in step. Public class: the caller has no session yet; the
 		// handlers require a valid login challenge (cookie) and answer 303 to /login without one.
 		{"GET", "/login/totp", AuthPublic},
@@ -144,12 +149,20 @@ type Deps struct {
 	// Alerts is what the alert pages need (server.BuildAlerts); nil means a strict
 	// policy, no email and no test send.
 	Alerts *Alerts
+	// LDAP is the directory sign-in (BuildLDAP; NewHandlerFromConfig sets it from the
+	// configuration); nil means LDAP is off.
+	LDAP web.Directory
+	// OIDC is the OpenID Connect sign-in (BuildOIDC; NewHandlerFromConfig sets it); nil means OIDC is off.
+	OIDC web.OIDCProvider
 	// MetricsToken is the bearer token of GET /metrics; nil means metrics are off
 	// and the route answers 404. NewHandlerFromConfig reads it from metrics.token_file.
 	MetricsToken []byte
 	// FailedDeliveryWindow bounds the failed deliveries /metrics counts (alert_log_days); 0 means 90 days.
 	FailedDeliveryWindow time.Duration
 }
+
+// MaxOIDCStartsPerIP is how many OIDC sign-ins one client IP may have in progress at once.
+const MaxOIDCStartsPerIP = 15
 
 // NewHandlerFromConfig is NewHandler with the config-derived settings
 // (trusted_proxies) applied to d, so the binary has one call that cannot
@@ -161,6 +174,16 @@ func NewHandlerFromConfig(c Config, d Deps) (http.Handler, error) {
 	}
 	d.TrustedProxies = proxies
 	d.Console = c.Auth
+	if dir, err := BuildLDAP(c); err != nil {
+		return nil, err
+	} else if dir != nil {
+		d.LDAP = dir
+	}
+	if oc, err := BuildOIDC(c, d.Now); err != nil {
+		return nil, err
+	} else if oc != nil {
+		d.OIDC = oc
+	}
 	if d.MetricsToken, err = loadMetricsToken(c.Metrics); err != nil {
 		return nil, err
 	}
@@ -174,7 +197,7 @@ func NewHandler(d Deps) http.Handler {
 	if auth == nil {
 		auth = agentauth.Bearer{Lookup: storeLookup(d.Store)}
 	}
-	if d.Console == (Auth{}) {
+	if reflect.DeepEqual(d.Console, Auth{}) { // Auth holds slices: not comparable with ==
 		d.Console = DefaultConfig().Auth
 	}
 	if d.Hasher == nil {
@@ -193,10 +216,13 @@ func NewHandler(d Deps) http.Handler {
 	sessions := &webauth.Manager{
 		Store: d.Store, Now: d.Now, MaxAge: d.Console.SessionMaxAge, Idle: d.Console.SessionIdle,
 		Secure: d.Console.CookieSecure, Log: d.Log, TOTPRequired: d.Console.Local.TOTPRequired,
+		Sources: sourcesFor(d),
 	}
 	console := web.New(web.Deps{
 		Store: d.Store, Auth: sessions, Hasher: d.Hasher, Throttle: webauth.NewThrottle(d.Now), TOTPThrottle: webauth.NewThrottle(d.Now), Keys: d.Keys, Now: d.Now, Log: d.Log,
-		ClientIP:     func(r *http.Request) string { return api.ClientIP(r, d.TrustedProxies) },
+		ClientIP: func(r *http.Request) string { return api.ClientIP(r, d.TrustedProxies) },
+		LDAP:     d.LDAP, OIDC: d.OIDC, OIDCName: d.Console.OIDC.DisplayName,
+		OIDCStarts:   webauth.NewStartLimiter(d.Now, MaxOIDCStartsPerIP, webauth.OIDCStateLifetime),
 		LocalEnabled: d.Console.Local.Enabled, TOTPRequired: d.Console.Local.TOTPRequired, Version: d.Version,
 		Alerts: alertDeps(d.Alerts),
 	})
@@ -248,6 +274,16 @@ func NewHandler(d Deps) http.Handler {
 		}
 	}
 	return api.RequestLog(d.Log, d.Now, d.TrustedProxies)(mux)
+}
+
+// sourcesFor is the set of sources that may hold a session: enabled in the configuration AND
+// actually wired. A provider that is switched on but was never built (a Deps without it) must
+// not leave its users' sessions valid, so the check fails closed.
+func sourcesFor(d Deps) map[string]bool {
+	s := d.Console.EnabledSources()
+	s[store.AuthLDAP] = s[store.AuthLDAP] && d.LDAP != nil
+	s[store.AuthOIDC] = s[store.AuthOIDC] && d.OIDC != nil
+	return s
 }
 
 // storeLookup adapts the store to agentauth.Lookup, translating "no such

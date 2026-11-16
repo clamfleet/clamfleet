@@ -36,13 +36,21 @@ const genericLoginError = "Invalid email or password."
 const maxLoginPassword = webauth.MaxPasswordLen
 
 type loginBody struct {
-	Next          string
-	NoUsers       bool
+	Next string
+	// NoUsers: a fresh install, nobody can sign in yet.
+	NoUsers bool
+	// LocalDisabled: neither a local password nor LDAP can sign in, so the form is hidden.
 	LocalDisabled bool
+	// LDAP: the identifier field reads "Email or user name" and accepts a name that is not an email.
+	LDAP bool
+	// OIDC: show the single sign-on button, labelled OIDCName.
+	OIDC     bool
+	OIDCName string
 }
 
 func (w *Web) loginView(r *http.Request, next, errMsg string) *view {
-	body := loginBody{Next: next, LocalDisabled: !w.LocalEnabled}
+	body := loginBody{Next: next, LocalDisabled: !w.LocalEnabled && w.LDAP == nil, LDAP: w.LDAP != nil,
+		OIDC: w.OIDC != nil, OIDCName: w.OIDCName}
 	// A hint, not a secret: on a fresh install the operator needs to know what to do.
 	if n, err := w.Store.CountUsers(r.Context()); err == nil && n == 0 {
 		body.NoUsers = true
@@ -79,11 +87,15 @@ func (w *Web) loginSubmit(rw http.ResponseWriter, r *http.Request) {
 		return
 	}
 	next := webauth.SanitizeNext(r.PostForm.Get("next"))
-	if !w.LocalEnabled {
+	if !w.LocalEnabled && w.LDAP == nil {
 		w.render(rw, http.StatusForbidden, "login", w.loginView(r, next, ""))
 		return
 	}
-	email := store.TruncateForAudit(r.PostForm.Get("email"))
+	// rawIdentifier is what was typed; email is the same cut to 254 bytes for the audit row, the throttle
+	// key and the local lookup. LDAP gets the RAW value: its own length check (256 bytes) must see the
+	// real length, and a cut one would turn an unusable 300-byte name into a valid search.
+	rawIdentifier := r.PostForm.Get("email")
+	email := store.TruncateForAudit(rawIdentifier)
 	password := r.PostForm.Get("password")
 	ip := w.ClientIP(r)
 
@@ -100,6 +112,21 @@ func (w *Web) loginSubmit(rw http.ResponseWriter, r *http.Request) {
 	outcome := webauth.Aborted // until there is a verdict: a server fault is nobody's failed guess
 	defer func() { done(outcome) }()
 
+	// Rule (decision 18): a local account with exactly this email is tried first, and then only the
+	// password check runs: a directory entry can never shadow a local break-glass admin. Everything
+	// else goes to LDAP when it is on. With LDAP off this is the M3 path unchanged.
+	if w.LDAP != nil {
+		local, err := w.isLocalAccount(r, email)
+		if err != nil {
+			w.Log.Error("login: store failed", "error", err.Error())
+			w.errorPage(rw, r, http.StatusInternalServerError)
+			return
+		}
+		if !local {
+			w.ldapLogin(rw, r, rawIdentifier, password, next, ip, &outcome)
+			return
+		}
+	}
 	user, reason, err := w.checkPassword(r, email, password)
 	if err != nil {
 		w.Log.Error("login: store or hasher failed", "error", err.Error())
@@ -243,8 +270,8 @@ func (w *Web) logout(rw http.ResponseWriter, r *http.Request) {
 		w.errorPage(rw, r, http.StatusInternalServerError)
 		return
 	}
-	if err := w.Store.RecordAudit(r.Context(), w.Now(), store.Audit{Kind: store.ActorUser, Actor: p.Email},
-		store.ActionUserLogout, store.TargetUser, p.Email, map[string]string{"ip": w.ClientIP(r)}); err != nil {
+	if err := w.Store.RecordAudit(r.Context(), w.Now(), store.Audit{Kind: store.ActorUser, Actor: p.Actor()},
+		store.ActionUserLogout, store.TargetUser, p.Actor(), map[string]string{"ip": w.ClientIP(r)}); err != nil {
 		w.Log.Error("cannot audit logout", "error", err.Error())
 	}
 	http.SetCookie(rw, webauth.ClearCookie(w.Auth.Secure))
@@ -253,7 +280,12 @@ func (w *Web) logout(rw http.ResponseWriter, r *http.Request) {
 }
 
 type accountBody struct {
-	MustChange bool
+	// External is true for a user of LDAP or OIDC: the page shows where the account comes from
+	// and has no password or two-factor card (the provider owns both).
+	External     bool
+	SourceLabel  string
+	ExternalName string
+	MustChange   bool
 	// TOTPLocal is false for users whose second factor is their identity provider's: no card.
 	TOTPLocal   bool
 	TOTPEnabled bool
@@ -262,13 +294,25 @@ type accountBody struct {
 
 // accountBodyFor fills the account page's data for p.
 func (w *Web) accountBodyFor(r *http.Request, p webauth.Principal) accountBody {
-	b := accountBody{MustChange: p.MustChange, TOTPLocal: p.AuthSource == store.AuthLocal, TOTPEnabled: p.TOTPEnabled}
+	b := accountBody{MustChange: p.MustChange, TOTPLocal: p.AuthSource == store.AuthLocal, TOTPEnabled: p.TOTPEnabled,
+		External: p.AuthSource != store.AuthLocal, ExternalName: p.ExternalName, SourceLabel: sourceLabel(p.AuthSource)}
 	if p.TOTPEnabled {
 		if n, err := w.Store.RecoveryCodesLeft(r.Context(), p.UserID); err == nil {
 			b.CodesLeft = n
 		}
 	}
 	return b
+}
+
+// sourceLabel is how a source is named on the account page.
+func sourceLabel(source string) string {
+	switch source {
+	case store.AuthLDAP:
+		return "LDAP"
+	case store.AuthOIDC:
+		return "OpenID Connect"
+	}
+	return "Local account"
 }
 
 func (w *Web) accountPage(rw http.ResponseWriter, r *http.Request) {
@@ -286,6 +330,12 @@ func (w *Web) accountPage(rw http.ResponseWriter, r *http.Request) {
 // otherwise), applies the policy, and ends every OTHER session of the user.
 func (w *Web) accountPassword(rw http.ResponseWriter, r *http.Request) {
 	p, _ := webauth.FromContext(r.Context())
+	// Rule: an external user has no local password to change (the provider owns it). Refused
+	// before anything is read: p.Email can even be empty for them, and the page hides the form.
+	if p.AuthSource != store.AuthLocal {
+		w.errorPage(rw, r, http.StatusForbidden)
+		return
+	}
 	fail := func(status int, msg string) {
 		v := w.newView(r, "Account", "account", w.accountBodyFor(r, p))
 		v.Error = msg
@@ -346,7 +396,7 @@ func (w *Web) accountPassword(rw http.ResponseWriter, r *http.Request) {
 	// Compare-and-swap on the hash verified above: an admin reset that committed
 	// while this request was hashing is not overwritten by this change.
 	err = w.Store.SetPassword(r.Context(), u.ID, store.PasswordChange{Hash: hash, Self: true, KeepSession: p.TokenHash, ExpectedHash: u.PasswordHash},
-		w.Now(), store.Audit{Kind: store.ActorUser, Actor: p.Email})
+		w.Now(), store.Audit{Kind: store.ActorUser, Actor: p.Actor()})
 	if errors.Is(err, store.ErrCredentialChanged) {
 		outcome = webauth.Aborted
 		w.Log.Warn("password change refused: the account changed meanwhile", "client_ip", w.ClientIP(r))

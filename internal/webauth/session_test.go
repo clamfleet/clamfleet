@@ -299,3 +299,85 @@ func TestThrottleAbortRestoresTheBackoff(t *testing.T) {
 		t.Fatal("an aborted first attempt left an entry")
 	}
 }
+
+// Actor names the user in audit rows: the email when there is one, else "<source>:<external name>",
+// so an OIDC user without a verified email is never recorded as nobody and "ldap:ann" differs from "oidc:ann".
+func TestPrincipalActor(t *testing.T) {
+	for _, c := range []struct {
+		p    Principal
+		want string
+	}{
+		{Principal{Email: "ann@example.com", AuthSource: "local"}, "ann@example.com"},
+		{Principal{Email: "ann@example.com", AuthSource: "oidc", ExternalName: "ann"}, "ann@example.com"},
+		{Principal{AuthSource: "oidc", ExternalName: "ann"}, "oidc:ann"},
+		{Principal{AuthSource: "ldap", ExternalName: "ann"}, "ldap:ann"},
+	} {
+		if got := c.p.Actor(); got != c.want {
+			t.Errorf("%+v: Actor() = %q, want %q", c.p, got, c.want)
+		}
+	}
+}
+
+// The OIDC state cookie token and the session token cannot be mistaken for each other.
+func TestOIDCTokenIsNotASessionToken(t *testing.T) {
+	tok, hash, err := NewOIDCToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ParseOIDCToken(tok) != nil || ParseToken(tok) == nil {
+		t.Fatal("an OIDC token must parse as one and never as a session token")
+	}
+	s, _, _ := NewToken()
+	if ParseOIDCToken(s) == nil {
+		t.Fatal("a session token parsed as an OIDC state token")
+	}
+	if string(hash) != string(HashToken(tok)) || len(hash) != 32 {
+		t.Fatal("hash")
+	}
+	for _, bad := range []string{"", "cfo_", "cfo_" + strings.Repeat("A", 43), "cfo_" + strings.Repeat("!", 43), tok + "A"} {
+		if bad == "cfo_"+strings.Repeat("A", 43) {
+			continue // well-formed base64 of 32 bytes: format-valid, the hash lookup decides
+		}
+		if ParseOIDCToken(bad) == nil {
+			t.Errorf("%q parsed", bad)
+		}
+	}
+	c := NewOIDCCookie(tok, true)
+	if c.Name != "__Host-clamfleet_oidc" || c.SameSite != http.SameSiteLaxMode || !c.Secure || !c.HttpOnly || c.MaxAge != 600 {
+		t.Fatalf("%+v", c)
+	}
+	if p := NewOIDCCookie(tok, false); p.Name != "clamfleet_oidc" || p.Secure {
+		t.Fatalf("%+v", p)
+	}
+	if cl := ClearOIDCCookie(true); cl.MaxAge != -1 || cl.Value != "" {
+		t.Fatalf("%+v", cl)
+	}
+}
+
+func TestStartLimiter(t *testing.T) {
+	now := clk
+	l := NewStartLimiter(func() time.Time { return now }, 3, 10*time.Minute)
+	for i := 0; i < 3; i++ {
+		if !l.Allow("192.0.2.1") {
+			t.Fatalf("start %d refused", i)
+		}
+	}
+	if l.Allow("192.0.2.1") {
+		t.Fatal("a fourth live start was allowed")
+	}
+	if !l.Allow("192.0.2.2") {
+		t.Fatal("another address was refused")
+	}
+	now = now.Add(10*time.Minute + time.Second)
+	if !l.Allow("192.0.2.1") {
+		t.Fatal("the slots did not come back after the ttl")
+	}
+	// The memory bound: a full table of live addresses refuses a new one.
+	l2 := NewStartLimiter(func() time.Time { return now }, 1, time.Hour)
+	l2.maxIPs = 2
+	l2.Allow("a")
+	l2.Allow("b")
+	if l2.Allow("c") {
+		t.Fatal("a new address was admitted into a full table")
+	}
+}

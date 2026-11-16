@@ -21,7 +21,7 @@ func TestProductionSetHasNoOverlay(t *testing.T) {
 		t.Fatal(err)
 	}
 	want, _ := fs.Glob(SQLite, "sqlite/*.sql")
-	if len(got) != len(want) || len(got) != 6 {
-		t.Fatalf("FS() lists %v, the embedded set %v: want the six production migrations", got, want)
+	if len(got) != len(want) || len(got) != 7 {
+		t.Fatalf("FS() lists %v, the embedded set %v: want the seven production migrations", got, want)
 	}
 }

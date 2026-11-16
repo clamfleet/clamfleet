@@ -15,8 +15,9 @@ own session cookie. Neither credential works on the other's routes.
 
 ## Users and roles
 
-Users are managed on the server with `clamfleet-server user ...` and nowhere else in this release
-(user management in the console, LDAP and OIDC come later; two-factor sign-in is below). Run the commands as the server
+Local users are managed on the server with `clamfleet-server user ...` and nowhere else in this release
+(user management in the console comes later; two-factor sign-in is below). Users of **LDAP** and **OpenID Connect**
+are created at their first sign-in and their role comes from the provider: see [auth.md](auth.md). Run the commands as the server
 user, so the audit log names you:
 
 ```
@@ -43,6 +44,9 @@ sudo -u clamfleet-server clamfleet-server user reset-totp ann@example.com   # re
   creates an account by itself.
 - **A locked-out admin** is recovered with `user reset-password` on the server: shell access to the
   server is the root of trust.
+- **External users** (`ldap`, `oidc`) appear in `user list` with their source. `set-role`, `reset-password` and
+  `reset-totp` refuse them (the provider owns all three); `disable` and `enable` take `ldap:NAME` or `oidc:NAME`
+  for a user without an email. See [auth.md](auth.md).
 - Disabling a user, changing a role and resetting a password end that user's sessions at once.
   Changing your own password keeps the current session and ends the others.
 
@@ -57,6 +61,10 @@ separate read-only display token is not available.
 The cookie is `__Host-clamfleet_session` with `HttpOnly`, `Secure`, `SameSite=Lax`, `Path=/` and no
 `Domain`; it has no expiry date of its own (the server enforces the limits). A fresh token is issued at
 every login.
+
+A session is valid only while its user's sign-in method is switched on: turning `auth.local.enabled`, `auth.ldap.enabled`
+or `auth.oidc.enabled` off ends the sessions of that method's users at their next request, and a session of a user whose
+source this build does not know is no session at all.
 
 A session is created only if nothing about the account changed while the password was being checked:
 a password reset or change, a disable, or a disable followed by an enable (a per-user `auth_version`
@@ -215,12 +223,13 @@ or with the target) and the payloads sent to the receivers you choose; see [aler
 
 | Path | Who | What |
 |---|---|---|
-| `/login` | everyone | sign in |
+| `/login` | everyone | sign in. With LDAP on the field reads "Email or user name"; with OIDC on there is a second form with the single sign-on button |
+| `/login/oidc`, `/login/oidc/callback` | everyone | start and finish an OpenID Connect sign-in (see [auth.md](auth.md)); they answer 404 while OIDC is off |
 | `/login/totp` | everyone, with a pending login | the second step: a code from the authenticator app or a recovery code |
 | `/` | signed in | fleet: state counts, filters by tag and state, one row per host, worst state first |
 | `/hosts/NAME` | signed in | state and reasons, newest report, a Detections card, state history; admins also see audit rows and actions |
 | `/events` | signed in | detections: filters by host, signature and state (Open by default), 50 per page by keyset, open counts in the menu; **admins** acknowledge one detection or all matching "as of this id" (see [detections.md](detections.md)). File paths are shown to every signed-in user, with invisible and direction-changing characters as visible escapes |
-| `/account` | signed in | change your password; a card for two-factor sign-in |
+| `/account` | signed in | change your password; a card for two-factor sign-in. For an LDAP or OIDC user: the source and name, "managed by your identity provider", and neither card |
 | `/account/totp` | signed in | set up, replace or turn off the authenticator; new recovery codes (each asks for your password) |
 | `/admin/hosts` | admin | all hosts including revoked ones; register, rotate, revoke, delete (type the name to confirm) |
 | `/admin/alerts` | admin | alert targets, banners that say why alerts may not go out, recent deliveries; add, edit, send test, rotate the signing key, delete (see [alerts.md](alerts.md)). Viewers see no menu item and get 403 |

@@ -17,6 +17,9 @@
 //     It also seeds the two-factor users: `enrol` (no TOTP yet), `totp` (TOTP
 //     enabled, with its base32 secret and recovery codes written to fixture.json)
 //     and, with --totp-required, `forced` (no TOTP, in a console that requires it);
+//     With --sso it also starts an OpenID Connect provider and an LDAP directory (the in-process
+//     fakes internal/testoidc and internal/testldap, on loopback) and switches auth.oidc and
+//     auth.ldap on, so the browser tests can sign in through them (SSOFixture);
 //  4. starts `clamfleet-server serve` as a child process;
 //  5. posts one report per host through the real HTTP API, so every host is in a
 //     known state;
@@ -56,6 +59,8 @@ import (
 	"github.com/clamfleet/clamfleet/internal/secrets"
 	"github.com/clamfleet/clamfleet/internal/store"
 	"github.com/clamfleet/clamfleet/internal/store/sqlite"
+	"github.com/clamfleet/clamfleet/internal/testldap"
+	"github.com/clamfleet/clamfleet/internal/testoidc"
 	"github.com/clamfleet/clamfleet/internal/testtls"
 	"github.com/clamfleet/clamfleet/internal/webauth"
 )
@@ -125,6 +130,29 @@ type EventsFixture struct {
 	AckedBy  string  `json:"acked_by"`
 }
 
+// SSOFixture describes the external sign-in of a fixture started with --sso: an in-process OpenID
+// Connect provider (internal/testoidc) and an LDAP directory (internal/testldap), both on loopback.
+//
+// The console is https://127.0.0.1:<port> and the provider https://localhost:<port2>. Those are two
+// different SITES for a browser (SameSite is about sites, and ports do not make sites different), which
+// is what lets the browser test prove the SameSite=Lax state cookie survives the cross-site return from
+// the provider: with both on 127.0.0.1 even a Strict cookie would still be sent and the test would pass
+// for nothing. The certificate covers both names.
+type SSOFixture struct {
+	// IssuerURL is the provider's address (https://localhost:PORT).
+	IssuerURL string `json:"issuer_url"`
+	// ButtonText is the console's SSO button label (auth.oidc.display_name).
+	ButtonText string `json:"button_text"`
+	// OIDCAdmin, OIDCViewer and OIDCNoRole are the provider's user keys, as the provider's page lists
+	// them (data-testid idp-user-<key>): the first has the admin group, the second the viewer group,
+	// the third no groups claim at all.
+	OIDCAdmin  string `json:"oidc_admin"`
+	OIDCViewer string `json:"oidc_viewer"`
+	OIDCNoRole string `json:"oidc_norole"`
+	// LDAPAdmin signs in with a user name (not an email) and is in the directory's admin group.
+	LDAPAdmin Login `json:"ldap_admin"`
+}
+
 // Fixture is the content of fixture.json.
 type Fixture struct {
 	URL        string `json:"url"`
@@ -146,6 +174,8 @@ type Fixture struct {
 	Hosts        map[string]Host `json:"hosts"`
 	Alerts       AlertsFixture   `json:"alerts"`
 	Events       EventsFixture   `json:"events"`
+	// SSO is set with --sso.
+	SSO *SSOFixture `json:"sso,omitempty"`
 }
 
 func main() {
@@ -168,6 +198,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	keep := fs.Bool("keep", false, "keep the temp directory on exit")
 	evalEvery := fs.Duration("eval-interval", time.Second, "health.eval_interval of the server")
 	totpRequired := fs.Bool("totp-required", false, "set auth.local.totp_required and seed the 'forced' user")
+	sso := fs.Bool("sso", false, "switch on auth.oidc and auth.ldap against in-process fakes (testoidc, testldap) and seed their users")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -211,8 +242,21 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	yaml := fmt.Sprintf("listen: 127.0.0.1:%d\ntls:\n  cert: %s\n  key: %s\ndb_path: %s\nsecret_key_file: %s\nhealth:\n  eval_interval: %s\n"+
 		"public_url: https://127.0.0.1:%d\nalert:\n  cooldown: 0s\n  webhook:\n    allow_loopback: true\n",
 		*port, tlsb.Cert, tlsb.Key, db, keyFile, *evalEvery, *port)
+	var ssoFx *SSOFixture
+	if *sso || *totpRequired {
+		yaml += "auth:\n"
+	}
 	if *totpRequired {
-		yaml += "auth:\n  local:\n    totp_required: true\n"
+		yaml += "  local:\n    totp_required: true\n"
+	}
+	if *sso {
+		extra, fx, stop, err := startSSO(tmp, tlsb, *port)
+		if err != nil {
+			return err
+		}
+		defer stop()
+		yaml += extra
+		ssoFx = fx
 	}
 	if err := os.WriteFile(cfg, []byte(yaml), 0o600); err != nil {
 		return err
@@ -251,6 +295,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		ServerLog: filepath.Join(tmp, "server.log"), Hosts: map[string]Host{},
 	}
 	fx.TOTPRequired = *totpRequired
+	fx.SSO = ssoFx
 	if err := seedUsers(ctx, db, keyFile, fx); err != nil {
 		return err
 	}
@@ -426,6 +471,69 @@ func seedUsers(ctx context.Context, db, keyFile string, fx *Fixture) error {
 	}
 	fx.TOTP = TOTPLogin{Email: u.Email, Password: pw, SecretBase32: webauth.EncodeTOTPSecret(secret), RecoveryCodes: codes}
 	return nil
+}
+
+// startSSO starts the fake provider and the fake directory and returns the auth.oidc and auth.ldap
+// YAML for the server, what fixture.json says about them, and the function that stops them. The
+// provider answers in real time (the server under test runs on the real clock, too).
+func startSSO(tmp string, tlsb testtls.Bundle, consolePort int) (yaml string, fx *SSOFixture, stop func(), err error) {
+	callback := fmt.Sprintf("https://127.0.0.1:%d/login/oidc/callback", consolePort)
+	idp, err := testoidc.Start(testoidc.Options{CertFile: tlsb.Cert, KeyFile: tlsb.Key, RedirectURIs: []string{callback}})
+	if err != nil {
+		return "", nil, nil, err
+	}
+	const adminKey, viewerKey, noRoleKey = "sso-admin", "sso-viewer", "sso-norole"
+	idp.AddUser(adminKey, map[string]any{"name": "SSO Admin", "email": "sso-admin@sso.example", "email_verified": true, "groups": []string{"clamfleet-admins"}})
+	idp.AddUser(viewerKey, map[string]any{"name": "SSO Viewer", "email": "sso-viewer@sso.example", "email_verified": true, "groups": []string{"clamfleet-viewers"}})
+	// No groups claim at all: what Keycloak sends for a user in no group.
+	idp.AddUser(noRoleKey, map[string]any{"name": "SSO No Role", "email": "sso-norole@sso.example", "email_verified": true})
+
+	const base = "dc=fixture,dc=example"
+	ldapPW, err := webauth.GeneratePassword()
+	if err != nil {
+		idp.Close()
+		return "", nil, nil, err
+	}
+	svcPW, err := webauth.GeneratePassword()
+	if err != nil {
+		idp.Close()
+		return "", nil, nil, err
+	}
+	dir, err := testldap.Start(testldap.Options{CertFile: tlsb.Cert, KeyFile: tlsb.Key})
+	if err != nil {
+		idp.Close()
+		return "", nil, nil, err
+	}
+	stop = func() { dir.Close(); idp.Close() }
+	dir.Add("cn=svc,"+base, map[string][]string{"cn": {"svc"}})
+	dir.SetPassword("cn=svc,"+base, svcPW)
+	dir.Add("uid=ldap-admin,ou=people,"+base, map[string][]string{
+		"objectClass": {"inetOrgPerson"}, "uid": {"ldap-admin"}, "cn": {"LDAP Admin"}, "mail": {"ldap-admin@sso.example"},
+		"entryUUID": {"00000000-0000-4000-8000-000000000001"}, "memberOf": {"cn=admins,ou=groups," + base},
+	})
+	dir.SetPassword("uid=ldap-admin,ou=people,"+base, ldapPW)
+
+	// The secrets go in files, like production (the server never takes them from YAML or the environment).
+	secretFile := filepath.Join(tmp, "oidc-client-secret")
+	bindFile := filepath.Join(tmp, "ldap-bind-password")
+	if err := os.WriteFile(secretFile, []byte(testoidc.ClientSecret+"\n"), 0o600); err != nil {
+		stop()
+		return "", nil, nil, err
+	}
+	if err := os.WriteFile(bindFile, []byte(svcPW+"\n"), 0o600); err != nil {
+		stop()
+		return "", nil, nil, err
+	}
+	const buttonText = "Fixture single sign-on"
+	yaml = fmt.Sprintf("  oidc:\n    enabled: true\n    display_name: %q\n    issuer: %s\n    client_id: %s\n    client_secret_file: %s\n    ca_file: %s\n"+
+		"    admin_values: [clamfleet-admins]\n    viewer_values: [clamfleet-viewers]\n"+
+		"  ldap:\n    enabled: true\n    url: %s\n    start_tls: true\n    ca_file: %s\n    bind_dn: %q\n    bind_password_file: %s\n    user_base_dn: %q\n"+
+		"    admin_groups: [%q]\n    viewer_groups: [%q]\n",
+		buttonText, idp.Issuer(), testoidc.ClientID, secretFile, tlsb.CA,
+		dir.URL(), tlsb.CA, "cn=svc,"+base, bindFile, "ou=people,"+base, "cn=admins,ou=groups,"+base, "cn=viewers,ou=groups,"+base)
+	fx = &SSOFixture{IssuerURL: idp.Issuer(), ButtonText: buttonText, OIDCAdmin: adminKey, OIDCViewer: viewerKey, OIDCNoRole: noRoleKey,
+		LDAPAdmin: Login{Email: "ldap-admin", Password: ldapPW}}
+	return yaml, fx, stop, nil
 }
 
 type hostSeed struct {

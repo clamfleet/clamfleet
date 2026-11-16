@@ -74,8 +74,10 @@ commands:
                                               create a console user; prints a one-time password once
                                               (or reads one line from stdin); it must be changed at first login
   user list [--json]                          list console users
-  user set-role EMAIL viewer|admin            change a role (ends the user's sessions)
-  user disable EMAIL | enable EMAIL           disable (ends sessions) or re-enable a login
+  user set-role EMAIL viewer|admin            change a role (ends the user's sessions); not for LDAP or OIDC users,
+                                              whose role comes from the provider at every sign-in
+  user disable EMAIL | enable EMAIL           disable (ends sessions) or re-enable a login. An LDAP or OIDC user
+                                              without an email is named ldap:NAME or oidc:NAME (here and below)
   user reset-password EMAIL [--password-stdin]
                                               issue a new one-time password and end the user's sessions
   user reset-totp EMAIL                       remove the user's authenticator and recovery codes, lift a second-factor
