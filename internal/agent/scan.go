@@ -268,6 +268,12 @@ func (s *Scanner) Run(ctx context.Context) (int, error) {
 	case waitErr == nil:
 	case errors.As(waitErr, &ee):
 		exit = ee.ExitCode()
+		// Rule: only clamdscan's own 0, 1 and 2 are results. A process killed by a signal has
+		// ExitCode -1, and 126/127 or anything else is not a verdict: recording any of them as
+		// "clean" (or as a code the health rules do not know) would hide a failed scan.
+		if exit != ScanClean && exit != ScanInfected && exit != ScanError {
+			exit = ScanError
+		}
 	default:
 		exit = ScanError
 	}

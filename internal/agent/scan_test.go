@@ -266,6 +266,26 @@ func TestScanExitCodesAndSummary(t *testing.T) {
 	}
 }
 
+// Rule: a clamdscan killed by a signal (ExitCode -1) or exiting with a code that is not 0, 1 or 2
+// is an error, never a success. Mutation: pass the raw exit code through.
+func TestScanSignalOrOddExitIsAnError(t *testing.T) {
+	for name, body := range map[string]string{
+		"killed by a signal": "printf '/a: OK\\n'\nkill -9 $$",
+		"exit 127":           "exit 127",
+		"exit 3":             "exit 3",
+	} {
+		e := newScanEnv(t)
+		code, err := e.scanner(e.fake(body)).Run(context.Background())
+		if code != ScanError || err != nil {
+			t.Errorf("%s: code %d err %v, want 2 and no error", name, code, err)
+		}
+		s, ok := e.summary()
+		if !ok || s.Exit != ScanError {
+			t.Errorf("%s: summary %+v (present %v), want exit 2", name, s, ok)
+		}
+	}
+}
+
 // The command line is exactly what the plan says: the agent's clamd.conf, --multiscan,
 // the configured paths, and no --fdpass.
 func TestScanCommandLine(t *testing.T) {
