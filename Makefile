@@ -9,7 +9,7 @@ BIN := bin
 VERSION ?= 0.0.0-dev
 LDFLAGS := -s -w -X github.com/clamfleet/clamfleet/internal/version.Version=$(VERSION)
 
-.PHONY: build vet staticcheck test scripts-test sqlc-check generate check packages e2e e2e-apparmor e2e-web fixtures webfixture web-fixture
+.PHONY: build vet staticcheck test scripts-test sqlc-check generate check packages e2e e2e-apparmor e2e-el9 e2e-web fixtures webfixture web-fixture
 
 # Both binaries are static (CGO_ENABLED=0: the server uses pure-Go SQLite).
 build:
@@ -32,12 +32,12 @@ packages: build
 vet:
 	$(GO) vet ./...
 	$(GO) vet -tags e2e ./...
-	$(GO) vet -tags "e2e e2e_apparmor" ./...
+	$(GO) vet -tags "e2e e2e_apparmor e2e_el9" ./...
 
 staticcheck:
 	staticcheck ./...
 	staticcheck -tags e2e ./...
-	staticcheck -tags "e2e e2e_apparmor" ./...
+	staticcheck -tags "e2e e2e_apparmor e2e_el9" ./...
 
 test:
 	$(GO) test ./...
@@ -67,7 +67,8 @@ check: vet staticcheck sqlc-check test scripts-test
 -include local.mk
 # The AppArmor VM (milestone 5, decision 7): CFA_EXEC is the command prefix that runs a command
 # in the VM, CFA_HOST the ssh target of the Incus host that holds it. Also no defaults.
-export CFT_EXEC INCUS_HOST CFA_EXEC CFA_HOST
+# The AlmaLinux 9 VM (milestone 6, decision 11): CFE_EXEC and CFE_HOST, the same way. Also no defaults.
+export CFT_EXEC INCUS_HOST CFA_EXEC CFA_HOST CFE_EXEC CFE_HOST
 
 e2e:
 	@test -n "$(CFT_EXEC)" -a -n "$(INCUS_HOST)" || { echo "e2e: set CFT_EXEC and INCUS_HOST (environment or local.mk, see local.mk.example)" >&2; exit 1; }
@@ -83,6 +84,16 @@ e2e-apparmor:
 	$(MAKE) packages VERSION=0.6.0-e2e1
 	CFT_EXEC="$(CFA_EXEC)" INCUS_HOST="$(CFA_HOST)" CT=clamfleet-aa SNAP=clean READY_FILE=/var/lib/clamav/freshclam.dat \
 		$(GO) test -tags "e2e e2e_apparmor" -count=1 -timeout 30m -v -run 'TestAppArmor|TestClamdOnlyExecsTheAgent' ./e2e/
+
+# RHEL 9 and SELinux Enforcing, in the throwaway AlmaLinux 9 VM (docs/testing.md "The AlmaLinux 9 VM"):
+# the .rpm files are installed with dnf and the detection path must work through the SELinux module the
+# package loads. Part of the milestone 6 acceptance, with `make e2e` and `make e2e-apparmor`. Without CFE_EXEC
+# and CFE_HOST it FAILS (it never skips). READY_FILE is a file clamd's domain may read (under /var/lib/clamav).
+e2e-el9:
+	@test -n "$(CFE_EXEC)" -a -n "$(CFE_HOST)" || { echo "e2e-el9: set CFE_EXEC and CFE_HOST (environment or local.mk, see local.mk.example and docs/testing.md)" >&2; exit 1; }
+	$(MAKE) packages VERSION=0.6.0-e2e1
+	CFT_EXEC="$(CFE_EXEC)" INCUS_HOST="$(CFE_HOST)" CT=clamfleet-el9 SNAP=clean READY_FILE=/var/lib/clamav/bytecode.cvd \
+		$(GO) test -tags "e2e e2e_el9" -count=1 -timeout 40m -v -run 'TestEL9|TestSELinux' ./e2e/
 
 fixtures:
 	./deploy/test/capture-fixtures.sh
