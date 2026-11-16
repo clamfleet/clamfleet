@@ -362,6 +362,7 @@ func TestReaderRaces(t *testing.T) {
 		ts.FS.hook = func(op, name string) {
 			if op == "OpenFile" && strings.HasSuffix(name, n) && !swapped {
 				swapped = true
+				keepInode(t, p)
 				os.Remove(p)
 				os.WriteFile(p, []byte("{}"), 0o640)
 			}
@@ -380,6 +381,7 @@ func TestReaderRaces(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		keepInode(t, p)
 		os.Remove(p)
 		os.WriteFile(p, []byte("REPLACEMENT"), 0o640)
 		if err := q.Delete(dirEvents, n, id); !errors.Is(err, errReplaced) {
@@ -945,4 +947,17 @@ func TestLogsNeverContainJunkNames(t *testing.T) {
 		t.Fatalf("log: %s", buf.String())
 	}
 	_ = io.Discard
+}
+
+// keepInode keeps p's inode allocated (a second hard link outside the spool) so that a file created
+// after p is removed cannot get the same inode number. These tests swap a file for a different one
+// and expect the reader to notice by inode; but a file system may hand a freed inode to the very next
+// file created (ext4 does, as the CI runners showed; the ZFS machine this was written on does not), and then "a different
+// file" has the old identity and nothing can tell them apart. The tests passed on a developer's
+// machine and failed on GitHub for exactly that reason.
+func keepInode(t *testing.T, p string) {
+	t.Helper()
+	if err := os.Link(p, filepath.Join(t.TempDir(), "keep")); err != nil {
+		t.Fatal(err)
+	}
 }
