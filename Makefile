@@ -80,6 +80,7 @@ e2e:
 # CFT_EXEC and INCUS_HOST at it, CT/SNAP make deploy/test/reset.sh restore the VM's `clean` snapshot.
 e2e-apparmor:
 	@test -n "$(CFA_EXEC)" -a -n "$(CFA_HOST)" || { echo "e2e-apparmor: set CFA_EXEC and CFA_HOST (environment or local.mk, see local.mk.example and docs/testing.md)" >&2; exit 1; }
+	$(MAKE) packages VERSION=0.6.0-e2e1
 	CFT_EXEC="$(CFA_EXEC)" INCUS_HOST="$(CFA_HOST)" CT=clamfleet-aa SNAP=clean READY_FILE=/var/lib/clamav/freshclam.dat \
 		$(GO) test -tags "e2e e2e_apparmor" -count=1 -timeout 30m -v -run 'TestAppArmor|TestClamdOnlyExecsTheAgent' ./e2e/
 

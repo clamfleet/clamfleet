@@ -20,6 +20,8 @@ package e2e
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -29,12 +31,14 @@ const aaDir = "/tmp/e2e"
 
 // apparmorRig brings up the server, the sink and the target as in the container,
 // then installs the AppArmor files and wires clamd (aa-prepare.sh), and starts the
-// agent service. The agent binary goes to /usr/bin: that is the path the profile names.
+// agent service. The agent package puts the binary in /usr/bin (the path the profile names) and
+// loads the profile itself.
 func apparmorRig(t *testing.T) {
 	t.Helper()
 	freshServer(t)
 	startSink(t)
-	sh(t, "install -m 755 /usr/local/bin/clamfleet-agent /usr/bin/clamfleet-agent")
+	// The package installs the binary to /usr/bin and ITS postinstall loads the profile.
+	os.Setenv("CF_AGENT_DEB", debFile(t, filepath.Join(repoRoot, "dist"), "clamfleet-agent", debOld))
 	if err := script("aa-prepare.sh"); err != nil {
 		t.Fatal(err)
 	}
@@ -264,5 +268,22 @@ func TestClamdOnlyExecsTheAgent(t *testing.T) {
 	}
 	if n := sh(t, "ls /tmp/e2e/touched 2>/dev/null | wc -l"); n != "0" {
 		t.Fatal("touch ran under clamd's profile")
+	}
+}
+
+// Removing the package unloads its profile (the postremove), so no stale confinement is left
+// for a binary that is no longer there.
+func TestAppArmorPackageRemoval(t *testing.T) {
+	apparmorRig(t)
+	preconditions(t)
+	sh(t, "DEBIAN_FRONTEND=noninteractive apt-get remove -y clamfleet-agent 2>&1")
+	var st struct {
+		Profiles map[string]string `json:"profiles"`
+	}
+	if err := json.Unmarshal([]byte(sh(t, "aa-status --json")), &st); err != nil {
+		t.Fatal(err)
+	}
+	if mode, loaded := st.Profiles["clamfleet-agent-event"]; loaded {
+		t.Fatalf("the profile clamfleet-agent-event is still loaded (%s) after apt-get remove", mode)
 	}
 }
