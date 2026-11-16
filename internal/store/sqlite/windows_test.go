@@ -135,7 +135,7 @@ func TestWindowCrashAfterCommit(t *testing.T) {
 	}
 }
 
-// Decision 15: detections switched off while a window holds events: the window
+// M5 decision 15: detections switched off while a window holds events: the window
 // is discarded with one cancelled log row, no summary follows even when the
 // switch is turned back on, and the events stay stored.
 func TestWindowDiscardedWhenDetectionsSwitchedOff(t *testing.T) {

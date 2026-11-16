@@ -66,7 +66,7 @@ func TestPolicyCheckAddr(t *testing.T) {
 	}
 }
 
-// Decision 19: plaintext only to loopback or private addresses.
+// M4 decision 19: plaintext only to loopback or private addresses.
 func TestCheckPlaintext(t *testing.T) {
 	for addr, ok := range map[string]bool{
 		"127.0.0.1": true, "::1": true, "10.0.0.5": true, "192.168.0.9": true, "100.64.1.1": true, "fd12::1": true,

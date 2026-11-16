@@ -754,7 +754,7 @@ func TestUnroutedDetectionIsVisible(t *testing.T) {
 }
 
 // Banners and the viewer: email off, no public_url, and no menu item or access
-// for viewers (decision 18).
+// for viewers (M4 decision 18).
 func TestAlertsPageBannersAndViewerAccess(t *testing.T) {
 	e, _, b, _ := alertEnv(t, alertOpts{keys: testKeyring(t)})
 	p := b.get("/admin/alerts")

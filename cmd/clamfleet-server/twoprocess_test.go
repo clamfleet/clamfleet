@@ -262,7 +262,7 @@ func TestAgentRunOnceStoresReportThroughServer(t *testing.T) {
 	}
 }
 
-// Decision 11, end to end with both real binaries: with tls.client_ca set the
+// M2 decision 11, end to end with both real binaries: with tls.client_ca set the
 // agent needs its certificate, and the token is needed as well.
 func TestAgentRunOnceThroughMTLS(t *testing.T) {
 	tls, err := testtls.New(t.TempDir())

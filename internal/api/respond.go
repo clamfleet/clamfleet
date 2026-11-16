@@ -80,7 +80,7 @@ func (s *statusWriter) Unwrap() http.ResponseWriter { return s.ResponseWriter }
 // can be wrong (a misconfigured proxy) and, when the peer is not a trusted
 // proxy, it is just the TCP peer.
 //
-// Rule (decision 12): if the TCP peer (RemoteAddr) is in trusted, walk
+// Rule (M2 decision 12): if the TCP peer (RemoteAddr) is in trusted, walk
 // X-Forwarded-For (all header lines, combined) from right to left and take
 // the first address that is not itself a trusted proxy. Taking the rightmost
 // untrusted entry means a fake address a client prepends to the header is
@@ -128,9 +128,9 @@ func inPrefixes(a netip.Addr, prefixes []netip.Prefix) bool {
 // RequestLog logs every request once, after it is served: 2xx at info (the client IP of every accepted report must be
 // on record at the default level; /healthz 2xx stays at debug so a proxy health probe does not flood the log), 4xx at
 // warn, 5xx at error. Fields: method, path, status, host (the authenticated
-// host name, if any), duration and the client IP, always (decision 10: what an
+// host name, if any), duration and the client IP, always (M2 decision 10: what an
 // operator does with source addresses is their business; they are not hidden),
-// resolved by ClientIP (trusted_proxies, decision 12).
+// resolved by ClientIP (trusted_proxies, M2 decision 12).
 // It never logs the Authorization header, the query string or the body.
 // now is the injected clock, so durations are testable.
 func RequestLog(log *slog.Logger, now func() time.Time, trustedProxies []netip.Prefix) func(http.Handler) http.Handler {

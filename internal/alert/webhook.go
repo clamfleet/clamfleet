@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: The ClamFleet Authors
 
 // webhook.go: the webhook sender and its Standard Webhooks signature
-// (plan 4.6 and 4.7, decision 7).
+// (plan 4.6 and 4.7, M4 decision 7).
 //
 // Request: POST, JSON body, headers webhook-id (the alert id), webhook-timestamp
 // (unix seconds from the injected clock at send time, fresh on every retry) and

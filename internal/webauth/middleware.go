@@ -64,7 +64,7 @@ var totpEnrolAllowed = map[string]bool{
 }
 
 // exemptSources are the identity sources auth.local.totp_required does not gate:
-// OIDC (the provider owns the second factor) and LDAP (decision 21: LDAP has no
+// OIDC (the provider owns the second factor) and LDAP (M6 decision 21: LDAP has no
 // second factor ClamFleet can enforce, so its sign-ins are password-only, which
 // docs/auth.md says plainly).
 //
@@ -214,7 +214,7 @@ func (m *Manager) Authenticate(r *http.Request) (Principal, error) {
 		return Principal{}, err
 	}
 	// Rule: a session is valid only while its user's identity source is enabled
-	// (decision 21). Checked before anything else about the session is used, and
+	// (M6 decision 21). Checked before anything else about the session is used, and
 	// before the activity write: a refused session must not look alive.
 	if !m.Sources[sp.AuthSource] {
 		m.warnSourceOff(sp.UserID, sp.AuthSource, now)

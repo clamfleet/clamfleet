@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: The ClamFleet Authors
 
 // oidc.go: the OpenID Connect authorization code flow with PKCE, on the standard library
-// (decision 17; docs/plans/milestone-6.md 4.17).
+// (M6 decision 17; docs/plans/milestone-6.md 4.17).
 //
 // The client is deliberately small and strict:
 //   - discovery is fetched lazily at the first sign-in (an identity provider that is down
@@ -215,7 +215,7 @@ func (c *OIDCClient) Exchange(ctx context.Context, code, verifier, nonce string)
 	id.ExternalID = c.cfg.Issuer + " " + claims["sub"].(string)
 	id.ExternalName = cleanText(str(claims["preferred_username"]), 128)
 	id.DisplayName = cleanText(str(claims["name"]), 128)
-	// Rule: the email is used only when the provider says it verified it (decision 19). An
+	// Rule: the email is used only when the provider says it verified it (M6 decision 19). An
 	// unverified address could be anyone's, and it is what a collision check protects.
 	if verified, _ := claims["email_verified"].(bool); verified {
 		if e, err := store.NormalizeEmail(str(claims["email"])); err == nil {

@@ -85,7 +85,7 @@ const packagedStateDir = "/var/lib/clamfleet-server"
 func (c Config) Warnings() []string {
 	var w []string
 	if c.Auth.LDAP.Enabled && c.Auth.Local.TOTPRequired {
-		// Decision 21: LDAP has no second factor ClamFleet can enforce.
+		// M6 decision 21: LDAP has no second factor ClamFleet can enforce.
 		w = append(w, "auth.ldap is enabled and auth.local.totp_required is on: LDAP sign-ins are password-only (totp_required covers local accounts); use auth.oidc where a second factor matters")
 	}
 	d := filepath.Clean(c.Backup.Dir)
@@ -207,7 +207,7 @@ type SMTP struct {
 	Host string `yaml:"host"`
 	Port int    `yaml:"port"`
 	// TLS is starttls (default, mandatory once chosen: no fallback to plaintext),
-	// tls (implicit, port 465) or none (decision 19: only to a relay on a
+	// tls (implicit, port 465) or none (M4 decision 19: only to a relay on a
 	// loopback or private address, and never with credentials beyond loopback).
 	TLS      string `yaml:"tls"`
 	From     string `yaml:"from"`
@@ -283,7 +283,7 @@ func (c Config) validateAlerting() error {
 		return fmt.Errorf("smtp.timeout must be between 5s and 120s, got %s", m.Timeout)
 	}
 	if m.TLS == "none" {
-		// Decision 19. An IP literal can be checked now; a host name is checked at
+		// M4 decision 19. An IP literal can be checked now; a host name is checked at
 		// dial, on the address it resolves to.
 		if ip, err := netip.ParseAddr(strings.Trim(m.Host, "[]")); err == nil {
 			ip = ip.Unmap()
@@ -453,18 +453,18 @@ func (h Health) Validate() error {
 }
 
 // TLS configures direct TLS. The intended deployment is plaintext on loopback
-// behind a reverse proxy (decision 7); direct TLS is optional.
+// behind a reverse proxy (M2 decision 7); direct TLS is optional.
 type TLS struct {
 	Cert string `yaml:"cert"`
 	Key  string `yaml:"key"`
 	// ClientCA, when set, turns on mTLS: every client must present a
 	// certificate that chains to this CA bundle. It is a transport requirement
-	// only; the bearer token stays mandatory on top of it (decision 11).
+	// only; the bearer token stays mandatory on top of it (M2 decision 11).
 	ClientCA string `yaml:"client_ca"`
 }
 
 // DefaultConfig returns the defaults: plaintext on loopback, the intended
-// deployment behind a reverse proxy (decision 7). Setting tls.cert and tls.key
+// deployment behind a reverse proxy (M2 decision 7). Setting tls.cert and tls.key
 // turns on direct TLS. db_path departs from spec 12 by
 // decision: the server runs as its own user with its own state directory, so
 // it never shares an identity or directory with an agent on the same host.
@@ -508,7 +508,7 @@ func (c Config) TLSEnabled() bool { return c.TLS.Cert != "" }
 
 // Validate checks the configuration.
 //
-// Rule: without TLS the listen address must be loopback (decision 5/7).
+// Rule: without TLS the listen address must be loopback (M2 decision 7).
 // Plaintext is for a local reverse proxy that terminates TLS; a plaintext
 // listener on a public interface would carry bearer tokens in clear.
 func (c Config) Validate() error {

@@ -668,7 +668,7 @@ func TestRouteTable(t *testing.T) {
 }
 
 func TestRequestLogFields(t *testing.T) {
-	// Info is the default level of `serve`: decision 10 needs the client IP of accepted requests there.
+	// Info is the default level of `serve`: M2 decision 10 needs the client IP of accepted requests there.
 	e := newEnvLevel(t, slog.LevelInfo)
 	tok := e.host("app01")
 	e.do("POST", "/v1/report", tok, golden(t))
@@ -691,7 +691,7 @@ func TestRequestLogFields(t *testing.T) {
 	if okLine["level"] != "INFO" || badLine["level"] != "WARN" {
 		t.Fatalf("levels: %v / %v", okLine["level"], badLine["level"])
 	}
-	// Decision 10: the client IP is always logged, on success too.
+	// M2 decision 10: the client IP is always logged, on success too.
 	for _, m := range []map[string]any{okLine, badLine} {
 		if m["client_ip"] != "127.0.0.1" || m["method"] != "POST" || m["path"] != "/v1/report" {
 			t.Errorf("fields: %v", m)
@@ -733,7 +733,7 @@ func TestTokenNotInDatabaseBytes(t *testing.T) {
 	}
 }
 
-// Client IP for the logs (decision 12): the peer here is always 127.0.0.1
+// Client IP for the logs (M2 decision 12): the peer here is always 127.0.0.1
 // (httptest on loopback); X-Forwarded-For is believed only when that peer is a
 // trusted proxy, and then only its rightmost untrusted entry.
 func TestClientIPInRequestLog(t *testing.T) {

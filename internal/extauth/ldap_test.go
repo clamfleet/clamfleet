@@ -169,7 +169,7 @@ func TestLDAPWrongPasswordAndUnknownUser(t *testing.T) {
 	}
 }
 
-// Decision 19: the identity is the entry's id attribute, never the DN. After a rename the same user signs in.
+// M6 decision 19: the identity is the entry's id attribute, never the DN. After a rename the same user signs in.
 func TestLDAPRenameKeepsTheExternalID(t *testing.T) {
 	r := newRig(t, false)
 	first, err := r.dir(t).Authenticate(context.Background(), "ann", "ann-pw")

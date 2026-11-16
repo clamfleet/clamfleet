@@ -112,7 +112,7 @@ func (w *Web) loginSubmit(rw http.ResponseWriter, r *http.Request) {
 	outcome := webauth.Aborted // until there is a verdict: a server fault is nobody's failed guess
 	defer func() { done(outcome) }()
 
-	// Rule (decision 18): a local account with exactly this email is tried first, and then only the
+	// Rule (M6 decision 18): a local account with exactly this email is tried first, and then only the
 	// password check runs: a directory entry can never shadow a local break-glass admin. Everything
 	// else goes to LDAP when it is on. With LDAP off this is the M3 path unchanged.
 	if w.LDAP != nil {

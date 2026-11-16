@@ -275,7 +275,7 @@ func (s *Store) UpdateAlertTarget(ctx context.Context, name string, u store.Aler
 				return err
 			}
 		}
-		// Rule (decision 15): detections switched off, or the target disabled, while
+		// Rule (M5 decision 15): detections switched off, or the target disabled, while
 		// a burst window holds detections: discard them, never summarise. It does
 		// what the switch says, and matches the cancelling of pending detection
 		// deliveries above. The detections stay stored and on the events page.

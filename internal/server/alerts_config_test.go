@@ -81,7 +81,7 @@ func TestAlertConfigValidate(t *testing.T) {
 		{"smtp timeout 4s", withSMTP(func(m *SMTP) { m.Timeout = 4 * time.Second }), "smtp.timeout"},
 		{"smtp timeout 121s", withSMTP(func(m *SMTP) { m.Timeout = 121 * time.Second }), "smtp.timeout"},
 
-		// Decision 19.
+		// M4 decision 19.
 		{"none to a public literal", withSMTP(func(m *SMTP) { m.Host, m.TLS = "203.0.113.5", "none" }), "public"},
 		{"none to a NAT64 literal of a public address", withSMTP(func(m *SMTP) { m.Host, m.TLS = "64:ff9b::808:808", "none" }), "public"},
 		{"none to a NAT64 literal of a private address", withSMTP(func(m *SMTP) { m.Host, m.TLS = "64:ff9b::a00:1", "none" }), ""},

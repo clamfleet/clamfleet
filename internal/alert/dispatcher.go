@@ -309,7 +309,7 @@ func (d *Dispatcher) Pass(ctx context.Context) error {
 }
 
 // logPlan writes one info line per planned alert (so journald forwarders see
-// alerts too, decision 17) and one warn line per detection no target matched.
+// alerts too, M4 decision 17) and one warn line per detection no target matched.
 func (d *Dispatcher) logPlan(res store.PlanResult) {
 	seen := map[string]bool{}
 	for _, nd := range res.Deliveries {

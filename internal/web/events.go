@@ -4,7 +4,7 @@
 // events.go: the detections page and acknowledgement (milestone 5).
 //
 // GET /events is open to every signed-in user: paths are shown to all of them
-// (decision 12), escaped by displayPath, never put in a URL, a log line or an
+// (M5 decision 12), escaped by displayPath, never put in a URL, a log line or an
 // audit row. Acknowledging is admin only: the two POST routes are registered with
 // the admin class in server.Routes(), and the store writes the audit row in the
 // same transaction as the change.

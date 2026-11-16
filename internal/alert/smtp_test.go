@@ -247,7 +247,7 @@ func TestSMTPNotConfigured(t *testing.T) {
 	}
 }
 
-// Decision 19: tls none only reaches loopback or private relays; credentials
+// M4 decision 19: tls none only reaches loopback or private relays; credentials
 // over plaintext only reach loopback. Mutation 39 for SMTP.
 func TestSMTPPlaintextPolicy(t *testing.T) {
 	t.Run("a public relay is refused without a dial", func(t *testing.T) {

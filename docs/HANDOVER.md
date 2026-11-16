@@ -86,7 +86,7 @@ Prefer the standard library. Add a dependency only where listed.
 | Migrations | `pressly/goose` |
 | Templates | `html/template` |
 | Front end | htmx, vendored and embedded, no build step |
-| Email | `net/smtp` (stdlib) plus a small in-repo client layer (LOGIN auth, MIME). Decision: M4 plan, decision 11. |
+| Email | `net/smtp` (stdlib) plus a small in-repo client layer (LOGIN auth, MIME). Decision: M4 decision 11. |
 | Metrics | A small in-repo text exposition in the Prometheus format (M6 decision 6), no dependency |
 | Config | YAML (`go.yaml.in/yaml/v3`, the maintained successor of `gopkg.in/yaml.v3`) with environment variable overrides |
 | Logging | `log/slog`, JSON output |

@@ -96,7 +96,7 @@ type ValidatedURL struct {
 // ValidateWebhookURL checks a URL at save time (create, and every change of the
 // URL): absolute http or https, a host, no userinfo, no fragment, at most 2048
 // bytes, the localhost names only with AllowLoopback, an IP literal against the
-// policy, and no http to a public IP literal (decision 19). Names are resolved
+// policy, and no http to a public IP literal (M4 decision 19). Names are resolved
 // at connection time, not here: DNS may change.
 //
 // Errors name the reason and NEVER the URL.

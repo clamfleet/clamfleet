@@ -168,7 +168,7 @@ func TestServerIngestRegisterThenRunOnce(t *testing.T) {
 	if daily := h.LastReport.Sigs.Daily; daily == nil || daily.Version != wv {
 		t.Errorf("stored sigs.daily = %+v, sigtool says version %d", daily, wv)
 	}
-	// The request line carries the client IP, always (decision 10).
+	// The request line carries the client IP, always (M2 decision 10).
 	if j := journal(t, serverUnit); !strings.Contains(j, `"client_ip":"127.0.0.1"`) || !strings.Contains(j, `"status":202`) {
 		t.Errorf("server journal lacks the request line:\n%s", j)
 	}

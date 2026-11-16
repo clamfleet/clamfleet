@@ -58,7 +58,7 @@ func TestLDAPConfigValidation(t *testing.T) {
 	}{
 		{"ldaps", func(l *AuthLDAP) {}, ""},
 		{"starttls on ldap", func(l *AuthLDAP) { l.URL = "ldap://ldap.example"; l.StartTLS = true }, ""},
-		// Decision 22: plaintext LDAP only to the same machine, not to private networks either.
+		// M6 decision 22: plaintext LDAP only to the same machine, not to private networks either.
 		{"plain ldap to a host", func(l *AuthLDAP) { l.URL = "ldap://ldap.example" }, "unencrypted"},
 		{"plain ldap to a private address", func(l *AuthLDAP) { l.URL = "ldap://10.1.2.3:389" }, "unencrypted"},
 		{"plain ldap to localhost", func(l *AuthLDAP) { l.URL = "ldap://localhost" }, ""},
@@ -145,7 +145,7 @@ func TestOIDCConfigValidation(t *testing.T) {
 	}
 }
 
-// Decision 21: LDAP has no second factor ClamFleet can enforce; the start-up says so.
+// M6 decision 21: LDAP has no second factor ClamFleet can enforce; the start-up says so.
 func TestLDAPWithTOTPRequiredWarns(t *testing.T) {
 	c := ldapOK()
 	if w := c.Warnings(); len(w) != 0 {

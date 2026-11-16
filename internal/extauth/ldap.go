@@ -114,7 +114,7 @@ func NewDirectory(cfg LDAPConfig) (*Directory, error) {
 		return nil, fmt.Errorf("ldap: url %q is not ldap:// or ldaps://", cfg.URL)
 	}
 	if u.Scheme == "ldap" && !cfg.StartTLS && !config.IsLoopbackHost(u.Hostname()) {
-		return nil, fmt.Errorf("ldap: plaintext is only allowed to a loopback directory (decision 22)")
+		return nil, fmt.Errorf("ldap: plaintext is only allowed to a loopback directory (M6 decision 22)")
 	}
 	if cfg.Timeout <= 0 {
 		return nil, errors.New("ldap: a timeout is required")

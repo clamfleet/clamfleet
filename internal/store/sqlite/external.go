@@ -42,7 +42,7 @@ func (s *Store) ExternalLogin(ctx context.Context, id store.ExternalIdentity, ss
 		if !created && existing.DisabledAt.Valid {
 			return store.ErrUserDisabled
 		}
-		// Rule: an email held by another user refuses the sign-in (decision 19). Checked for a
+		// Rule: an email held by another user refuses the sign-in (M6 decision 19). Checked for a
 		// new user and for an existing one whose email changed, before anything is written.
 		if email != "" {
 			other, err := q.UserByEmail(ctx, nullStr(email))

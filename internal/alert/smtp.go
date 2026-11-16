@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // SPDX-FileCopyrightText: The ClamFleet Authors
 
-// smtp.go: the SMTP client session on top of net/smtp (plan 4.8, decision 11).
+// smtp.go: the SMTP client session on top of net/smtp (plan 4.8, M4 decision 11).
 //
 // net/smtp is frozen but not deprecated, and has no LOGIN auth and no context
 // support; this file adds LOGIN, a session deadline and the delivery
@@ -21,7 +21,7 @@
 //
 // There is no downgrade: in starttls mode a server that does not offer STARTTLS
 // fails the attempt before AUTH and MAIL. Plaintext (tls: none) only reaches
-// loopback and private addresses (decision 19), and credentials never go over
+// loopback and private addresses (M4 decision 19), and credentials never go over
 // plaintext beyond loopback.
 package alert
 
@@ -153,7 +153,7 @@ func (s *SMTPSender) send(ctx context.Context, msg EmailMessage) Result {
 	deadline, _ := ctx.Deadline()
 
 	// The relay address policy: always-blocked addresses never; plaintext only to
-	// loopback or private (decision 19). Public relays over TLS are fine, so no
+	// loopback or private (M4 decision 19). Public relays over TLS are fine, so no
 	// private/loopback restriction otherwise.
 	d := &SafeDialer{
 		Policy:    Policy{AllowPrivate: true, AllowLoopback: true, NAT64Prefixes: s.NAT64},
@@ -170,7 +170,7 @@ func (s *SMTPSender) send(ctx context.Context, msg EmailMessage) Result {
 	stop := context.AfterFunc(ctx, func() { conn.Close() })
 	defer stop()
 
-	// Credentials over plaintext only to loopback (decision 19).
+	// Credentials over plaintext only to loopback (M4 decision 19).
 	if c.TLS == SMTPNone && c.Username != "" {
 		if ap, err := netipFromAddr(conn.RemoteAddr()); err != nil || !ap.IsLoopback() {
 			return Result{Outcome: OutcomePermanent, Code: "plaintext", Text: "credentials are never sent over plaintext to a non-loopback relay; use tls or starttls"}

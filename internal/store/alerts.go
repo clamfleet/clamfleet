@@ -341,7 +341,7 @@ type Cancelled struct {
 	Deliveries int
 	// HeldDetections is how many detections were held in burst windows that were
 	// discarded because detections were switched off or the target disabled:
-	// no summary will be sent for them (decision 15).
+	// no summary will be sent for them (M5 decision 15).
 	HeldDetections int
 }
 

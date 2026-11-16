@@ -34,7 +34,7 @@ func checks() IDTokenChecks {
 }
 
 // Every check of the ID token is a row that fails when the check is removed. The signature is not one of
-// them: it is not verified by design (decision 17), which the package comment explains.
+// them: it is not verified by design (M6 decision 17), which the package comment explains.
 func TestParseIDToken(t *testing.T) {
 	hdr := map[string]any{"alg": "RS256"}
 	for _, c := range []struct {

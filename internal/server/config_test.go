@@ -336,7 +336,7 @@ func TestAuthKeysFromFileAndEnvironment(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, _, err := LoadConfig(p, true, noEnv()); err == nil || !strings.Contains(err.Error(), "mode") {
-		t.Fatalf("the spec's auth.mode is not a key here (decision 3b); err = %v", err)
+		t.Fatalf("the spec's auth.mode is not a key here (M3 decision 3, option b); err = %v", err)
 	}
 }
 
