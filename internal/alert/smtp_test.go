@@ -259,6 +259,49 @@ func TestSMTPPlaintextPolicy(t *testing.T) {
 			t.Fatalf("%+v dialled %q", r, d.list())
 		}
 	})
+	t.Run("NAT64 of a public address is public: refused without a dial", func(t *testing.T) {
+		d := &recordingDial{to: "127.0.0.1:1"}
+		s := &SMTPSender{Config: SMTPConfig{Host: "relay.example", Port: 25, TLS: SMTPNone, From: "a@b.example"}, Now: fixedNow,
+			Resolver: &scriptedResolver{answers: [][]netip.Addr{addrs("64:ff9b::808:808")}}, Dial: d.dial}
+		r := s.Send(context.Background(), testMessage("ops@x.example"))
+		if r.Outcome != OutcomePermanent || r.Code != "plaintext" || d.list() != "" {
+			t.Fatalf("%+v dialled %q", r, d.list())
+		}
+	})
+	t.Run("NAT64 of loopback is allowed as loopback, a deprecated embedding is not", func(t *testing.T) {
+		srv := startSMTP(t, testsmtp.Options{})
+		d := &recordingDial{to: srv.Addr}
+		s := smtpSender(srv, SMTPNone)
+		s.Config.Host = "relay.lan"
+		s.Resolver, s.Dial = &scriptedResolver{answers: [][]netip.Addr{addrs("64:ff9b::7f00:1")}}, d.dial
+		if r := s.Send(context.Background(), testMessage("ops@x.example")); r.Outcome != OutcomeSent || d.list() != "64:ff9b::7f00:1" {
+			t.Fatalf("%+v dialled %q", r, d.list())
+		}
+		d2 := &recordingDial{to: srv.Addr}
+		s2 := smtpSender(srv, SMTPNone)
+		s2.Config.Host = "relay.lan"
+		s2.Resolver, s2.Dial = &scriptedResolver{answers: [][]netip.Addr{addrs("2002:7f00:1::1")}}, d2.dial
+		if r := s2.Send(context.Background(), testMessage("ops@x.example")); r.Outcome != OutcomePermanent || d2.list() != "" {
+			t.Fatalf("6to4 relay: %+v dialled %q", r, d2.list())
+		}
+	})
+	t.Run("a listed local-use prefix is decoded, an unlisted one is blocked", func(t *testing.T) {
+		d := &recordingDial{to: "127.0.0.1:1"}
+		s := &SMTPSender{Config: SMTPConfig{Host: "relay.example", Port: 25, TLS: SMTPNone, From: "a@b.example"}, Now: fixedNow,
+			Resolver: &scriptedResolver{answers: [][]netip.Addr{addrs("64:ff9b:1::a00:1")}}, Dial: d.dial}
+		if r := s.Send(context.Background(), testMessage("ops@x.example")); r.Outcome != OutcomePermanent || d.list() != "" {
+			t.Fatalf("unlisted: %+v dialled %q", r, d.list())
+		}
+		srv := startSMTP(t, testsmtp.Options{})
+		d2 := &recordingDial{to: srv.Addr}
+		s2 := smtpSender(srv, SMTPNone)
+		s2.Config.Host = "relay.lan"
+		s2.NAT64 = []netip.Prefix{netip.MustParsePrefix("64:ff9b:1::/96")}
+		s2.Resolver, s2.Dial = &scriptedResolver{answers: [][]netip.Addr{addrs("64:ff9b:1::a00:1")}}, d2.dial
+		if r := s2.Send(context.Background(), testMessage("ops@x.example")); r.Outcome != OutcomeSent {
+			t.Fatalf("listed (10.0.0.1 behind it, private): %+v dialled %q", r, d2.list())
+		}
+	})
 	t.Run("a private relay without credentials is allowed", func(t *testing.T) {
 		srv := startSMTP(t, testsmtp.Options{})
 		d := &recordingDial{to: srv.Addr}

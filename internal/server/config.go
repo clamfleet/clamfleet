@@ -19,6 +19,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/clamfleet/clamfleet/internal/alert"
 	"github.com/clamfleet/clamfleet/internal/config"
 	"github.com/clamfleet/clamfleet/internal/health"
 	"github.com/clamfleet/clamfleet/internal/secrets"
@@ -171,6 +172,12 @@ type AlertWebhook struct {
 	DenyNetworks []string `yaml:"deny_networks"`
 	// CAFile adds trust anchors (PEM) to the system roots.
 	CAFile string `yaml:"ca_file"`
+	// NAT64Prefixes are the operator's own NAT64 translation prefixes (/32, /40,
+	// /48, /56, /64 or /96, RFC 6052). An address under one is judged by the IPv4
+	// it carries, like the well-known 64:ff9b::/96. A local-use NAT64 address
+	// (64:ff9b:1::/48) of a translator that is not listed is blocked, because the
+	// destination cannot be known. It also applies to the SMTP relay.
+	NAT64Prefixes []string `yaml:"nat64_prefixes"`
 }
 
 // SMTP configures email alerts; an empty Host switches email off.
@@ -215,6 +222,10 @@ func (c Config) validateAlerting() error {
 	if _, err := ParseDenyNetworks(a.Webhook.DenyNetworks); err != nil {
 		return err
 	}
+	nat64, err := ParseNAT64Prefixes(a.Webhook.NAT64Prefixes)
+	if err != nil {
+		return err
+	}
 	if a.Webhook.CAFile != "" && !filepath.IsAbs(a.Webhook.CAFile) {
 		return fmt.Errorf("alert.webhook.ca_file must be an absolute path, got %q", a.Webhook.CAFile)
 	}
@@ -254,8 +265,10 @@ func (c Config) validateAlerting() error {
 		// dial, on the address it resolves to.
 		if ip, err := netip.ParseAddr(strings.Trim(m.Host, "[]")); err == nil {
 			ip = ip.Unmap()
-			if !ip.IsLoopback() && !ip.IsPrivate() && !(netip.MustParsePrefix("100.64.0.0/10").Contains(ip)) {
-				return fmt.Errorf("smtp.tls: none is only allowed for a relay on a loopback or private address, and %s is public: use starttls or tls", ip)
+			// The same classification as the dialer: a NAT64 form of a public IPv4
+			// address is public, and a deprecated embedding cannot be judged at all.
+			if err := (alert.Policy{NAT64Prefixes: nat64}).CheckPlaintext(ip); err != nil {
+				return fmt.Errorf("smtp.tls: none is only allowed for a relay on a loopback or private address, and %s is public or cannot be judged (%v): use starttls or tls", ip, err)
 			}
 			if m.Username != "" && !ip.IsLoopback() {
 				return fmt.Errorf("smtp.tls: none with smtp.username would send the password in clear to %s: credentials are only sent unencrypted to loopback; use starttls or tls", ip)
@@ -265,6 +278,28 @@ func (c Config) validateAlerting() error {
 		}
 	}
 	return nil
+}
+
+// ParseNAT64Prefixes parses alert.webhook.nat64_prefixes: IPv6 prefixes of an
+// RFC 6052 length whose bits 64-71 (the "u" octet) are zero. An invalid entry is
+// an error (Validate calls this): a typo must not silently leave a translator undecoded.
+func ParseNAT64Prefixes(list []string) ([]netip.Prefix, error) {
+	out := make([]netip.Prefix, 0, len(list))
+	for _, e := range list {
+		p, err := netip.ParsePrefix(strings.TrimSpace(e))
+		switch {
+		case err != nil || p.Addr().Is4() || p.Addr().Is4In6():
+			return nil, fmt.Errorf("alert.webhook.nat64_prefixes: %q is not an IPv6 prefix such as 64:ff9b:1::/96", e)
+		case !alert.ValidNAT64Length(p.Bits()):
+			return nil, fmt.Errorf("alert.webhook.nat64_prefixes: %q has length /%d, but RFC 6052 allows only /32, /40, /48, /56, /64 and /96", e, p.Bits())
+		case p.Bits() > 64 && p.Addr().As16()[8] != 0:
+			return nil, fmt.Errorf("alert.webhook.nat64_prefixes: %q sets bits 64-71, which RFC 6052 reserves as zero", e)
+		case p != p.Masked():
+			return nil, fmt.Errorf("alert.webhook.nat64_prefixes: %q has bits set beyond its length (did you mean %s?)", e, p.Masked())
+		}
+		out = append(out, p.Masked())
+	}
+	return out, nil
 }
 
 // ParseDenyNetworks parses alert.webhook.deny_networks. An invalid entry is an
@@ -418,7 +453,7 @@ func DefaultConfig() Config {
 		},
 		Alert: Alert{
 			Cooldown: 15 * time.Minute,
-			Webhook:  AlertWebhook{Timeout: 10 * time.Second, AllowPrivate: true, DenyNetworks: []string{}},
+			Webhook:  AlertWebhook{Timeout: 10 * time.Second, AllowPrivate: true, DenyNetworks: []string{}, NAT64Prefixes: []string{}},
 		},
 		SMTP:      SMTP{Port: 587, TLS: "starttls", Timeout: 30 * time.Second},
 		Retention: DefaultRetention(),

@@ -33,6 +33,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/netip"
 	"net/smtp"
 	"net/textproto"
 	"strconv"
@@ -68,6 +69,9 @@ type SMTPSender struct {
 	// Resolver and Dial are injectable for tests; nil means the real ones.
 	Resolver Resolver
 	Dial     DialFunc
+	// NAT64 are the operator's translation prefixes (alert.webhook.nat64_prefixes):
+	// the relay address gets the same embedded-IPv4 classification as a webhook.
+	NAT64 []netip.Prefix
 	// Now is the injected clock.
 	Now func() time.Time
 }
@@ -152,7 +156,7 @@ func (s *SMTPSender) send(ctx context.Context, msg EmailMessage) Result {
 	// loopback or private (decision 19). Public relays over TLS are fine, so no
 	// private/loopback restriction otherwise.
 	d := &SafeDialer{
-		Policy:    Policy{AllowPrivate: true, AllowLoopback: true},
+		Policy:    Policy{AllowPrivate: true, AllowLoopback: true, NAT64Prefixes: s.NAT64},
 		Plaintext: c.TLS == SMTPNone,
 		Resolver:  s.Resolver, Dial: s.Dial, Timeout: 10 * time.Second,
 	}

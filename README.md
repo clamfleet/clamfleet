@@ -171,6 +171,7 @@ readable by others, or the server refuses to start; keep it out of your database
 | `alert.webhook.timeout` | `CLAMFLEET_SERVER_ALERT_WEBHOOK_TIMEOUT` | `10s` (1s to 30s per attempt) |
 | `alert.webhook.allow_private` / `alert.webhook.allow_loopback` | `CLAMFLEET_SERVER_ALERT_WEBHOOK_ALLOW_PRIVATE` / `..._ALLOW_LOOPBACK` | `true` / `false` |
 | `alert.webhook.deny_networks` | `CLAMFLEET_SERVER_ALERT_WEBHOOK_DENY_NETWORKS` | empty (extra CIDRs that are never allowed) |
+| `alert.webhook.nat64_prefixes` | `CLAMFLEET_SERVER_ALERT_WEBHOOK_NAT64_PREFIXES` | empty (your own NAT64 translation prefixes; a local-use `64:ff9b:1::/48` address of an unlisted translator is blocked) |
 | `alert.webhook.ca_file` | `CLAMFLEET_SERVER_ALERT_WEBHOOK_CA_FILE` | empty (extra CA bundle, PEM) |
 | `smtp.host` | `CLAMFLEET_SERVER_SMTP_HOST` | empty (email is off) |
 | `smtp.port` / `smtp.tls` | `CLAMFLEET_SERVER_SMTP_PORT` / `..._TLS` | `587` / `starttls` (`tls` for implicit TLS; `none` only for a loopback or private relay) |

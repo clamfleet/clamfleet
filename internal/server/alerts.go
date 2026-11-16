@@ -65,7 +65,11 @@ func BuildAlerts(cfg Config, st store.AlertStore, keys *secrets.Keyring, now fun
 	if err != nil {
 		return nil, err
 	}
-	policy := alert.Policy{AllowPrivate: cfg.Alert.Webhook.AllowPrivate, AllowLoopback: cfg.Alert.Webhook.AllowLoopback, DenyNetworks: deny}
+	nat64, err := ParseNAT64Prefixes(cfg.Alert.Webhook.NAT64Prefixes)
+	if err != nil {
+		return nil, err
+	}
+	policy := alert.Policy{AllowPrivate: cfg.Alert.Webhook.AllowPrivate, AllowLoopback: cfg.Alert.Webhook.AllowLoopback, DenyNetworks: deny, NAT64Prefixes: nat64}
 	hookCAs, err := loadPool(cfg.Alert.Webhook.CAFile, "alert.webhook.ca_file")
 	if err != nil {
 		return nil, err
@@ -100,7 +104,8 @@ func BuildAlerts(cfg Config, st store.AlertStore, keys *secrets.Keyring, now fun
 				Host: m.Host, Port: m.Port, TLS: m.TLS, From: m.From, Username: m.Username, Password: password,
 				Helo: heloName(cfg), Timeout: m.Timeout, RootCAs: smtpCAs,
 			},
-			Now: now,
+			NAT64: nat64,
+			Now:   now,
 		}
 		d.MailFrom = m.From
 		out.EmailEnabled, out.SMTPPlaintext = true, m.TLS == "none"

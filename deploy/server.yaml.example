@@ -64,6 +64,9 @@ alert:
     allow_private: true   # RFC 1918, 100.64.0.0/10 and fc00::/7 (and plaintext http:// to them). Set false on a cloud host
     allow_loopback: false # 127.0.0.0/8, ::1, localhost: for a receiver on this machine
     deny_networks: []     # extra CIDRs that are never allowed, e.g. ["10.9.0.0/16"]
+    nat64_prefixes: []    # your own NAT64 translator prefixes, e.g. ["64:ff9b:1::/96"] (IPv6, /32 /40 /48 /56 /64 or /96).
+                          # An address under one is judged by the IPv4 it carries; 64:ff9b::/96 needs no entry; an unlisted
+                          # local-use 64:ff9b:1::/48 address is blocked, because its destination cannot be known
     ca_file: ""           # extra CA bundle (PEM) added to the system roots, for a receiver with a private CA
                           # Link-local, cloud metadata, multicast and unspecified addresses are always blocked.
 # Retention, in days, counted from ARRIVAL on the server clock (not the agent's detection time: a

@@ -331,14 +331,30 @@ with certificate verification always on (`alert.webhook.ca_file` adds a CA), and
 `169.254.170.2`), multicast, `255.255.255.255`, `192.0.0.0/24` (IANA special purpose; includes an old Oracle
 Cloud metadata address), and these metadata and platform endpoints that are not link-local:
 `100.100.100.200` (Alibaba Cloud), `fd00:ec2::254` (AWS IMDS over IPv6) and `168.63.129.16` (Azure). IPv4-mapped
-forms (`::ffff:a.b.c.d`) are judged as the IPv4 address. Not decoded: NAT64 (`64:ff9b::/96`) and other embedded
-IPv4 forms: a **known gap**.
+forms (`::ffff:a.b.c.d`) are judged as the IPv4 address.
+
+**Embedded IPv4 in an IPv6 address.** An IPv6 address that carries an IPv4 address is not a way round the IPv4 rules:
+every rule (the always-blocked list, the metadata endpoints and `deny_networks`) is checked against **both** the
+address as dialled and the IPv4 inside it, and the most restrictive result wins. `allow_private` and
+`allow_loopback` are judged on the IPv4 inside. The same classification applies to the SMTP relay, including the
+`smtp.tls: none` rule.
+
+| Form | Treatment |
+|---|---|
+| `64:ff9b::/96` (the well-known NAT64 prefix) | Decoded. `64:ff9b::a9fe:a9fe` is the metadata address and is blocked; `64:ff9b::808:808` is 8.8.8.8, allowed over https and refused over `http://` as public. |
+| a prefix listed in `alert.webhook.nat64_prefixes` | Decoded with the RFC 6052 layout for its length (/32, /40, /48, /56, /64 or /96). Bits 64-71 must be zero, otherwise the address is blocked. |
+| `64:ff9b:1::/48` (local-use NAT64, RFC 8215) not under a listed prefix | **Blocked**: the translator's prefix length is unknown, so the destination cannot be known. On a site with its own translator list its prefix once. |
+| 6to4 `2002::/16`, Teredo `2001::/32`, IPv4-compatible `::/96` (except `::` and `::1`), SIIT `::ffff:0:0:0/96` | Always blocked: deprecated, and no legitimate receiver needs them. |
+
+An IPv6-only host behind DNS64 resolves every IPv4-only receiver to `64:ff9b::…`, which is why that prefix is decoded
+rather than blocked. `deny_networks: ["64:ff9b::/96"]` blocks all NAT64 destinations.
 
 | Setting | Default | Effect |
 |---|---|---|
 | `alert.webhook.allow_loopback` | `false` | `127.0.0.0/8`, `::1` and the names `localhost`, `*.localhost`. |
 | `alert.webhook.allow_private` | `true` | RFC 1918, `100.64.0.0/10`, `fc00::/7`, and `http://` to them. `false` also stops plaintext to private addresses: https to public addresses only. |
-| `alert.webhook.deny_networks` | `[]` | Extra CIDRs that are always blocked. An invalid entry refuses the start. |
+| `alert.webhook.deny_networks` | `[]` | Extra CIDRs that are always blocked, matched against the dialled address and the IPv4 inside it. An invalid entry refuses the start. |
+| `alert.webhook.nat64_prefixes` | `[]` | Your own NAT64 translation prefixes (IPv6, /32, /40, /48, /56, /64 or /96): addresses under them are judged by their IPv4. An invalid entry refuses the start. |
 
 **What this cannot do.** The list cannot know every provider's or network's internal services. On a cloud host,
 or next to internal APIs that answer unauthenticated requests, set `allow_private: false` or list the sensitive

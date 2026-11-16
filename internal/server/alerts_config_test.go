@@ -59,6 +59,13 @@ func TestAlertConfigValidate(t *testing.T) {
 		{"deny_networks", mut(func(c *Config) { c.Alert.Webhook.DenyNetworks = []string{"10.9.0.0/16", "192.0.2.7", "fd12::/16"} }), ""},
 		{"deny_networks invalid", mut(func(c *Config) { c.Alert.Webhook.DenyNetworks = []string{"10.9.0.0/33"} }), "deny_networks"},
 		{"deny_networks garbage", mut(func(c *Config) { c.Alert.Webhook.DenyNetworks = []string{"office"} }), "deny_networks"},
+		{"nat64 prefix /96", mut(func(c *Config) { c.Alert.Webhook.NAT64Prefixes = []string{"64:ff9b:1::/96"} }), ""},
+		{"nat64 prefix /48", mut(func(c *Config) { c.Alert.Webhook.NAT64Prefixes = []string{"2001:db8:122::/48"} }), ""},
+		{"nat64 prefix /60", mut(func(c *Config) { c.Alert.Webhook.NAT64Prefixes = []string{"2001:db8:122::/60"} }), "RFC 6052"},
+		{"nat64 prefix IPv4", mut(func(c *Config) { c.Alert.Webhook.NAT64Prefixes = []string{"10.0.0.0/8"} }), "IPv6 prefix"},
+		{"nat64 prefix garbage", mut(func(c *Config) { c.Alert.Webhook.NAT64Prefixes = []string{"translator"} }), "nat64_prefixes"},
+		{"nat64 prefix with the u octet set", mut(func(c *Config) { c.Alert.Webhook.NAT64Prefixes = []string{"2001:db8:0:0:100::/96"} }), "bits 64-71"},
+		{"nat64 prefix with host bits", mut(func(c *Config) { c.Alert.Webhook.NAT64Prefixes = []string{"2001:db8::1/32"} }), "beyond its length"},
 		{"webhook ca_file relative", mut(func(c *Config) { c.Alert.Webhook.CAFile = "ca.pem" }), "ca_file"},
 
 		{"smtp starttls", withSMTP(func(*SMTP) {}), ""},
@@ -76,6 +83,9 @@ func TestAlertConfigValidate(t *testing.T) {
 
 		// Decision 19.
 		{"none to a public literal", withSMTP(func(m *SMTP) { m.Host, m.TLS = "203.0.113.5", "none" }), "public"},
+		{"none to a NAT64 literal of a public address", withSMTP(func(m *SMTP) { m.Host, m.TLS = "64:ff9b::808:808", "none" }), "public"},
+		{"none to a NAT64 literal of a private address", withSMTP(func(m *SMTP) { m.Host, m.TLS = "64:ff9b::a00:1", "none" }), ""},
+		{"none to a 6to4 literal", withSMTP(func(m *SMTP) { m.Host, m.TLS = "2002:7f00:1::1", "none" }), "cannot be judged"},
 		{"none to loopback", withSMTP(func(m *SMTP) { m.Host, m.TLS = "127.0.0.1", "none" }), ""},
 		{"none to a private literal", withSMTP(func(m *SMTP) { m.Host, m.TLS = "10.0.0.25", "none" }), ""},
 		{"none to a CGNAT literal", withSMTP(func(m *SMTP) { m.Host, m.TLS = "100.64.1.1", "none" }), ""},
