@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/clamfleet/clamfleet/internal/config"
+	"github.com/clamfleet/clamfleet/internal/extauth"
 )
 
 // AuthLDAP configures sign-in against one LDAP directory (search-then-bind).
@@ -238,33 +239,8 @@ func checkHTTPSOrLoopback(key, raw string) error {
 // OIDCRedirectURL is where the provider returns the browser: public_url + /login/oidc/callback.
 func (c Config) OIDCRedirectURL() string { return c.PublicBase() + "/login/oidc/callback" }
 
-// CheckLDAPFilterTemplate checks that an LDAP filter template is well formed once its
-// placeholder (such as {username}) is replaced by a harmless value: one parenthesised
-// expression with balanced parentheses.
+// CheckLDAPFilterTemplate checks that an LDAP filter template compiles once its
+// placeholder (such as {username}) is replaced by a harmless value.
 func CheckLDAPFilterTemplate(tmpl, placeholder string) error {
-	f := strings.ReplaceAll(tmpl, placeholder, "x")
-	if !strings.HasPrefix(f, "(") || !strings.HasSuffix(f, ")") {
-		return fmt.Errorf("%q is not a filter: it must be one parenthesised expression such as (uid={username})", tmpl)
-	}
-	depth := 0
-	for i := 0; i < len(f); i++ {
-		switch f[i] {
-		case '\\':
-			i += 2 // an escape is \ and two hex digits; the digits are not structure
-		case '(':
-			depth++
-		case ')':
-			depth--
-			if depth == 0 && i != len(f)-1 {
-				return fmt.Errorf("%q is not a filter: it has text after the closing parenthesis; wrap several terms in (&...)", tmpl)
-			}
-		}
-		if depth < 0 {
-			break
-		}
-	}
-	if depth != 0 {
-		return fmt.Errorf("%q has unbalanced parentheses", tmpl)
-	}
-	return nil
+	return extauth.CheckFilterTemplate(tmpl, placeholder)
 }
