@@ -340,11 +340,15 @@ type User struct {
 	Role        string `json:"role"`
 	AuthSource  string `json:"auth_source"`
 	// ExternalName is the LDAP user name or OIDC preferred_username ("" for local users).
-	ExternalName string     `json:"external_name"`
-	Disabled     bool       `json:"disabled"`
-	MustChange   bool       `json:"password_must_change"`
-	CreatedAt    time.Time  `json:"created_at"`
-	LastLoginAt  *time.Time `json:"last_login_at"`
+	ExternalName string `json:"external_name"`
+	// ExternalID is the provider's stable identifier of an external user (the LDAP id attribute, or
+	// "issuer subject" for OIDC); "" for local users. Shown by `user list --json` so an operator can
+	// tell which directory entry or provider account a user is.
+	ExternalID  string     `json:"external_id"`
+	Disabled    bool       `json:"disabled"`
+	MustChange  bool       `json:"password_must_change"`
+	CreatedAt   time.Time  `json:"created_at"`
+	LastLoginAt *time.Time `json:"last_login_at"`
 	// PasswordHash is the PHC string; it is never serialised and empty for
 	// accounts without a local password.
 	PasswordHash string `json:"-"`

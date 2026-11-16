@@ -45,6 +45,7 @@ type userRow struct {
 	TotpEnabledAt      sql.NullInt64
 	TotpFailures       int64
 	ExternalName       sql.NullString
+	ExternalID         sql.NullString
 }
 
 func toUser(r userRow) store.User {
@@ -53,7 +54,7 @@ func toUser(r userRow) store.User {
 		AuthSource: r.AuthSource, Disabled: r.DisabledAt.Valid, MustChange: r.PasswordMustChange != 0,
 		CreatedAt: time.Unix(r.CreatedAt, 0).UTC(), LastLoginAt: nullTime(r.LastLoginAt),
 		PasswordHash: r.PasswordHash.String, AuthVersion: r.AuthVersion,
-		TOTPEnabled: r.TotpEnabledAt.Valid, TOTPFailures: int(r.TotpFailures), ExternalName: r.ExternalName.String,
+		TOTPEnabled: r.TotpEnabledAt.Valid, TOTPFailures: int(r.TotpFailures), ExternalName: r.ExternalName.String, ExternalID: r.ExternalID.String,
 	}
 }
 

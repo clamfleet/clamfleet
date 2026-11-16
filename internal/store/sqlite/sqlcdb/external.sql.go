@@ -197,7 +197,7 @@ const userByExternalID = `-- name: UserByExternalID :one
 
 SELECT id, email, display_name, role, auth_source, password_hash, password_must_change,
        password_changed_at, disabled_at, created_at, last_login_at, auth_version,
-       totp_enabled_at, totp_failures, external_name
+       totp_enabled_at, totp_failures, external_name, external_id
 FROM users WHERE auth_source = ?1 AND external_id = ?2
 `
 
@@ -222,6 +222,7 @@ type UserByExternalIDRow struct {
 	TotpEnabledAt      sql.NullInt64
 	TotpFailures       int64
 	ExternalName       sql.NullString
+	ExternalID         sql.NullString
 }
 
 // SPDX-License-Identifier: AGPL-3.0-only
@@ -247,6 +248,7 @@ func (q *Queries) UserByExternalID(ctx context.Context, arg UserByExternalIDPara
 		&i.TotpEnabledAt,
 		&i.TotpFailures,
 		&i.ExternalName,
+		&i.ExternalID,
 	)
 	return i, err
 }
@@ -254,7 +256,7 @@ func (q *Queries) UserByExternalID(ctx context.Context, arg UserByExternalIDPara
 const usersByExternalName = `-- name: UsersByExternalName :many
 SELECT id, email, display_name, role, auth_source, password_hash, password_must_change,
        password_changed_at, disabled_at, created_at, last_login_at, auth_version,
-       totp_enabled_at, totp_failures, external_name
+       totp_enabled_at, totp_failures, external_name, external_id
 FROM users WHERE auth_source = ?1 AND external_name = ?2
 ORDER BY id
 `
@@ -280,6 +282,7 @@ type UsersByExternalNameRow struct {
 	TotpEnabledAt      sql.NullInt64
 	TotpFailures       int64
 	ExternalName       sql.NullString
+	ExternalID         sql.NullString
 }
 
 // The operator names an external user as source:name (the CLI); the name is not unique by itself,
@@ -309,6 +312,7 @@ func (q *Queries) UsersByExternalName(ctx context.Context, arg UsersByExternalNa
 			&i.TotpEnabledAt,
 			&i.TotpFailures,
 			&i.ExternalName,
+			&i.ExternalID,
 		); err != nil {
 			return nil, err
 		}

@@ -39,6 +39,9 @@ func TestExternalLoginCreatesUserSessionAndAudit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if u.ExternalID != "uuid-1" {
+		t.Fatalf("external id %q", u.ExternalID)
+	}
 	if u.AuthSource != "ldap" || u.Email != "ann@example.org" || u.ExternalName != "ann" || u.PasswordHash != "" || u.TOTPEnabled || u.LastLoginAt == nil {
 		t.Fatalf("%+v", u)
 	}

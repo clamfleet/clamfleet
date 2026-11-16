@@ -7,7 +7,7 @@
 -- name: UserByExternalID :one
 SELECT id, email, display_name, role, auth_source, password_hash, password_must_change,
        password_changed_at, disabled_at, created_at, last_login_at, auth_version,
-       totp_enabled_at, totp_failures, external_name
+       totp_enabled_at, totp_failures, external_name, external_id
 FROM users WHERE auth_source = sqlc.arg(auth_source) AND external_id = sqlc.arg(external_id);
 
 -- name: CreateExternalUser :one
@@ -53,6 +53,6 @@ SELECT count(*) FROM oidc_login_states;
 -- so the caller refuses an ambiguous answer.
 SELECT id, email, display_name, role, auth_source, password_hash, password_must_change,
        password_changed_at, disabled_at, created_at, last_login_at, auth_version,
-       totp_enabled_at, totp_failures, external_name
+       totp_enabled_at, totp_failures, external_name, external_id
 FROM users WHERE auth_source = sqlc.arg(auth_source) AND external_name = sqlc.arg(external_name)
 ORDER BY id;

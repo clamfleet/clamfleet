@@ -13,19 +13,19 @@ RETURNING id;
 -- name: UserByEmail :one
 SELECT id, email, display_name, role, auth_source, password_hash, password_must_change,
        password_changed_at, disabled_at, created_at, last_login_at, auth_version,
-       totp_enabled_at, totp_failures, external_name
+       totp_enabled_at, totp_failures, external_name, external_id
 FROM users WHERE email = sqlc.arg(email);
 
 -- name: UserByID :one
 SELECT id, email, display_name, role, auth_source, password_hash, password_must_change,
        password_changed_at, disabled_at, created_at, last_login_at, auth_version,
-       totp_enabled_at, totp_failures, external_name
+       totp_enabled_at, totp_failures, external_name, external_id
 FROM users WHERE id = sqlc.arg(id);
 
 -- name: ListUsers :many
 SELECT id, email, display_name, role, auth_source, password_hash, password_must_change,
        password_changed_at, disabled_at, created_at, last_login_at, auth_version,
-       totp_enabled_at, totp_failures, external_name
+       totp_enabled_at, totp_failures, external_name, external_id
 FROM users ORDER BY email;
 
 -- name: SetUserPassword :execrows
