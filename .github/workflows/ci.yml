@@ -1,0 +1,63 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# SPDX-FileCopyrightText: The ClamFleet Authors
+#
+# CI for every pull request and every push to the long-lived branches (docs/testing.md, "CI").
+#
+# Rules this file lives by, enforced by deploy/test/workflows_test.sh and actionlint (make ci):
+#   - every action is a GitHub-owned one pinned by full commit SHA, with its version in a comment;
+#   - the token is read-only and persisted nowhere (persist-credentials: false), and there are no
+#     secrets in these jobs: pull requests from forks run here;
+#   - never pull_request_target or workflow_run, which would give a fork's code the base repository's token;
+#   - the job names below are the required status checks of the repository rulesets. Renaming or
+#     removing one blocks every merge until the ruleset is updated first (docs/releasing.md).
+name: ci
+
+on:
+  pull_request:
+    branches: [develop, main]
+    types: [opened, synchronize, reopened, ready_for_review]
+  push:
+    branches: [develop, main]
+  # Weekly, so a change in the distribution's ClamAV or in a pinned tool shows up without a pull request.
+  # (GitHub stops scheduled runs of a repository with no activity for 60 days; the next pull request
+  # shows the same drift, so this is a convenience.)
+  schedule:
+    - cron: '17 4 * * 1'
+
+# Nothing at the top: each job asks for what it needs.
+permissions: {}
+
+# A newer push to a pull request makes the older run useless. Runs for branches are never cancelled:
+# a push to develop or main is the record that the merged commit was green.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  # Runs on every event, draft pull requests included: it is the cheap check (about 5 minutes).
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      # go.mod pins the toolchain with a `toolchain` line. setup-go installs a Go for the `go` line and
+      # the go command may switch (GOTOOLCHAIN) to the pinned one; either way the tests must run on the
+      # pinned release, so a mismatch fails here, not as a confusing difference later.
+      - name: Go is the toolchain go.mod pins
+        run: |
+          want="$(awk '$1 == "toolchain" { print $2 }' go.mod)"
+          got="$(go env GOVERSION)"
+          test -n "$want" || { echo "go.mod has no toolchain line" >&2; exit 1; }
+          test "$got" = "$want" || { echo "running $got, go.mod pins $want" >&2; exit 1; }
+      - run: |
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+          make tools
+      - run: make build
+      - run: make ci

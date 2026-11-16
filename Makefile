@@ -10,7 +10,7 @@ BIN := bin
 VERSION ?= 0.0.0-dev
 LDFLAGS := -s -w -X github.com/clamfleet/clamfleet/internal/version.Version=$(VERSION)
 
-.PHONY: tools build vet staticcheck test scripts-test sqlc-check generate check packages e2e e2e-apparmor e2e-el9 e2e-idp e2e-web fixtures webfixture web-fixture
+.PHONY: tools ci lint-workflows mod-check test-ci build vet staticcheck test scripts-test sqlc-check generate check packages e2e e2e-apparmor e2e-el9 e2e-idp e2e-web fixtures webfixture web-fixture
 
 # Build-time tools and their pins. The same versions are in CLAUDE.md and docs/testing.md: change all
 # together. They are installed with `go install`, never added to go.mod (the Go `tool` directive would
@@ -18,12 +18,12 @@ LDFLAGS := -s -w -X github.com/clamfleet/clamfleet/internal/version.Version=$(VE
 # sqlc is built with CGO disabled (as CLAUDE.md prescribes): the binary then needs no C toolchain.
 STATICCHECK_VERSION := v0.8.2
 SQLC_VERSION := v1.31.1
+# actionlint is not installed: `make lint-workflows` runs it with `go run` at this version.
 ACTIONLINT_VERSION := v1.7.12
 
 tools:
 	$(GO) install honnef.co/go/tools/cmd/staticcheck@$(STATICCHECK_VERSION)
 	CGO_ENABLED=0 $(GO) install github.com/sqlc-dev/sqlc/cmd/sqlc@$(SQLC_VERSION)
-	$(GO) install github.com/rhysd/actionlint/cmd/actionlint@$(ACTIONLINT_VERSION)
 
 # Both binaries are static (CGO_ENABLED=0: the server uses pure-Go SQLite).
 # E2E_BUILD_TAGS: extra build tags, only for the package upgrade e2e (e2e_migration: a test-only
@@ -82,6 +82,29 @@ sqlc-check:
 	sqlc diff
 
 check: vet staticcheck sqlc-check test scripts-test
+
+# What CI runs on every pull request (docs/testing.md, "CI"): `check` plus the workflow lint, the module
+# and formatting hygiene, and the test gate in place of plain `go test`. Kept apart from `check` so a
+# developer's loop stays short and needs no network beyond the module cache.
+ci: vet staticcheck sqlc-check scripts-test lint-workflows mod-check test-ci
+
+lint-workflows:
+	$(GO) run github.com/rhysd/actionlint/cmd/actionlint@$(ACTIONLINT_VERSION)
+
+# go.mod and go.sum are what the build uses, so they must be what `go mod tidy` would write and match
+# the module cache; gofmt covers tracked Go files only (e2e/web/node_modules is not ours).
+mod-check:
+	$(GO) mod tidy -diff
+	$(GO) mod verify
+	@bad="$$(gofmt -l $$(git ls-files '*.go'))"; test -z "$$bad" || { echo "gofmt: these files are not formatted:" >&2; echo "$$bad" >&2; exit 1; }
+
+# The unit tests behind hack/testgate: a failure, a skip or a build failure all fail the run, which
+# `go test` alone would not for a skip. -count=1 is required: the cmd/* and hack/webfixture tests build
+# binaries that go test's result cache cannot see (CLAUDE.md). bash and pipefail so that a `go test`
+# that dies without a verdict (it still prints events) fails the target too.
+test-ci:
+	$(GO) build -o $(BIN)/testgate ./hack/testgate
+	bash -o pipefail -c '$(GO) test -count=1 -json ./... | $(BIN)/testgate'
 
 # Needs the clamfleet-test container; read docs/testing.md first.
 # CFT_EXEC (command prefix that runs a command inside the container) and
