@@ -23,7 +23,7 @@ import (
 
 // serverBin and agentBin are the real binaries, built once. The tests run the
 // compiled programs through their real command dispatch.
-var serverBin, agentBin string
+var serverBin, agentBin, seeddbBin string
 
 func TestMain(m *testing.M) {
 	dir, err := os.MkdirTemp("", "cfserver")
@@ -32,7 +32,8 @@ func TestMain(m *testing.M) {
 	}
 	serverBin = filepath.Join(dir, "clamfleet-server")
 	agentBin = filepath.Join(dir, "clamfleet-agent")
-	for _, b := range [][]string{{serverBin, "."}, {agentBin, "../clamfleet-agent"}} {
+	seeddbBin = filepath.Join(dir, "seeddb")
+	for _, b := range [][]string{{serverBin, "."}, {agentBin, "../clamfleet-agent"}, {seeddbBin, "../../hack/seeddb"}} {
 		if out, err := exec.Command("go", "build", "-o", b[0], b[1]).CombinedOutput(); err != nil {
 			os.Stderr.Write(out)
 			os.RemoveAll(dir)
