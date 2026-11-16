@@ -12,11 +12,15 @@ LDFLAGS := -s -w -X github.com/clamfleet/clamfleet/internal/version.Version=$(VE
 .PHONY: build vet staticcheck test scripts-test sqlc-check generate check packages e2e e2e-apparmor e2e-el9 e2e-web fixtures webfixture web-fixture
 
 # Both binaries are static (CGO_ENABLED=0: the server uses pure-Go SQLite).
-# TAGS: extra build tags; only the package upgrade e2e sets one (e2e_migration, a test-only migration).
-TAGS ?=
+# E2E_BUILD_TAGS: extra build tags, only for the package upgrade e2e (e2e_migration: a test-only
+# migration). It is picked up from the environment, so `build` (and with it `packages`) refuses a
+# non-empty value unless VERSION contains "e2e": an exported tag must never reach a release package.
+# The tagged binary also announces itself, "+e2e_migration" after its version (migrations/e2e_overlay.go).
+E2E_BUILD_TAGS ?=
 build:
-	CGO_ENABLED=0 $(GO) build -trimpath -tags '$(TAGS)' -ldflags '$(LDFLAGS)' -o $(BIN)/clamfleet-agent ./cmd/clamfleet-agent
-	CGO_ENABLED=0 $(GO) build -trimpath -tags '$(TAGS)' -ldflags '$(LDFLAGS)' -o $(BIN)/clamfleet-server ./cmd/clamfleet-server
+	@test -z "$(E2E_BUILD_TAGS)" || case "$(VERSION)" in *e2e*) ;; *) echo "build: E2E_BUILD_TAGS=$(E2E_BUILD_TAGS) is only for e2e builds: VERSION=$(VERSION) does not contain e2e" >&2; exit 1 ;; esac
+	CGO_ENABLED=0 $(GO) build -trimpath -tags '$(E2E_BUILD_TAGS)' -ldflags '$(LDFLAGS)' -o $(BIN)/clamfleet-agent ./cmd/clamfleet-agent
+	CGO_ENABLED=0 $(GO) build -trimpath -tags '$(E2E_BUILD_TAGS)' -ldflags '$(LDFLAGS)' -o $(BIN)/clamfleet-server ./cmd/clamfleet-server
 
 # Packages (milestone 6): .deb and .rpm of the agent and the server into dist/, built by nfpm, which is a
 # build-time tool only (pinned in CLAUDE.md, run with `go run` like sqlc; nothing of it is in the binaries).

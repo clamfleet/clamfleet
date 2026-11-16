@@ -525,7 +525,7 @@ func TestDebFailedUpgradeLeavesDataAlone(t *testing.T) {
 	sh(t, "install -d -o clamfleet-server -g clamfleet-server -m 0500 /var/lib/clamfleet-server/backups")
 
 	dir := t.TempDir()
-	cmd := exec.Command("make", "-C", repoRoot, "packages", "VERSION="+pkgVersionNew, "PKG_DIR="+dir, "TAGS=e2e_migration")
+	cmd := exec.Command("make", "-C", repoRoot, "packages", "VERSION="+pkgVersionNew, "PKG_DIR="+dir, "E2E_BUILD_TAGS=e2e_migration")
 	if o, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("make packages (e2e2 with the overlay): %v\n%s", err, o)
 	}
