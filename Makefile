@@ -10,7 +10,7 @@ BIN := bin
 VERSION ?= 0.0.0-dev
 LDFLAGS := -s -w -X github.com/clamfleet/clamfleet/internal/version.Version=$(VERSION)
 
-.PHONY: tools ci lint-workflows mod-check test-ci build vet staticcheck test scripts-test sqlc-check generate check packages e2e e2e-apparmor e2e-el9 e2e-idp e2e-web fixtures webfixture web-fixture
+.PHONY: tools ci lint-workflows mod-check test-ci build vet staticcheck test scripts-test sqlc-check generate check packages e2e e2e-image e2e-docker e2e-apparmor e2e-el9 e2e-idp e2e-web fixtures webfixture web-fixture
 
 # Build-time tools and their pins. The same versions are in CLAUDE.md and docs/testing.md: change all
 # together. They are installed with `go install`, never added to go.mod (the Go `tool` directive would
@@ -123,6 +123,30 @@ e2e:
 	@test -n "$(CFT_EXEC)" -a -n "$(INCUS_HOST)" || { echo "e2e: set CFT_EXEC and INCUS_HOST (environment or local.mk, see local.mk.example)" >&2; exit 1; }
 	$(MAKE) packages VERSION=0.6.0-e2e1
 	$(GO) test -tags e2e -count=1 -timeout 20m -v ./e2e/
+
+# The same suite in Docker, which is what CI runs (docs/testing.md, "The e2e suite in Docker"). The image is
+# a Debian 13 with systemd as PID 1, the distribution's ClamAV and frozen signatures (deploy/test/ci); it is
+# never pushed anywhere (M6 decision 13). The container has no network, so the binaries go in over
+# `docker exec -i`: that is why CFT_EXEC carries -i. The suite's own variables are set inline, so a
+# local.mk written for the Incus suite cannot redirect it. READY_FILE is /etc/hostname, which clamd may read here.
+E2E_IMAGE ?= clamfleet-e2e:ci
+E2E_CT := clamfleet-ci
+e2e-image:
+	docker build -t $(E2E_IMAGE) -f deploy/test/ci/Dockerfile deploy/test/ci
+
+# Needs a Docker daemon and the image (`make e2e-image`). The test gate with -expect-pkg fails the run when
+# the set of passed top-level tests differs from the set the package declares, so a narrowed -run cannot pass.
+# E2E_JOURNAL_DIR keeps each container's journal (reset.sh saves it before replacing the container); CI
+# uploads it when the run fails. The trap removes the last container however the run ends.
+E2E_JOURNAL_DIR ?= $(CURDIR)/dist/e2e-journals
+e2e-docker:
+	@command -v docker >/dev/null || { echo "e2e-docker: docker is not installed; the Incus suite is "make e2e" (docs/testing.md)" >&2; exit 1; }
+	$(MAKE) packages VERSION=0.6.0-e2e1
+	$(GO) build -o $(BIN)/testgate ./hack/testgate
+	mkdir -p $(E2E_JOURNAL_DIR)
+	trap 'docker rm -f $(E2E_CT) >/dev/null 2>&1' EXIT; \
+	CFT_EXEC="docker exec -i $(E2E_CT)" RESET_RUNTIME=docker CT=$(E2E_CT) E2E_IMAGE=$(E2E_IMAGE) READY_FILE=/etc/hostname E2E_JOURNAL_DIR=$(E2E_JOURNAL_DIR) \
+		bash -o pipefail -c '$(GO) test -tags e2e -count=1 -timeout 40m -json ./e2e/ | $(BIN)/testgate -expect-pkg ./e2e -tags e2e'
 
 # AppArmor enforcing, in the throwaway Debian 13 VM (docs/testing.md "The AppArmor VM"). Part of the
 # milestone 5 acceptance; `make e2e` does not run it because it needs the VM. Without CFA_EXEC and
