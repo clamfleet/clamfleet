@@ -9,7 +9,7 @@ Central management and reporting for ClamAV on Linux servers.
 
 | Field | Value |
 | --- | --- |
-| Status | Design agreed, implementation not started |
+| Status | Milestones 1 to 6b built; 6c (release engineering: CI, signed releases, project files) in progress |
 | Project type | Open source, public repository, community contributions expected |
 | Maintainer | Gabriel |
 | Target fleet | 50 to 100 Linux servers |
@@ -88,7 +88,7 @@ Prefer the standard library. Add a dependency only where listed.
 | Front end | htmx, vendored and embedded, no build step |
 | Email | `net/smtp` (stdlib) plus a small in-repo client layer (LOGIN auth, MIME). Decision: M4 plan, decision 11. |
 | Metrics | A small in-repo text exposition in the Prometheus format (M6 decision 6), no dependency |
-| Config | YAML (`gopkg.in/yaml.v3`) with environment variable overrides |
+| Config | YAML (`go.yaml.in/yaml/v3`, the maintained successor of `gopkg.in/yaml.v3`) with environment variable overrides |
 | Logging | `log/slog`, JSON output |
 | LDAP | `github.com/go-ldap/ldap/v3` (M6 decision 16) |
 | OIDC | Standard library only: authorization code flow with PKCE, no JOSE library (M6 decision 17) |
@@ -350,8 +350,13 @@ General requirements for every milestone:
 
 These are not decided. The agent must ask before implementing anything that depends on them.
 
-1. Licence: Apache-2.0 or MIT (permissive), or GPL-2.0 (matches ClamAV itself). Must be decided before the first public commit.
-2. Final project name. Check for conflicts on GitHub, package registries and the ClamAV trademark before publishing.
+1. Decided: AGPL-3.0-only (see `LICENSE`).
+2. Final project name. Open until the maintainer confirms "ClamFleet". Name check of 2026-11-16 (a search, not legal advice):
+   - GitHub: no other repository or organisation named "clamfleet" besides this project's own.
+   - Go, PyPI, npm, crates.io and RubyGems: no package of that name. The Docker Hub namespace `clamfleet` exists and holds no repository.
+   - Debian, Ubuntu, Fedora and Alpine package indexes, and release-monitoring.org: no package or project of that name.
+   - Domains clamfleet.com, .org, .net, .io and .dev: all five unregistered (RDAP answered not found).
+   - Trademark: ClamAV is marked as a registered trademark (Cisco) on clamav.net and in the ClamAV README. The name contains "Clam" but not "ClamAV"; the README carries a "not affiliated with or endorsed by Cisco" notice. Whether the name is acceptable is the maintainer's judgement. No published ClamAV trademark policy was found on clamav.net or in its repository.
 3. Decided (M4 decision 17): not in v1; webhook JSON to a collector, and one JSON log line per alert for journald forwarders.
 4. Decided (M6 decision 13): no container image in v1.
 5. Decided: Debian 13 and the RHEL 9 family (tested on AlmaLinux 9); Debian 12 is untested (M6 decision 12).
