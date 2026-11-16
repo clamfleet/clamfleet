@@ -59,28 +59,62 @@ type Config struct {
 	Retention Retention `yaml:"retention"`
 }
 
-// Retention says how long data is kept. Only events arrive in milestone 5; the
-// report and state-change keys come with the other retention rules in milestone
-// 6 (the strict config decoder refuses keys that do not exist yet).
+// Retention says how long data is kept, in days, per table (spec 8.2; plan
+// docs/plans/milestone-6.md 4.3). Every key counts from ARRIVAL on the server
+// clock (received_at or ts of the server's own rows), never from the agent's
+// clock: a spooled event or report can be old when it arrives.
 type Retention struct {
+	// ReportsDays: heartbeat reports. The fleet page does not depend on them
+	// (hosts.last_report and hosts.state live on the host row).
+	ReportsDays int `yaml:"reports_days"`
 	// EventsDays: events (and, by cascade, their receipts, window membership and
-	// alert rows) are deleted this many days after they ARRIVED, by received_at
-	// and not by the agent's ts: a spooled event can be old when it arrives. A
-	// file path is personal data, so this is also how long paths live here.
+	// alert rows). A file path is personal data, so this is also how long paths
+	// live here. An event whose alert is unfinished, or held in an open detection
+	// window, is kept until that is over.
 	EventsDays int `yaml:"events_days"`
+	// StateChangesDays: health state history. One whose alert is still pending is kept.
+	StateChangesDays int `yaml:"state_changes_days"`
+	// AlertLogDays: the alert attempt log, finished deliveries and closed
+	// detection windows (the M4 constant alert.Retention, now configurable).
+	AlertLogDays int `yaml:"alert_log_days"`
+	// AuditDays: the audit log. Audit rows hold emails and client IPs (personal
+	// data), and a security log still needs a bound.
+	AuditDays int `yaml:"audit_days"`
 }
 
-// Bounds of retention.events_days.
+// Defaults and bounds of the retention keys (plan 4.3).
 const (
-	MinEventsDays     = 7
-	MaxEventsDays     = 3650
-	DefaultEventsDays = 365
+	MinReportsDays, MaxReportsDays, DefaultReportsDays                = 14, 90, 30
+	MinEventsDays, MaxEventsDays, DefaultEventsDays                   = 7, 3650, 365
+	MinStateChangesDays, MaxStateChangesDays, DefaultStateChangesDays = 30, 3650, 365
+	MinAlertLogDays, MaxAlertLogDays, DefaultAlertLogDays             = 30, 3650, 90
+	MinAuditDays, MaxAuditDays, DefaultAuditDays                      = 90, 3650, 365
 )
 
-// Validate checks the retention keys.
+// DefaultRetention returns the defaults of every retention key.
+func DefaultRetention() Retention {
+	return Retention{
+		ReportsDays: DefaultReportsDays, EventsDays: DefaultEventsDays, StateChangesDays: DefaultStateChangesDays,
+		AlertLogDays: DefaultAlertLogDays, AuditDays: DefaultAuditDays,
+	}
+}
+
+// Validate checks every retention key against its bounds, so a typo cannot
+// delete history at once (a day count of 0) or keep personal data for centuries.
 func (r Retention) Validate() error {
-	if r.EventsDays < MinEventsDays || r.EventsDays > MaxEventsDays {
-		return fmt.Errorf("retention.events_days must be between %d and %d, got %d", MinEventsDays, MaxEventsDays, r.EventsDays)
+	for _, k := range []struct {
+		key         string
+		v, min, max int
+	}{
+		{"reports_days", r.ReportsDays, MinReportsDays, MaxReportsDays},
+		{"events_days", r.EventsDays, MinEventsDays, MaxEventsDays},
+		{"state_changes_days", r.StateChangesDays, MinStateChangesDays, MaxStateChangesDays},
+		{"alert_log_days", r.AlertLogDays, MinAlertLogDays, MaxAlertLogDays},
+		{"audit_days", r.AuditDays, MinAuditDays, MaxAuditDays},
+	} {
+		if k.v < k.min || k.v > k.max {
+			return fmt.Errorf("retention.%s must be between %d and %d, got %d", k.key, k.min, k.max, k.v)
+		}
 	}
 	return nil
 }
@@ -355,7 +389,7 @@ func DefaultConfig() Config {
 			Webhook:  AlertWebhook{Timeout: 10 * time.Second, AllowPrivate: true, DenyNetworks: []string{}},
 		},
 		SMTP:      SMTP{Port: 587, TLS: "starttls", Timeout: 30 * time.Second},
-		Retention: Retention{EventsDays: DefaultEventsDays},
+		Retention: DefaultRetention(),
 	}
 }
 

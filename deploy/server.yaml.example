@@ -66,11 +66,16 @@ alert:
     deny_networks: []     # extra CIDRs that are never allowed, e.g. ["10.9.0.0/16"]
     ca_file: ""           # extra CA bundle (PEM) added to the system roots, for a receiver with a private CA
                           # Link-local, cloud metadata, multicast and unspecified addresses are always blocked.
-# Retention. Events are deleted this many days after they ARRIVED (not by the agent's detection
-# time: a spooled event can be old when it arrives). A file path is personal data. reports_days
-# and state_changes_days arrive in milestone 6. Environment: CLAMFLEET_SERVER_RETENTION_EVENTS_DAYS.
+# Retention, in days, counted from ARRIVAL on the server clock (not the agent's detection time: a
+# spooled event can be old when it arrives). A file path is personal data. One daily pass prunes every
+# table in batches. A row whose alert is still unfinished is kept until that is over.
+# Environment: CLAMFLEET_SERVER_RETENTION_REPORTS_DAYS and so on.
 retention:
-  events_days: 365        # 7 to 3650
+  reports_days: 30        # 14 to 90: heartbeat reports
+  events_days: 365        # 7 to 3650: detections
+  state_changes_days: 365 # 30 to 3650: health state history
+  alert_log_days: 90      # 30 to 3650: alert attempts, finished deliveries, closed detection windows
+  audit_days: 365         # 90 to 3650: the audit log (emails and client IPs)
 # Email alerts. Empty host = email is off (creating an email target is refused).
 smtp:
   host: ""                # e.g. smtp.example

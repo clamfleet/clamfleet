@@ -273,7 +273,7 @@ func (a *app) serve(ctx context.Context, args []string) int {
 	}()
 	go func() {
 		defer func() { loopDone <- struct{}{} }()
-		server.RunRetention(loopCtx, st, a.now, cfg.Retention.EventsDays, log, retentionTick.C)
+		server.RunRetention(loopCtx, st, a.now, cfg.Retention, log, retentionTick.C)
 	}()
 	err = server.Serve(ctx, cfg, h, log)
 	// Wait for the loops before the deferred st.Close(): an evaluation cut off by

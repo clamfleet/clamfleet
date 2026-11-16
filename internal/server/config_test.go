@@ -36,7 +36,9 @@ func TestEnvNamesMatchDocumentedTable(t *testing.T) {
 		"CLAMFLEET_SERVER_HEALTH_DAILY_WARN_HOURS", "CLAMFLEET_SERVER_HEALTH_DEFAULT_INTERVAL",
 		"CLAMFLEET_SERVER_HEALTH_EVAL_INTERVAL", "CLAMFLEET_SERVER_HEALTH_REQUIRE_VIRUS_EVENT", "CLAMFLEET_SERVER_HEALTH_SCAN_WARN_HOURS",
 		"CLAMFLEET_SERVER_HEALTH_STALE_FACTOR",
-		"CLAMFLEET_SERVER_LISTEN", "CLAMFLEET_SERVER_PUBLIC_URL", "CLAMFLEET_SERVER_RETENTION_EVENTS_DAYS", "CLAMFLEET_SERVER_SECRET_KEY_FILE",
+		"CLAMFLEET_SERVER_LISTEN", "CLAMFLEET_SERVER_PUBLIC_URL", "CLAMFLEET_SERVER_RETENTION_ALERT_LOG_DAYS", "CLAMFLEET_SERVER_RETENTION_AUDIT_DAYS",
+		"CLAMFLEET_SERVER_RETENTION_EVENTS_DAYS", "CLAMFLEET_SERVER_RETENTION_REPORTS_DAYS", "CLAMFLEET_SERVER_RETENTION_STATE_CHANGES_DAYS",
+		"CLAMFLEET_SERVER_SECRET_KEY_FILE",
 		"CLAMFLEET_SERVER_SMTP_CA_FILE", "CLAMFLEET_SERVER_SMTP_FROM", "CLAMFLEET_SERVER_SMTP_HELO",
 		"CLAMFLEET_SERVER_SMTP_HOST", "CLAMFLEET_SERVER_SMTP_PASSWORD_FILE", "CLAMFLEET_SERVER_SMTP_PORT",
 		"CLAMFLEET_SERVER_SMTP_TIMEOUT", "CLAMFLEET_SERVER_SMTP_TLS", "CLAMFLEET_SERVER_SMTP_USERNAME",
@@ -146,13 +148,13 @@ func TestEnvOverridesFile(t *testing.T) {
 }
 
 // A copy of spec 12 with keys of a later milestone must fail loudly, not be ignored:
-// retention.events_days exists since milestone 5, reports_days and the others arrive in M6.
+// retention.* has five keys; a sixth, invented one is refused.
 func TestUnknownKeyIsAnError(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "server.yaml")
-	if err := os.WriteFile(p, []byte("listen: 127.0.0.1:1\nretention: {reports_days: 90}\n"), 0o600); err != nil {
+	if err := os.WriteFile(p, []byte("listen: 127.0.0.1:1\nretention: {sessions_days: 90}\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := LoadConfig(p, true, noEnv()); err == nil || !strings.Contains(err.Error(), "reports_days") {
+	if _, _, err := LoadConfig(p, true, noEnv()); err == nil || !strings.Contains(err.Error(), "sessions_days") {
 		t.Fatalf("err = %v", err)
 	}
 }
@@ -369,5 +371,23 @@ func TestRetentionEventsDaysFromFileAndEnv(t *testing.T) {
 	c, _, err = LoadConfig(p, true, o)
 	if err != nil || c.Retention.EventsDays != 9 {
 		t.Fatalf("the environment must win: %+v %v", c.Retention, err)
+	}
+}
+
+// The new retention keys load from the file and the environment like events_days.
+func TestRetentionKeysFromFileAndEnv(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "server.yaml")
+	if err := os.WriteFile(p, []byte("retention: {reports_days: 14, audit_days: 90, alert_log_days: 40}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	o := noEnv()
+	o.LookupEnv = func(k string) (string, bool) { return "45", k == "CLAMFLEET_SERVER_RETENTION_STATE_CHANGES_DAYS" }
+	c, _, err := LoadConfig(p, true, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := Retention{ReportsDays: 14, EventsDays: 365, StateChangesDays: 45, AlertLogDays: 40, AuditDays: 90}
+	if c.Retention != want {
+		t.Fatalf("%+v, want %+v", c.Retention, want)
 	}
 }
