@@ -21,12 +21,13 @@ build:
 # VERSION is semver; a pre-release such as 0.6.0-rc1 becomes 0.6.0~rc1 in a deb. amd64 only (arm64 is 6c).
 NFPM_VERSION := v2.49.0
 NFPM := $(GO) run github.com/goreleaser/nfpm/v2/cmd/nfpm@$(NFPM_VERSION)
+PKG_DIR ?= dist
 packages: build
-	rm -rf dist && mkdir dist
+	rm -rf $(PKG_DIR) && mkdir -p $(PKG_DIR)
 	set -e; for pkg in agent server; do for fmt in deb rpm; do \
-		VERSION=$(VERSION) NFPM_ARCH=amd64 $(NFPM) package -f deploy/packaging/nfpm-$$pkg.yaml -p $$fmt -t dist/; \
+		VERSION=$(VERSION) NFPM_ARCH=amd64 $(NFPM) package -f deploy/packaging/nfpm-$$pkg.yaml -p $$fmt -t $(PKG_DIR)/; \
 	done; done
-	ls -l dist
+	ls -l $(PKG_DIR)
 
 vet:
 	$(GO) vet ./...
@@ -70,6 +71,7 @@ export CFT_EXEC INCUS_HOST CFA_EXEC CFA_HOST
 
 e2e:
 	@test -n "$(CFT_EXEC)" -a -n "$(INCUS_HOST)" || { echo "e2e: set CFT_EXEC and INCUS_HOST (environment or local.mk, see local.mk.example)" >&2; exit 1; }
+	$(MAKE) packages VERSION=0.6.0-e2e1
 	$(GO) test -tags e2e -count=1 -timeout 20m -v ./e2e/
 
 # AppArmor enforcing, in the throwaway Debian 13 VM (docs/testing.md "The AppArmor VM"). Part of the
