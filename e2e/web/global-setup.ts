@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // SPDX-FileCopyrightText: The ClamFleet Authors
 
-// Starts bin/webfixture twice on 127.0.0.1 (plain, and with --totp-required), waits for the READY
+// Starts bin/webfixture twice on 127.0.0.1 (plain, and with --totp-required), both with --sso, waits for the READY
 // lines, and hands URL and logins to the specs through JSON files (CLAMFLEET_E2E_FIXTURE and
 // CLAMFLEET_E2E_FIXTURE_REQUIRED, with _URL variants). The returned function is Playwright's
 // global teardown: it stops both, and each deletes its own temp directory.
@@ -60,11 +60,14 @@ async function startFixture(extraArgs: string[]): Promise<Started> {
 
 // Two fixtures: the normal console (all specs but the forced-enrolment one) and one with
 // auth.local.totp_required. Two origins, so the cookies of the two never meet in one test.
+// Both run with --sso (the fake OpenID Connect provider and LDAP directory), so every local
+// sign-in and two-factor spec also runs with the SSO button and the "Email or user name" field
+// present: local sign-in must not regress when the form gained LDAP routing (plan 6.8).
 export default async function globalSetup(): Promise<() => Promise<void>> {
-  const plain = await startFixture([]);
+  const plain = await startFixture(['--sso']);
   let required: Started;
   try {
-    required = await startFixture(['--totp-required']);
+    required = await startFixture(['--sso', '--totp-required']);
   } catch (e) {
     await plain.stop();
     throw e;

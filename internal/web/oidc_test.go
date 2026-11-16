@@ -431,7 +431,7 @@ func TestOIDCProviderErrorPage(t *testing.T) {
 		t.Fatal("the state survived an error callback")
 	}
 	// An error callback with the wrong state is the expired page, not the provider's text.
-	p = r.start(b, "")
+	_ = r.start(b, "")
 	if got := b.get("/login/oidc/callback?error=access_denied&state=nope"); got.status != 400 {
 		t.Fatalf("%d", got.status)
 	}

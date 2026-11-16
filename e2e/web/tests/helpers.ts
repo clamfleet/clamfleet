@@ -27,6 +27,15 @@ export interface FixtureInfo {
     signing_key: string;
     host: string;
   };
+  // The fake OpenID Connect provider and LDAP directory (webfixture --sso; docs/testing.md "SSO in the fixture").
+  sso?: {
+    issuer_url: string;
+    button_text: string;
+    oidc_admin: string;
+    oidc_viewer: string;
+    oidc_norole: string;
+    ldap_admin: Login;
+  };
   // The seeded detections (docs/testing.md "Detections in the fixture").
   events: {
     open_count: number;
