@@ -496,3 +496,21 @@ func TestVerifyCopyRejectsDamageAndVersionMismatch(t *testing.T) {
 func recordOf(hostID int64, i int) store.ReportRecord {
 	return store.ReportRecord{HostID: hostID, Report: rep("a", t0.Add(time.Duration(i)*time.Second), "1"), ReceivedAt: t0}
 }
+
+// Rule: a missing backup directory is created only by the user who owns its parent. A root-run
+// backup (here: any other effective uid, through the seam) would create a directory the server user
+// cannot use, so it is refused and nothing is created. Mutation: drop the parent-owner check.
+func TestBackupDoesNotCreateADirectoryUnderAnotherUsersParent(t *testing.T) {
+	s := openTemp(t)
+	addHost(t, s, "a")
+	parent := t.TempDir()
+	dir := filepath.Join(parent, "backups")
+	s.backupEUID = func() int { return os.Geteuid() + 1 }
+	_, err := s.Backup(context.Background(), bopts(dir))
+	if err == nil || !strings.Contains(err.Error(), "refusing to create the backup directory") {
+		t.Fatalf("err = %v, want a refusal to create the directory", err)
+	}
+	if _, serr := os.Lstat(dir); !errors.Is(serr, os.ErrNotExist) {
+		t.Fatalf("the directory was created anyway (%v)", serr)
+	}
+}
