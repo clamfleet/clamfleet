@@ -4,7 +4,7 @@
 {{define "content"}}
 <h1>Account</h1>
 <div class="card" data-testid="account-page">
-  <p>Signed in as <strong>{{.Principal.Email}}</strong> ({{.Principal.Role}}).</p>
+  <p>Signed in as <strong>{{.Principal.Actor}}</strong> ({{.Principal.Role}}).</p>
   {{if .Body.MustChange}}<p data-testid="must-change">You have a one-time password. Choose your own password to continue.</p>{{end}}
   <h2>Change password</h2>
   <form method="post" action="/account/password" data-testid="account-form">

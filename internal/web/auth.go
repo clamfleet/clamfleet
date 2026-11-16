@@ -243,8 +243,8 @@ func (w *Web) logout(rw http.ResponseWriter, r *http.Request) {
 		w.errorPage(rw, r, http.StatusInternalServerError)
 		return
 	}
-	if err := w.Store.RecordAudit(r.Context(), w.Now(), store.Audit{Kind: store.ActorUser, Actor: p.Email},
-		store.ActionUserLogout, store.TargetUser, p.Email, map[string]string{"ip": w.ClientIP(r)}); err != nil {
+	if err := w.Store.RecordAudit(r.Context(), w.Now(), store.Audit{Kind: store.ActorUser, Actor: p.Actor()},
+		store.ActionUserLogout, store.TargetUser, p.Actor(), map[string]string{"ip": w.ClientIP(r)}); err != nil {
 		w.Log.Error("cannot audit logout", "error", err.Error())
 	}
 	http.SetCookie(rw, webauth.ClearCookie(w.Auth.Secure))
@@ -286,6 +286,12 @@ func (w *Web) accountPage(rw http.ResponseWriter, r *http.Request) {
 // otherwise), applies the policy, and ends every OTHER session of the user.
 func (w *Web) accountPassword(rw http.ResponseWriter, r *http.Request) {
 	p, _ := webauth.FromContext(r.Context())
+	// Rule: an external user has no local password to change (the provider owns it). Refused
+	// before anything is read: p.Email can even be empty for them, and the page hides the form.
+	if p.AuthSource != store.AuthLocal {
+		w.errorPage(rw, r, http.StatusForbidden)
+		return
+	}
 	fail := func(status int, msg string) {
 		v := w.newView(r, "Account", "account", w.accountBodyFor(r, p))
 		v.Error = msg
@@ -346,7 +352,7 @@ func (w *Web) accountPassword(rw http.ResponseWriter, r *http.Request) {
 	// Compare-and-swap on the hash verified above: an admin reset that committed
 	// while this request was hashing is not overwritten by this change.
 	err = w.Store.SetPassword(r.Context(), u.ID, store.PasswordChange{Hash: hash, Self: true, KeepSession: p.TokenHash, ExpectedHash: u.PasswordHash},
-		w.Now(), store.Audit{Kind: store.ActorUser, Actor: p.Email})
+		w.Now(), store.Audit{Kind: store.ActorUser, Actor: p.Actor()})
 	if errors.Is(err, store.ErrCredentialChanged) {
 		outcome = webauth.Aborted
 		w.Log.Warn("password change refused: the account changed meanwhile", "client_ip", w.ClientIP(r))

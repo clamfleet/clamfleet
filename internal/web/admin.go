@@ -55,7 +55,7 @@ type hostAction struct {
 
 func (w *Web) actor(r *http.Request) (webauth.Principal, store.Audit) {
 	p, _ := webauth.FromContext(r.Context())
-	return p, store.Audit{Kind: store.ActorUser, Actor: p.Email}
+	return p, store.Audit{Kind: store.ActorUser, Actor: p.Actor()}
 }
 
 // adminView builds the hosts admin page; every host is listed, revoked ones included.
@@ -139,7 +139,7 @@ func (w *Web) adminRegister(rw http.ResponseWriter, r *http.Request) {
 		w.errorPage(rw, r, http.StatusInternalServerError)
 		return
 	}
-	w.Log.Info("host registered", "host", norm, "actor", p.Email)
+	w.Log.Info("host registered", "host", norm, "actor", p.Actor())
 	w.showToken(rw, r, norm, token, true)
 }
 
@@ -157,7 +157,7 @@ func (w *Web) adminRotate(rw http.ResponseWriter, r *http.Request) {
 		w.hostError(rw, r, "rotate token", err)
 		return
 	}
-	w.Log.Info("token rotated", "host", name, "actor", p.Email)
+	w.Log.Info("token rotated", "host", name, "actor", p.Actor())
 	w.showToken(rw, r, name, token, false)
 }
 
@@ -168,7 +168,7 @@ func (w *Web) adminRevoke(rw http.ResponseWriter, r *http.Request) {
 		w.hostError(rw, r, "revoke token", err)
 		return
 	}
-	w.Log.Info("token revoked", "host", name, "actor", p.Email)
+	w.Log.Info("token revoked", "host", name, "actor", p.Actor())
 	http.Redirect(rw, r, "/admin/hosts?"+url.Values{"notice": {"revoked"}, "host": {name}}.Encode(), http.StatusSeeOther)
 }
 
@@ -185,7 +185,7 @@ func (w *Web) adminDelete(rw http.ResponseWriter, r *http.Request) {
 		w.hostError(rw, r, "delete host", err)
 		return
 	}
-	w.Log.Info("host deleted with all its data", "host", name, "actor", p.Email)
+	w.Log.Info("host deleted with all its data", "host", name, "actor", p.Actor())
 	http.Redirect(rw, r, "/admin/hosts?"+url.Values{"notice": {"deleted"}, "host": {name}}.Encode(), http.StatusSeeOther)
 }
 

@@ -229,7 +229,7 @@ func (m *Manager) Authenticate(r *http.Request) (Principal, error) {
 	}
 	return Principal{
 		SessionID: sp.SessionID, UserID: sp.UserID, Email: sp.Email, Name: sp.Name, Role: sp.Role,
-		MustChange: sp.MustChange, AuthSource: sp.AuthSource, TOTPEnabled: sp.TOTPEnabled, TokenHash: hash, csrf: sp.CSRF,
+		MustChange: sp.MustChange, AuthSource: sp.AuthSource, TOTPEnabled: sp.TOTPEnabled, ExternalName: sp.ExternalName, TokenHash: hash, csrf: sp.CSRF,
 	}, nil
 }
 

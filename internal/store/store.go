@@ -404,6 +404,9 @@ type SessionPrincipal struct {
 	// fresh on every request so a forced-enrolment gate applies at once.
 	AuthSource  string
 	TOTPEnabled bool
+	// ExternalName is users.external_name (empty for local users): the actor label of an
+	// external user without an email.
+	ExternalName string
 }
 
 // UserStore persists console users. Every change that matters writes its audit

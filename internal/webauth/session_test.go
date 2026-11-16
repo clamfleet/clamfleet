@@ -299,3 +299,21 @@ func TestThrottleAbortRestoresTheBackoff(t *testing.T) {
 		t.Fatal("an aborted first attempt left an entry")
 	}
 }
+
+// Actor names the user in audit rows: the email when there is one, else "<source>:<external name>",
+// so an OIDC user without a verified email is never recorded as nobody and "ldap:ann" differs from "oidc:ann".
+func TestPrincipalActor(t *testing.T) {
+	for _, c := range []struct {
+		p    Principal
+		want string
+	}{
+		{Principal{Email: "ann@example.com", AuthSource: "local"}, "ann@example.com"},
+		{Principal{Email: "ann@example.com", AuthSource: "oidc", ExternalName: "ann"}, "ann@example.com"},
+		{Principal{AuthSource: "oidc", ExternalName: "ann"}, "oidc:ann"},
+		{Principal{AuthSource: "ldap", ExternalName: "ann"}, "ldap:ann"},
+	} {
+		if got := c.p.Actor(); got != c.want {
+			t.Errorf("%+v: Actor() = %q, want %q", c.p, got, c.want)
+		}
+	}
+}

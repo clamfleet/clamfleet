@@ -36,7 +36,7 @@
     <a href="/account" data-testid="nav-account"{{if eq .Nav "account"}} class="current"{{end}}>Account</a>
   </nav>
   <span class="spacer"></span>
-  <span data-testid="current-user">{{.Principal.Email}} ({{.Principal.Role}})</span>
+  <span data-testid="current-user">{{.Principal.Actor}} ({{.Principal.Role}})</span>
   <form method="post" action="/logout">
     <input type="hidden" name="csrf_token" value="{{.CSRF}}">
     <button type="submit" data-testid="logout-button">Sign out</button>

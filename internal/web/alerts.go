@@ -398,7 +398,7 @@ func (w *Web) createTarget(rw http.ResponseWriter, r *http.Request) {
 		w.errorPage(rw, r, http.StatusInternalServerError)
 		return
 	}
-	w.Log.Info("alert target created", "target", name, "type", in.typ, "actor", p.Email)
+	w.Log.Info("alert target created", "target", name, "type", in.typ, "actor", p.Actor())
 	if in.typ == store.TargetTypeWebhook {
 		w.showSecret(rw, r, name, signing, false)
 		return
@@ -550,7 +550,7 @@ func (w *Web) updateTarget(rw http.ResponseWriter, r *http.Request) {
 		w.errorPage(rw, r, http.StatusInternalServerError)
 		return
 	}
-	w.Log.Info("alert target updated", "target", old.Name, "cancelled", c.Deliveries, "actor", p.Email)
+	w.Log.Info("alert target updated", "target", old.Name, "cancelled", c.Deliveries, "actor", p.Actor())
 	if newKey != "" {
 		w.showSecret(rw, r, old.Name, newKey, true)
 		return
@@ -598,7 +598,7 @@ func (w *Web) rotateSecret(rw http.ResponseWriter, r *http.Request) {
 		w.errorPage(rw, r, http.StatusInternalServerError)
 		return
 	}
-	w.Log.Info("alert target signing key rotated", "target", t.Name, "actor", p.Email)
+	w.Log.Info("alert target signing key rotated", "target", t.Name, "actor", p.Actor())
 	w.showSecret(rw, r, t.Name, key, true)
 }
 
@@ -619,7 +619,7 @@ func (w *Web) deleteTarget(rw http.ResponseWriter, r *http.Request) {
 		w.errorPage(rw, r, http.StatusInternalServerError)
 		return
 	}
-	w.Log.Info("alert target deleted", "target", t.Name, "actor", p.Email)
+	w.Log.Info("alert target deleted", "target", t.Name, "actor", p.Actor())
 	http.Redirect(rw, r, "/admin/alerts?"+url.Values{"notice": {"deleted"}, "target": {t.Name}}.Encode(), http.StatusSeeOther)
 }
 
@@ -685,7 +685,7 @@ func (w *Web) testSend(rw http.ResponseWriter, r *http.Request) {
 		}
 		lines = append(lines, testText(rec))
 	}
-	w.Log.Info("alert target tested", "target", t.Name, "ok", allOK, "actor", p.Email)
+	w.Log.Info("alert target tested", "target", t.Name, "ok", allOK, "actor", p.Actor())
 	w.testResult(rw, r, htmx, http.StatusOK, t.Name, allOK, lines...)
 }
 

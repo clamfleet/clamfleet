@@ -112,8 +112,23 @@ type Principal struct {
 	// has an authenticator. Both are read from the database on every request.
 	AuthSource  string
 	TOTPEnabled bool
-	TokenHash   []byte
-	csrf        []byte
+	// ExternalName is the LDAP user name or OIDC preferred_username (users.external_name);
+	// it names the user where Email is empty (see Actor).
+	ExternalName string
+	TokenHash    []byte
+	csrf         []byte
+}
+
+// Actor is how this user is named in the audit log, in log lines and in "acknowledged
+// by": the email when the user has one, otherwise "<source>:<external name>"
+// ("oidc:alice"). An external user can have no email (an OIDC provider that does not
+// vouch for it, a directory entry without mail), and an audit row with an empty actor
+// would say nobody did it. The source prefix keeps "ldap:alice" and "oidc:alice" apart.
+func (p Principal) Actor() string {
+	if p.Email != "" {
+		return p.Email
+	}
+	return p.AuthSource + ":" + p.ExternalName
 }
 
 // IsAdmin reports whether the user has the admin role.
