@@ -71,6 +71,7 @@ scripts-test:
 	./deploy/test/selinux_test.sh
 	./deploy/test/packages_test.sh
 	./deploy/test/headers_test.sh
+	./deploy/test/workflows_test.sh
 
 # sqlc is a build-time tool only (pinned in CLAUDE.md): the generated code uses database/sql.
 generate:
