@@ -66,6 +66,12 @@ run)
 	while [ $# -gt 0 ]; do [ "$1" = --network ] && net="$2"; shift; done
 	echo "$net" >"$FAKE_STATE"
 	;;
+exec)
+	if [ "$3" = journalctl ]; then
+		[ "${FAKE_JOURNAL_FAILS:-0}" = 1 ] && exit 1
+		echo "journal line of the old container"
+	fi
+	;;
 inspect) echo "${FAKE_NETMODE:-$(cat "$FAKE_STATE" 2>/dev/null || echo none)}" ;;
 esac
 exit 0
@@ -109,6 +115,21 @@ fi
 grep -q "network mode 'bridge'" "$tmp/out" || { echo "FAIL: the refusal does not name the network mode" >&2; cat "$tmp/out" >&2; exit 1; }
 if grep -q 'clamdscan' "$tmp/log"; then
 	echo "FAIL: the Docker reset scanned inside a container that has a network" >&2
+	exit 1
+fi
+
+# The journal of the container that is replaced is kept, when asked; and a journal that cannot be
+# read (no container yet) neither fails the reset nor leaves an empty file behind.
+jd="$tmp/journals"
+drun E2E_JOURNAL_DIR="$jd" || { echo "FAIL: the Docker reset failed with E2E_JOURNAL_DIR set" >&2; cat "$tmp/out" >&2; exit 1; }
+grep -rq 'journal line of the old container' "$jd" || { echo "FAIL: the old container's journal was not saved" >&2; exit 1; }
+[ "$(grep -n 'journalctl' "$tmp/log" | cut -d: -f1)" -lt "$(grep -n 'DOCKER: rm -f' "$tmp/log" | cut -d: -f1)" ] || { echo "FAIL: the journal is read after the container was removed" >&2; exit 1; }
+rm -rf "$jd"
+drun E2E_JOURNAL_DIR="$jd" FAKE_JOURNAL_FAILS=1 || { echo "FAIL: an unreadable journal stopped the Docker reset" >&2; exit 1; }
+[ -z "$(ls -A "$jd")" ] || { echo "FAIL: an unreadable journal left a file behind" >&2; exit 1; }
+drun || { echo "FAIL: the Docker reset failed without E2E_JOURNAL_DIR" >&2; exit 1; }
+if grep -q 'journalctl' "$tmp/log"; then
+	echo "FAIL: the journal was read without E2E_JOURNAL_DIR" >&2
 	exit 1
 fi
 

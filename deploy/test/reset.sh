@@ -23,7 +23,9 @@
 #      E2E_IMAGE (required for docker: the image to run),
 #      CT (instance; default clamfleet-test for incus, clamfleet-ci for docker),
 #      SNAP (incus only, default clean-clamav), TIMEOUT (seconds, default 180),
-#      READY_FILE (the file the readiness scan reads, default /etc/hostname).
+#      READY_FILE (the file the readiness scan reads, default /etc/hostname),
+#      E2E_JOURNAL_DIR (docker only: a directory that receives the journal of each container
+#      just before it is replaced; unset keeps nothing).
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -61,6 +63,16 @@ start=$(date +%s)
 if [ "$RESET_RUNTIME" = incus ]; then
 	ssh "$INCUS_HOST" "sudo incus snapshot restore $CT $SNAP </dev/null && { sudo incus start $CT </dev/null 2>/dev/null || true; }"
 else
+	# E2E_JOURNAL_DIR: keep the journal of the container that is about to be replaced. After a failed
+	# test the container is gone by the time anyone looks (the next reset, or the suite's final one,
+	# replaces it), and the journal is the only record of what systemd and clamd did. Best effort: a
+	# first reset has no container, and a journal that cannot be read must not stop the run. The name
+	# is the end time, so the files sort in the order the containers lived.
+	if [ -n "${E2E_JOURNAL_DIR:-}" ]; then
+		mkdir -p "$E2E_JOURNAL_DIR"
+		j="$E2E_JOURNAL_DIR/$(date -u +%Y%m%dT%H%M%S.%N).$CT.journal"
+		docker exec "$CT" journalctl --no-pager -o short-iso </dev/null >"$j" 2>/dev/null || rm -f "$j"
+	fi
 	# `rm -f` succeeds when there is no such container, and fails when the daemon is unreachable,
 	# which must stop the run. A failed `run` stops it here too, before any readiness check: a
 	# leftover container from an earlier run would otherwise pass the scan below.
