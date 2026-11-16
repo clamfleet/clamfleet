@@ -145,7 +145,7 @@ func Open(ctx context.Context, path string) (*Store, error) {
 		w.Close()
 		return nil, fmt.Errorf("open database %s: %w", path, err)
 	}
-	sub, err := fs.Sub(migrations.SQLite, "sqlite")
+	sub, err := fs.Sub(migrations.FS(), "sqlite")
 	if err != nil {
 		w.Close()
 		r.Close()
