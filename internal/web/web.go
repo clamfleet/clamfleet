@@ -77,6 +77,12 @@ type Deps struct {
 	ClientIP func(r *http.Request) string
 	// LocalEnabled is auth.local.enabled: with false the login form refuses.
 	LocalEnabled bool
+	// LDAP signs users in against a directory; nil means auth.ldap is off.
+	LDAP Directory
+	// OIDC signs users in through an OpenID Connect provider; nil means auth.oidc is off.
+	OIDC OIDCProvider
+	// OIDCName is the text of the single sign-on button (auth.oidc.display_name).
+	OIDCName string
 	// TOTPRequired is auth.local.totp_required: it changes the wording of the TOTP
 	// pages and forbids turning TOTP off (the gate itself is in webauth.Manager).
 	TOTPRequired bool
@@ -284,7 +290,8 @@ func (w *Web) errorPage(rw http.ResponseWriter, r *http.Request, status int) {
 		Status     int
 		StatusText string
 		Message    string
-	}{status, http.StatusText(status), msg}
+		TestID     string
+	}{status, http.StatusText(status), msg, ""}
 	w.render(rw, status, "error", w.newView(r, fmt.Sprintf("%d %s", status, http.StatusText(status)), "", body))
 }
 

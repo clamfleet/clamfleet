@@ -1,6 +1,6 @@
 {{/* SPDX-License-Identifier: AGPL-3.0-only */}}
 {{/* SPDX-FileCopyrightText: The ClamFleet Authors */}}
-{{/* login.html: the sign-in form. Body: struct{Next string; NoUsers, LocalDisabled bool}. */}}
+{{/* login.html: the sign-in form. Body: web.loginBody. */}}
 {{define "content"}}
 <div class="card narrow" data-testid="login-page">
   <h1>Sign in</h1>
@@ -9,11 +9,23 @@
   {{else}}
   <form method="post" action="/login" data-testid="login-form">
     <input type="hidden" name="next" value="{{.Body.Next}}">
+    {{if .Body.LDAP}}
+    <label for="email">Email or user name</label>
+    <input type="text" id="email" name="email" autocomplete="username" required autofocus maxlength="256" spellcheck="false" autocapitalize="off" data-testid="login-email">
+    {{else}}
     <label for="email">Email</label>
     <input type="email" id="email" name="email" autocomplete="username" required autofocus data-testid="login-email">
+    {{end}}
     <label for="password">Password</label>
     <input type="password" id="password" name="password" autocomplete="current-password" required data-testid="login-password">
     <p><button type="submit" class="primary" data-testid="login-submit">Sign in</button></p>
+  </form>
+  {{end}}
+  {{if .Body.OIDC}}
+  {{/* A separate form, public class: no CSRF token (there is no session yet), the cross-origin check covers it. */}}
+  <form method="post" action="/login/oidc" data-testid="login-sso">
+    <input type="hidden" name="next" value="{{.Body.Next}}">
+    <p><button type="submit" data-testid="login-sso-submit">{{.Body.OIDCName}}</button></p>
   </form>
   {{end}}
   {{if .Body.NoUsers}}

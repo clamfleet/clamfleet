@@ -36,13 +36,21 @@ const genericLoginError = "Invalid email or password."
 const maxLoginPassword = webauth.MaxPasswordLen
 
 type loginBody struct {
-	Next          string
-	NoUsers       bool
+	Next string
+	// NoUsers: a fresh install, nobody can sign in yet.
+	NoUsers bool
+	// LocalDisabled: neither a local password nor LDAP can sign in, so the form is hidden.
 	LocalDisabled bool
+	// LDAP: the identifier field reads "Email or user name" and accepts a name that is not an email.
+	LDAP bool
+	// OIDC: show the single sign-on button, labelled OIDCName.
+	OIDC     bool
+	OIDCName string
 }
 
 func (w *Web) loginView(r *http.Request, next, errMsg string) *view {
-	body := loginBody{Next: next, LocalDisabled: !w.LocalEnabled}
+	body := loginBody{Next: next, LocalDisabled: !w.LocalEnabled && w.LDAP == nil, LDAP: w.LDAP != nil,
+		OIDC: w.OIDC != nil, OIDCName: w.OIDCName}
 	// A hint, not a secret: on a fresh install the operator needs to know what to do.
 	if n, err := w.Store.CountUsers(r.Context()); err == nil && n == 0 {
 		body.NoUsers = true
@@ -79,7 +87,7 @@ func (w *Web) loginSubmit(rw http.ResponseWriter, r *http.Request) {
 		return
 	}
 	next := webauth.SanitizeNext(r.PostForm.Get("next"))
-	if !w.LocalEnabled {
+	if !w.LocalEnabled && w.LDAP == nil {
 		w.render(rw, http.StatusForbidden, "login", w.loginView(r, next, ""))
 		return
 	}
@@ -100,6 +108,21 @@ func (w *Web) loginSubmit(rw http.ResponseWriter, r *http.Request) {
 	outcome := webauth.Aborted // until there is a verdict: a server fault is nobody's failed guess
 	defer func() { done(outcome) }()
 
+	// Rule (decision 18): a local account with exactly this email is tried first, and then only the
+	// password check runs: a directory entry can never shadow a local break-glass admin. Everything
+	// else goes to LDAP when it is on. With LDAP off this is the M3 path unchanged.
+	if w.LDAP != nil {
+		local, err := w.isLocalAccount(r, email)
+		if err != nil {
+			w.Log.Error("login: store failed", "error", err.Error())
+			w.errorPage(rw, r, http.StatusInternalServerError)
+			return
+		}
+		if !local {
+			w.ldapLogin(rw, r, email, password, next, ip, &outcome)
+			return
+		}
+	}
 	user, reason, err := w.checkPassword(r, email, password)
 	if err != nil {
 		w.Log.Error("login: store or hasher failed", "error", err.Error())
@@ -253,7 +276,12 @@ func (w *Web) logout(rw http.ResponseWriter, r *http.Request) {
 }
 
 type accountBody struct {
-	MustChange bool
+	// External is true for a user of LDAP or OIDC: the page shows where the account comes from
+	// and has no password or two-factor card (the provider owns both).
+	External     bool
+	SourceLabel  string
+	ExternalName string
+	MustChange   bool
 	// TOTPLocal is false for users whose second factor is their identity provider's: no card.
 	TOTPLocal   bool
 	TOTPEnabled bool
@@ -262,13 +290,25 @@ type accountBody struct {
 
 // accountBodyFor fills the account page's data for p.
 func (w *Web) accountBodyFor(r *http.Request, p webauth.Principal) accountBody {
-	b := accountBody{MustChange: p.MustChange, TOTPLocal: p.AuthSource == store.AuthLocal, TOTPEnabled: p.TOTPEnabled}
+	b := accountBody{MustChange: p.MustChange, TOTPLocal: p.AuthSource == store.AuthLocal, TOTPEnabled: p.TOTPEnabled,
+		External: p.AuthSource != store.AuthLocal, ExternalName: p.ExternalName, SourceLabel: sourceLabel(p.AuthSource)}
 	if p.TOTPEnabled {
 		if n, err := w.Store.RecoveryCodesLeft(r.Context(), p.UserID); err == nil {
 			b.CodesLeft = n
 		}
 	}
 	return b
+}
+
+// sourceLabel is how a source is named on the account page.
+func sourceLabel(source string) string {
+	switch source {
+	case store.AuthLDAP:
+		return "LDAP"
+	case store.AuthOIDC:
+		return "OpenID Connect"
+	}
+	return "Local account"
 }
 
 func (w *Web) accountPage(rw http.ResponseWriter, r *http.Request) {

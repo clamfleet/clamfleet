@@ -145,6 +145,9 @@ type Deps struct {
 	// Alerts is what the alert pages need (server.BuildAlerts); nil means a strict
 	// policy, no email and no test send.
 	Alerts *Alerts
+	// LDAP is the directory sign-in (BuildLDAP; NewHandlerFromConfig sets it from the
+	// configuration); nil means LDAP is off.
+	LDAP web.Directory
 	// MetricsToken is the bearer token of GET /metrics; nil means metrics are off
 	// and the route answers 404. NewHandlerFromConfig reads it from metrics.token_file.
 	MetricsToken []byte
@@ -162,6 +165,11 @@ func NewHandlerFromConfig(c Config, d Deps) (http.Handler, error) {
 	}
 	d.TrustedProxies = proxies
 	d.Console = c.Auth
+	if dir, err := BuildLDAP(c); err != nil {
+		return nil, err
+	} else if dir != nil {
+		d.LDAP = dir
+	}
 	if d.MetricsToken, err = loadMetricsToken(c.Metrics); err != nil {
 		return nil, err
 	}
@@ -194,11 +202,12 @@ func NewHandler(d Deps) http.Handler {
 	sessions := &webauth.Manager{
 		Store: d.Store, Now: d.Now, MaxAge: d.Console.SessionMaxAge, Idle: d.Console.SessionIdle,
 		Secure: d.Console.CookieSecure, Log: d.Log, TOTPRequired: d.Console.Local.TOTPRequired,
-		Sources: d.Console.EnabledSources(),
+		Sources: sourcesFor(d),
 	}
 	console := web.New(web.Deps{
 		Store: d.Store, Auth: sessions, Hasher: d.Hasher, Throttle: webauth.NewThrottle(d.Now), TOTPThrottle: webauth.NewThrottle(d.Now), Keys: d.Keys, Now: d.Now, Log: d.Log,
 		ClientIP:     func(r *http.Request) string { return api.ClientIP(r, d.TrustedProxies) },
+		LDAP:         d.LDAP,
 		LocalEnabled: d.Console.Local.Enabled, TOTPRequired: d.Console.Local.TOTPRequired, Version: d.Version,
 		Alerts: alertDeps(d.Alerts),
 	})
@@ -250,6 +259,15 @@ func NewHandler(d Deps) http.Handler {
 		}
 	}
 	return api.RequestLog(d.Log, d.Now, d.TrustedProxies)(mux)
+}
+
+// sourcesFor is the set of sources that may hold a session: enabled in the configuration AND
+// actually wired. A provider that is switched on but was never built (a Deps without it) must
+// not leave its users' sessions valid, so the check fails closed.
+func sourcesFor(d Deps) map[string]bool {
+	s := d.Console.EnabledSources()
+	s[store.AuthLDAP] = s[store.AuthLDAP] && d.LDAP != nil
+	return s
 }
 
 // storeLookup adapts the store to agentauth.Lookup, translating "no such
