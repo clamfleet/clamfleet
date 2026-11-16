@@ -1,0 +1,20 @@
+{{/* SPDX-License-Identifier: AGPL-3.0-only */}}
+{{/* SPDX-FileCopyrightText: The ClamFleet Authors */}}
+{{/*
+  sso_redirect.html: the answer to POST /login/oidc. Body: struct{URL, Name string}.
+
+  Why a page and not a 303: the login page's Content-Security-Policy says form-action 'self', and
+  Chromium applies form-action to every redirect of a form submission, so a 303 from the SSO form
+  to the identity provider is BLOCKED ("violates form-action"). Loosening the policy to name the
+  provider would work only where the provider's authorization endpoint is on the issuer's origin,
+  and the policy is the second line of defence of every page. A new navigation started by a
+  document is not a form submission: the meta refresh (and the link, for a browser that does not
+  follow it) go to the provider with the policy untouched. Found by the browser test (sso.spec.ts).
+*/}}
+{{define "head"}}<meta http-equiv="refresh" content="0; url={{.Body.URL}}">{{end}}
+{{define "content"}}
+<div class="card narrow" data-testid="sso-redirect">
+  <h1>Signing in</h1>
+  <p>Taking you to {{.Body.Name}}. If nothing happens, <a href="{{.Body.URL}}" data-testid="sso-continue">continue</a>.</p>
+</div>
+{{end}}

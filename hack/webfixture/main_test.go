@@ -560,9 +560,23 @@ func TestFixtureSSO(t *testing.T) {
 	oidc := func(key string) (int, string) {
 		t.Helper()
 		c := newClient()
-		code, authURL := post(t, c, fx.URL, "/login/oidc", url.Values{})
-		if code != 303 || !strings.HasPrefix(authURL, fx.SSO.IssuerURL+"/authorize?") {
-			t.Fatalf("start: %d %q", code, authURL)
+		// The start answers with a page whose link goes to the provider (not a 303, which the
+		// form-action policy would block in a browser).
+		req, _ := http.NewRequest("POST", fx.URL+"/login/oidc", strings.NewReader(""))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		resp, err := c.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		page, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		m := regexp.MustCompile(`<a href="([^"]+)" data-testid="sso-continue"`).FindStringSubmatch(string(page))
+		if resp.StatusCode != 200 || m == nil {
+			t.Fatalf("start: %d\n%s", resp.StatusCode, page)
+		}
+		authURL := html.UnescapeString(m[1])
+		if !strings.HasPrefix(authURL, fx.SSO.IssuerURL+"/authorize?") {
+			t.Fatalf("start: %q", authURL)
 		}
 		if st, _, body := get(c, authURL); st != 200 || !strings.Contains(body, `data-testid="idp-user-`+key+`"`) {
 			t.Fatalf("the provider's page: %d", st)

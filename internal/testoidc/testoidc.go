@@ -35,6 +35,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"html/template"
+	"io"
+	"log"
 	"net"
 	"net/http"
 	"net/url"
@@ -151,7 +153,8 @@ func Start(o Options) (*Server, error) {
 	mux.HandleFunc("GET /authorize", s.authorize)
 	mux.HandleFunc("GET /authorize/pick", s.pick)
 	mux.HandleFunc("POST /token", s.token)
-	s.srv = &http.Server{Handler: mux, ReadHeaderTimeout: 10 * time.Second}
+	// ErrorLog discarded: a browser that aborts a handshake (a certificate warning probe) must not print into the fixture's output.
+	s.srv = &http.Server{Handler: mux, ReadHeaderTimeout: 10 * time.Second, ErrorLog: log.New(io.Discard, "", 0)}
 	go func() { _ = s.srv.Serve(l) }()
 	return s, nil
 }

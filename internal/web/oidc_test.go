@@ -7,10 +7,12 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"html"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -110,6 +112,23 @@ func (r *oidcRig) start(b *browser, next string) page {
 	return b.post("/login/oidc", f)
 }
 
+var continueRE = regexp.MustCompile(`data-testid="sso-continue"`)
+var hrefRE = regexp.MustCompile(`<a href="([^"]+)" data-testid="sso-continue"`)
+var metaRE = regexp.MustCompile(`<meta http-equiv="refresh" content="0; url=([^"]+)">`)
+
+// authURL reads where the start page sends the browser: the meta refresh and the link must agree.
+func authURL(t *testing.T, p page) string {
+	t.Helper()
+	if p.status != 200 || !continueRE.MatchString(p.body) {
+		t.Fatalf("start: %d\n%s", p.status, p.body)
+	}
+	m, l := metaRE.FindStringSubmatch(p.body), hrefRE.FindStringSubmatch(p.body)
+	if m == nil || l == nil || html.UnescapeString(m[1]) != html.UnescapeString(l[1]) {
+		t.Fatalf("the meta refresh and the link differ: %v %v", m, l)
+	}
+	return html.UnescapeString(m[1])
+}
+
 // choose plays the visit to the identity provider: open the page, click the user, and return the URL
 // (path and query) of the console callback the provider sent the browser to.
 func (r *oidcRig) choose(t *testing.T, authURL, user string) string {
@@ -140,11 +159,7 @@ func (r *oidcRig) choose(t *testing.T, authURL, user string) string {
 // signIn runs the whole flow for user in browser b and returns the callback response.
 func (r *oidcRig) signIn(t *testing.T, b *browser, user, next string) page {
 	t.Helper()
-	p := r.start(b, next)
-	if p.status != 303 {
-		t.Fatalf("start: %d\n%s", p.status, p.body)
-	}
-	cb := r.choose(t, p.header.Get("Location"), user)
+	cb := r.choose(t, authURL(t, r.start(b, next)), user)
 	return b.get(cb)
 }
 
@@ -153,12 +168,14 @@ func TestOIDCFullFlowThroughTheRouter(t *testing.T) {
 	e := r.e
 	b := e.browser()
 
-	// The start form: 303 to the provider with S256, a state and a nonce; the state cookie's attributes.
+	// The start form: a page that takes the browser to the provider (not a 303: Chromium blocks a redirect
+	// out of a form under form-action 'self'), with S256, a state and a nonce; the state cookie's attributes.
 	p := r.start(b, "/events")
-	if p.status != 303 {
-		t.Fatalf("%d\n%s", p.status, p.body)
+	if csp := p.header.Get("Content-Security-Policy"); !strings.Contains(csp, "form-action 'self'") || strings.Contains(csp, "form-action 'self' ") {
+		t.Fatalf("the policy must stay strict: %q", csp)
 	}
-	loc, _ := url.Parse(p.header.Get("Location"))
+	authLoc := authURL(t, p)
+	loc, _ := url.Parse(authLoc)
 	q := loc.Query()
 	if loc.Host != strings.TrimPrefix(r.idp.Issuer(), "https://") || q.Get("code_challenge_method") != "S256" || q.Get("code_challenge") == "" ||
 		q.Get("state") == "" || q.Get("nonce") == "" || q.Get("response_mode") != "" || q.Get("redirect_uri") != r.cb || q.Get("client_id") != testoidc.ClientID {
@@ -181,7 +198,7 @@ func TestOIDCFullFlowThroughTheRouter(t *testing.T) {
 	}
 
 	// The callback: a session, the state row gone, the user created from iss + sub, and the next path kept.
-	cb := r.choose(t, p.header.Get("Location"), "ann")
+	cb := r.choose(t, authLoc, "ann")
 	done := b.get(cb)
 	if done.status != 303 || done.header.Get("Location") != "/events" || e.cookieFor(b) == nil {
 		t.Fatalf("callback: %d %q", done.status, done.header.Get("Location"))
@@ -211,7 +228,7 @@ func TestOIDCReplayedCallbackIsRefused(t *testing.T) {
 	e := r.e
 	b := e.browser()
 	p := r.start(b, "")
-	cb := r.choose(t, p.header.Get("Location"), "ann")
+	cb := r.choose(t, authURL(t, p), "ann")
 	cookie := stateCookie(t, e, b)
 	if done := b.get(cb); done.status != 303 {
 		t.Fatalf("%d", done.status)
@@ -240,7 +257,7 @@ func TestOIDCCallbackInAnotherBrowserIsRefused(t *testing.T) {
 	e := r.e
 	victim := e.browser()
 	p := r.start(victim, "")
-	cb := r.choose(t, p.header.Get("Location"), "ann")
+	cb := r.choose(t, authURL(t, p), "ann")
 
 	other := e.browser()
 	if got := other.get(cb); got.status != 400 || !strings.Contains(got.body, `data-testid="error-sso-expired"`) || e.cookieFor(other) != nil {
@@ -267,7 +284,7 @@ func TestOIDCStateParameterMismatchBurnsTheState(t *testing.T) {
 	e := r.e
 	b := e.browser()
 	p := r.start(b, "")
-	cb := r.choose(t, p.header.Get("Location"), "ann")
+	cb := r.choose(t, authURL(t, p), "ann")
 	bad := strings.Replace(cb, "state=", "state=x", 1)
 	if got := b.get(bad); got.status != 400 || !strings.Contains(got.body, `data-testid="error-sso-expired"`) || e.cookieFor(b) != nil {
 		t.Fatalf("%d", got.status)
@@ -284,7 +301,7 @@ func TestOIDCExpiredStateIsRefused(t *testing.T) {
 	r := newOIDCRig(t, nil)
 	b := r.e.browser()
 	p := r.start(b, "")
-	cb := r.choose(t, p.header.Get("Location"), "ann")
+	cb := r.choose(t, authURL(t, p), "ann")
 	r.e.advance(11 * time.Minute)
 	if got := b.get(cb); got.status != 400 || r.e.cookieFor(b) != nil {
 		t.Fatalf("%d", got.status)
@@ -400,7 +417,7 @@ func TestOIDCProviderErrorPage(t *testing.T) {
 	r := newOIDCRig(t, nil)
 	b := r.e.browser()
 	p := r.start(b, "")
-	loc, _ := url.Parse(p.header.Get("Location"))
+	loc, _ := url.Parse(authURL(t, p))
 	st := loc.Query().Get("state")
 	long := "<script>alert(1)</script>" + strings.Repeat("x", 400)
 	got := b.get("/login/oidc/callback?error=access_denied&error_description=" + url.QueryEscape(long) + "&state=" + url.QueryEscape(st))
@@ -528,9 +545,10 @@ func TestOIDCNoSecretInLogsAndAudit(t *testing.T) {
 	e := r.e
 	b := e.browser()
 	p := r.start(b, "")
-	loc, _ := url.Parse(p.header.Get("Location"))
+	authLoc := authURL(t, p)
+	loc, _ := url.Parse(authLoc)
 	state, nonce := loc.Query().Get("state"), loc.Query().Get("nonce")
-	cb := r.choose(t, p.header.Get("Location"), "ann")
+	cb := r.choose(t, authLoc, "ann")
 	code := mustURL("http://x" + cb).Query().Get("code")
 	if got := b.get(cb); got.status != 303 {
 		t.Fatalf("%d", got.status)

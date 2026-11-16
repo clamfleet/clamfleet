@@ -3,7 +3,8 @@
 
 // oidc.go: the console side of OpenID Connect sign-in (docs/plans/milestone-6.md 4.17, docs/auth.md).
 //
-//	POST /login/oidc          starts a sign-in: a state row, the state cookie, 303 to the provider.
+//	POST /login/oidc          starts a sign-in: a state row, the state cookie, and a page that takes the
+//	                          browser to the provider (a meta refresh: a 303 would be blocked by form-action).
 //	GET  /login/oidc/callback finishes it: takes the state row (once), checks it, exchanges the code.
 //
 // Why the pieces are what they are:
@@ -94,8 +95,8 @@ func (w *Web) oidcStart(rw http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.SetCookie(rw, webauth.NewOIDCCookie(token, w.Auth.Secure))
-	rw.Header().Set("Cache-Control", "no-store")
-	http.Redirect(rw, r, req.URL, http.StatusSeeOther)
+	// A page with a meta refresh, not a 303: see templates/sso_redirect.html (the form-action policy).
+	w.render(rw, http.StatusOK, "sso_redirect", w.newView(r, "Signing in", "", struct{ URL, Name string }{req.URL, w.OIDCName}))
 }
 
 // oidcCallback finishes a sign-in.

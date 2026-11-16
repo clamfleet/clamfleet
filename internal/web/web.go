@@ -112,7 +112,7 @@ func New(d Deps) *Web {
 		// actions builds the data of the shared host_actions template.
 		"actions": func(name string, hasToken bool, csrf string) hostAction { return hostAction{name, hasToken, csrf} },
 	}
-	for _, p := range []string{"login", "login_totp", "fleet", "host", "admin_hosts", "token_once", "account", "account_totp", "totp_setup", "recovery_codes", "admin_alerts", "alert_target", "secret_once", "alert_test_result", "events", "error"} {
+	for _, p := range []string{"login", "login_totp", "fleet", "host", "admin_hosts", "token_once", "account", "account_totp", "sso_redirect", "totp_setup", "recovery_codes", "admin_alerts", "alert_target", "secret_once", "alert_test_result", "events", "error"} {
 		t := template.New(p).Funcs(funcs)
 		files := []string{"templates/layout.html", "templates/" + p + ".html"}
 		if p == "fleet" {
