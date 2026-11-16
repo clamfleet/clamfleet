@@ -157,8 +157,12 @@ The Makefile points the container suite's own variables at the VM (`CFT_EXEC=$CF
 `CT=clamfleet-aa`, `SNAP=clean`) and runs the scenarios of `e2e/apparmor_e2e_test.go` (build tags `e2e e2e_apparmor`).
 Each starts with `deploy/test/reset.sh` restoring the VM's `clean` snapshot (the VM reboots; the script waits
 until `incus exec` works and clamd can scan), `prepare-agent.sh` and `prepare-server.sh`, then
-`deploy/test/aa-prepare.sh`: both AppArmor files from `deploy/apparmor/`, the `VirusEvent` line, a check that it
-survives `dpkg-reconfigure clamav-daemon`, `apparmor_parser -r` of both profiles, a clamd restart. The suite ends
+`deploy/test/aa-prepare.sh`: the clamfleet-agent **.deb** is installed (its postinstall loads the profile; nothing in the
+script does, and the script fails if the profile is not enforcing afterwards), the package's own service is stopped (the suite
+runs its own agent unit), clamd's local include lines are appended from the doc file the package installs, the `VirusEvent` line is added with a check that it
+survives `dpkg-reconfigure clamav-daemon`, clamd's profile is reloaded and clamd restarted. `dpkg` runs with `--force-confold` and
+`</dev/null`: its stdin is the script itself, and at a conffile prompt it would read its answer from the script and
+swallow the lines that follow. The suite ends
 with one more reset, so the VM finishes as it started. EICAR files live in `/tmp/e2e` (Debian's clamd profile allows
 `/tmp/**`, nothing under `/srv`).
 
@@ -179,6 +183,7 @@ with one more reset, so the VM finishes as it started. EICAR files live in `/tmp
   socket (a DENIED `class="net"` line).
 - `TestClamdOnlyExecsTheAgent`: a `VirusEvent` of `/usr/bin/touch /tmp/e2e/touched` gets a DENIED `exec` line under
   clamd's profile and no file.
+- `TestAppArmorPackageRemoval`: `apt-get remove clamfleet-agent` unloads `clamfleet-agent-event`.
 
 If clamd runs out of memory in the VM, the run fails: the VM is not resized by the suite.
 
@@ -199,6 +204,72 @@ Things that fail in ways that do not look like the cause:
 - A missing `CFT_EXEC` is a hard failure, never a skip.
 - The container must be on UTC: freshclam's log times have no zone, and the tests compare them
   with UTC values. The suite checks this first.
+
+## Packages (`make packages`) and the package scenarios
+
+`make packages VERSION=x.y.z` builds the static binaries and runs **nfpm v2.49.0** (`go run`, pinned in the Makefile and
+CLAUDE.md like sqlc; build time only) for the agent and the server in both formats into `dist/` (`PKG_DIR` changes the
+directory). `make e2e`, `make e2e-apparmor` and `make e2e-el9` build `VERSION=0.6.0-e2e1` first. The maintainer scripts are
+POSIX sh and are covered in two ways: `deploy/test/packages_test.sh` (part of `make check`) runs them under stub commands
+with every argument convention of both formats, the rpm upgrade order (new `%post 2`, then the old `%preun`/`%postun`
+with 1), idempotence (a second run changes nothing), recovery from a failed step, and a purge that never follows a symlink
+or crosses a mount; `deploy/test/units_test.sh` and `selinux_test.sh` pin the unit directives and the SELinux module's
+contract statically.
+
+`e2e/package_e2e_test.go` (in `make e2e`) installs the .deb files with apt in the clean container and runs: install and
+start; a detection through the packaged agent (the test a `0640` agent.yaml would fail); the scan timer's service
+(exit 1, `last_scan.json`, clamd never started while stopped, its socket unit included); the retention acceptance
+(`hack/seeddb` writes a database with rows of known ages, `retention.reports_days: 14`); `/metrics`; an upgrade from
+`0.6.0~e2e1` to `0.6.0~e2e2` that keeps the configuration edit and the key file and restarts both services; remove and
+purge (the database and key survive); and a purge across a tmpfs mount. **Not covered:** a failed upgrade with an
+unwritable `backup.dir`, which needs a test-only migration between two builds of the same code; the behaviour is proven
+through the real binary in `cmd/clamfleet-server` (`TestMigrationStopsWhenTheBackupFails`).
+
+### The AlmaLinux 9 VM (`make e2e-el9`)
+
+Part of the milestone 6 acceptance with `make e2e` and `make e2e-apparmor`. SELinux cannot be tested in a container: it
+shares the Debian host's kernel, which has none, so this needs a throwaway **AlmaLinux 9 VM** with SELinux **Enforcing**,
+ClamAV from EPEL (`clamd`, `clamav-freshclam`, `clamav`; 1.4.6 when written), `policycoreutils`, `setools-console` and
+`audit`, the signatures copied in, freshclam disabled, `LocalSocket /run/clamd.scan/clamd.sock` enabled in
+`/etc/clamd.d/scan.conf` (stock: commented out), at least 3 GiB of RAM, and a snapshot `clean`. Two settings with no default:
+`CFE_EXEC` and `CFE_HOST` (as for AppArmor; see `local.mk.example`). Without them the target **fails**; it never skips. The claim is
+"tested on AlmaLinux 9", not RHEL itself (RHEL needs a subscription).
+
+**The harness module.** `incus exec` reaches the VM through the Incus agent, which runs in `init_t` and starts commands in
+`initrc_t`. The image carries a harness-only CIL module `incus-agent-harness` (it allows `init_t` the vsock the agent
+uses); it is part of the VM, not of ClamFleet, and is in the `clean` snapshot. Denials of `init_t`, `initrc_t` and
+`load_policy_t` in the audit log (`siginh`, pipes) are the harness and are ignored; the suite looks at `antivirus_t` only,
+and one stock denial is filtered by name: clamd searching `/selinux`, an unlabeled directory the image ships. Files for clamd
+to scan live in `/var/lib/clamav/e2e` (the harness context cannot hand clamd a path under `/srv`: clamdscan answers
+"Can't access file"), and `READY_FILE` is a file under `/var/lib/clamav` clamd may read.
+
+`deploy/test/el9-prepare.sh` installs both .rpm files with dnf (the `%post` loads the module at priority 300 and
+relabels the spool; nothing in the script does) and adds the `VirusEvent` line to `scan.conf`. The scenarios of
+`e2e/el9_e2e_test.go` (tags `e2e e2e_el9`), each from the `clean` snapshot:
+
+- `TestEL9RpmInstallAndStart`: the preconditions (`getenforce` Enforcing, clamd in `antivirus_t`, `semodule -lfull` lists
+  `clamfleet` at 300, `spool/events` and `spool/usage` are `clamfleet_spool_t`), the server not enabled by the preset, users, the
+  modes and the groups (`clamscan`, `virusgroup`, `systemd-journal`), the agent waiting for its token, and a report under the hardened unit.
+- `TestEL9DryRun`: `collect --dry-run` with the packaged RHEL example agrees with `sigtool`, `clamd --version` and systemd.
+- `TestSELinuxEICARAlert`: the alert within 30 s and **no AVC denial for clamd's domain** (the stock `/selinux` one apart): no
+  spool, shell or binary denial. It also proves `antivirus_t` can read the packaged `agent.yaml`.
+- `TestSELinuxModuleIsNeeded`: with the module removed at priority 300 and the spool relabelled `var_lib_t`, the same scan is
+  denied (an AVC for the event command), nothing is spooled and nothing reaches the sink: the module is what makes it work,
+  and the test above can fail.
+- `TestSELinuxEventCannotWriteElsewhere`: the event command pointed at another spool directory (a real `events/`, the right
+  owner and mode, `var_lib_t`, loosened to 0755) is denied by SELinux and no file appears.
+- `TestEL9EventSurvivesServerDowntime`: the milestone 5 scenario (the event is spooled with group `clamscan`, delivered after the restart).
+- `TestEL9RpmUpgradeAndRemove`: the module stays loaded at 300 across an upgrade, the configuration edit is kept, both services restart;
+  `dnf remove` leaves no module at any priority, and the units are gone.
+- `TestSELinuxRuleSet`: `sesearch -A -s antivirus_t` with and without the module, diffed: exactly the two reviewed rules on
+  `clamfleet_spool_t`, nothing on a stock type.
+
+Findings from writing it, all in the docs now: EPEL's `/run/clamd.scan` is `clamscan:virusgroup 0710` (the agent needs `virusgroup`); the
+event command's standard error is lost on this family (`clamd@scan` is `Type=forking`), so a failing event leaves no journal line;
+the event files must exist before the spool is labelled (tmpfiles.d pre-creates them).
+
+If the VM runs out of memory the run fails; the suite never resizes it. Restore after a manual session with
+`ssh <incus-host> sudo incus snapshot restore <vm> clean` and `incus start`.
 
 ## Browser fixture (`make web-fixture`)
 

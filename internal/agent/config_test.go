@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -160,5 +161,27 @@ func TestScanTimeoutBounds(t *testing.T) {
 		if err := c.Validate(); err != nil {
 			t.Errorf("%s: %v", d, err)
 		}
+	}
+}
+
+// docs/configuration.md lists every environment variable the agent derives from its configuration, and no other.
+func TestConfigurationDocMatchesTheEnvNames(t *testing.T) {
+	b, err := os.ReadFile(filepath.Join("..", "..", "docs", "configuration.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc := map[string]bool{}
+	for _, m := range regexp.MustCompile("`("+EnvPrefix+"[A-Z0-9_]+)`").FindAllStringSubmatch(string(b), -1) {
+		doc[m[1]] = true
+	}
+	c := DefaultConfig()
+	for _, n := range config.EnvNames(&c, EnvPrefix) {
+		if !doc[n] {
+			t.Errorf("%s is not documented in docs/configuration.md", n)
+		}
+		delete(doc, n)
+	}
+	for n := range doc {
+		t.Errorf("docs/configuration.md documents %s, which is not an agent setting", n)
 	}
 }

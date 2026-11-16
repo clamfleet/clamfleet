@@ -14,6 +14,7 @@ Central management for ClamAV on Linux fleets. Spec: `docs/HANDOVER.md`. Current
 - `make packages VERSION=x.y.z`: the `.deb` and `.rpm` of the agent and the server into `dist/`, built by nfpm (`deploy/packaging`, build-time only).
 - `make e2e`: runs the agent inside the `clamfleet-test` Incus container. Read `docs/testing.md` first.
 - `make webfixture`: builds `bin/webfixture`, a throwaway console on 127.0.0.1 with seeded users and hosts for browser tests (see `docs/testing.md`, "Browser fixture").
+- `make e2e-el9`: the rpm and the detection path on the AlmaLinux 9 VM (SELinux enforcing); part of milestone 6 acceptance, together with `make e2e` and `make e2e-apparmor`. Needs `CFE_EXEC` and `CFE_HOST`; fails, never skips (`docs/testing.md`).
 - `make e2e-apparmor`: the detection path on the VM `clamfleet-aa` (Debian 13, AppArmor enforcing); part of milestone 5 acceptance, together with `make e2e`. Needs `CFA_EXEC` and `CFA_HOST`; it fails, never skips (see `docs/testing.md`).
 - `make e2e-web`: Playwright browser tests of the console (`e2e/web`, `@playwright/test` 1.63.0 on Chromium 1243 from `/opt/playwright/browsers`); run from a fresh shell so `/opt/env.sh` is loaded.
 - Tests in `cmd/*` and `hack/webfixture` build binaries that `go test` caching cannot see: use `-count=1` when changing code they cover.

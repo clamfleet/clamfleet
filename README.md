@@ -11,9 +11,9 @@ detections to a central server. The design is in [docs/HANDOVER.md](docs/HANDOVE
 
 ClamAV is a registered trademark of Cisco Systems, Inc.; ClamFleet is not affiliated with or endorsed by Cisco.
 
-**Status: early development, not production ready.** Milestones 1 and 2 exist: the agent collects
-its report and sends it to a server, which authenticates the agent and stores the report in SQLite.
-There is no web interface, no health evaluation and no alerting yet, and no packages.
+**Status: early development, not production ready.** Milestones 1 to 6a exist: the agent reports to a server that
+stores, evaluates and alerts, with a web console, detections from clamd's `VirusEvent`, retention, backup, `/metrics`,
+and `.deb` and `.rpm` packages (see [docs/install.md](docs/install.md)). LDAP and OIDC sign-in are planned.
 
 ## Who it is for
 
@@ -65,6 +65,14 @@ found anything.
 A data source that cannot be read does not fail the report. It appears as `null`, and a warning goes
 to stderr.
 
+## Install
+
+Packages for Debian 13 and the RHEL 9 family (tested on AlmaLinux 9 with SELinux enforcing): `clamfleet-server` and
+`clamfleet-agent`, built by `make packages VERSION=x.y.z`. [docs/install.md](docs/install.md) has the steps,
+[docs/operations.md](docs/operations.md) retention, backup and restore, `/metrics` and TLS reload, and
+[docs/configuration.md](docs/configuration.md) every key. The packages never edit clamd's configuration: the install
+notice prints the `VirusEvent` line (and, on Debian, the two AppArmor lines) to add.
+
 ## Requirements
 
 - **Go 1.27.4.** `go.mod` declares `go 1.26.0` and `toolchain go1.27.4`. With the default
@@ -83,7 +91,10 @@ to stderr.
 make build      # static binaries bin/clamfleet-agent and bin/clamfleet-server (CGO_ENABLED=0)
 make check      # go vet, staticcheck, sqlc diff, go test ./..., script tests; no container needed
 make generate   # regenerate internal/store/sqlite/sqlcdb after changing a migration or query
-make e2e        # end-to-end tests inside a ClamAV container; needs setup
+make packages VERSION=x.y.z   # .deb and .rpm of the agent and the server into dist/ (nfpm v2.49.0, via go run)
+make e2e        # end-to-end tests inside a ClamAV container, including the packages; needs setup
+make e2e-apparmor   # the detection path on a Debian 13 VM with AppArmor enforcing (docs/testing.md)
+make e2e-el9        # the rpm and the detection path on an AlmaLinux 9 VM with SELinux enforcing (docs/testing.md)
 make web-fixture   # a throwaway console on 127.0.0.1 with seeded users and hosts, for browser tests (docs/testing.md)
 ```
 
@@ -321,12 +332,13 @@ Things to know:
 
 | Platform | Status |
 |---|---|
-| Debian 13 | Tested live, end-to-end tests in a container. |
-| RHEL 9 family | **Untested.** The example config and hand-written fixtures follow the packages' documentation. Contributions welcome. |
+| Debian 13 | Tested live: end-to-end tests in a container, and in a VM with AppArmor enforcing. `.deb` packages. |
+| RHEL 9 family | **Tested on AlmaLinux 9** (SELinux enforcing, ClamAV from EPEL) in a VM: `.rpm` packages, the detection path through an SELinux module. RHEL itself is not tested (it needs a subscription). |
+| Debian 12 | Untested. The binaries are static and should work. |
 
 ## Roadmap
 
-Milestones follow [docs/HANDOVER.md](docs/HANDOVER.md). Milestones 1 to 5 are built, with TOTP two-factor sign-in for local accounts.
+Milestones follow [docs/HANDOVER.md](docs/HANDOVER.md). Milestones 1 to 6a are built, with TOTP two-factor sign-in for local accounts.
 
 | # | Deliverable | Status |
 |---|---|---|
@@ -334,8 +346,10 @@ Milestones follow [docs/HANDOVER.md](docs/HANDOVER.md). Milestones 1 to 5 are bu
 | 2 | Server ingest API, SQLite schema, migrations, token authentication, `run` | Built. Tested on Debian 13 only. |
 | 3 | Health evaluator, state history, web console with local accounts | Built. Tested on Debian 13 only. |
 | 4 | Email and webhook alerting | Built. Tested on Debian 13 only. |
-| 5 | Detection events, spool, events page, acknowledgement | Built. Tested on Debian 13 (container, and a VM with AppArmor enforcing); RHEL 9 and SELinux in milestone 6. |
-| 6 | Packaging (.deb and .rpm), LDAP and OIDC login, `/metrics`, retention job, backup command | Planned |
+| 5 | Detection events, spool, events page, acknowledgement | Built. Tested on Debian 13 (container, and a VM with AppArmor enforcing). |
+| 6a | Packages (.deb and .rpm), retention for every table, backup, `/metrics`, TLS reload, NAT64 in the alert policy, `clamfleet-agent scan`, SELinux | Built. Tested on Debian 13 and AlmaLinux 9. |
+| 6b | LDAP and OIDC login | Planned |
+| 6c | CI, signed releases, checksums, SBOM, project files | Planned |
 
 Built: local accounts with email and password and the roles `viewer` and `admin`, and TOTP two-factor
 sign-in (optional per user, or required for all local users with `auth.local.totp_required`; see `docs/web.md`).

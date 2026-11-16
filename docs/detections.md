@@ -199,7 +199,10 @@ without credentials.
 
 Debian's clamd profile (`/etc/apparmor.d/usr.sbin.clamd`) has no exec rule and no write access to
 `/var/lib/clamfleet`, so with AppArmor enforcing `VirusEvent` cannot start `/bin/sh`. Two files fix that and
-keep the blast radius small (both are in `deploy/apparmor/`; the package installs them in milestone 6):
+keep the blast radius small (both are in `deploy/apparmor/`). The **.deb installs and loads the profile**
+(`clamfleet-agent-event`, a conffile, unloaded again on `remove`); the local include belongs to the administrator and
+the package never edits it, so you add its two lines yourself (the package ships them as
+`/usr/share/doc/clamfleet-agent/usr.sbin.clamd.local`):
 
 - **`usr.sbin.clamd.local`**: append to `/etc/apparmor.d/local/usr.sbin.clamd`. It allows the shell clamd uses
   (`/usr/bin/dash mrix`, inheriting clamd's profile) and one transition,
@@ -212,7 +215,7 @@ keep the blast radius small (both are in `deploy/apparmor/`; the package install
   `file_inherit` denial on every detection). Everything else is denied: **the token, `spool/reports` and
   `spool/quarantine`, the network, and exec of anything.**
 
-Install and load:
+Without the package, install and load by hand:
 
 ```
 install -m 644 deploy/apparmor/clamfleet-agent-event /etc/apparmor.d/clamfleet-agent-event
@@ -227,7 +230,39 @@ whether or not `VirusEvent` is set (`apparmor="DENIED" ... profile="/usr/sbin/cl
 it is harmless and the profiles here do not widen clamd's for it. The profile was written and proven on Debian 13 with
 ClamAV 1.4.3 by **`make e2e-apparmor`** (see `docs/testing.md`), which checks the allowed path, that the
 transition really happens, and every denial named above. The plain container suite cannot test AppArmor, so
-`make e2e-apparmor` is part of the milestone's acceptance. Not verified yet: RHEL 9 and SELinux.
+`make e2e-apparmor` is part of the milestone's acceptance; since milestone 6 it installs the .deb, so it also proves the
+package's postinstall loads the profile.
+
+## SELinux
+
+On the RHEL 9 family clamd runs in `antivirus_t` under the targeted policy, and `VirusEvent` runs there too. Under
+the stock policy `antivirus_t` may not write `/var/lib/clamfleet` (`var_lib_t`), so without the module **every
+detection is dropped**: the event command is denied, nothing is spooled and nothing alerts. The .rpm loads a small
+CIL module, `clamfleet`, **at priority 300** (always install, remove and test it with `semodule -X 300`; a plain
+`semodule -r` removes at the default priority and would leave it loaded):
+
+- a file type `clamfleet_spool_t` for exactly `spool/events(/.*)?` and `spool/usage`;
+- `allow antivirus_t clamfleet_spool_t` for the directory and file operations the event command needs (look up, stat,
+  create, write, chmod, hard link, unlink, lock). **Nothing on a stock type**: `antivirus_t` can already execute
+  `/bin/sh` and `bin_t` files without a transition and read `/etc/clamfleet/agent.yaml`, and the rules were proven
+  one at a time against the AVC log on AlmaLinux 9.8. `TestSELinuxRuleSet` diffs `sesearch -A -s antivirus_t` with and without
+  the module and fails on any rule beyond those two.
+
+`antivirus_t` is the domain of clamd, freshclam **and** clamonacc, so what the module allows reaches all three: they can
+write the event spool too. They run as clamd's group, which the trust boundary above already trusts to originate events.
+The event command is **not confined on this family**: it runs in clamd's domain and can read what clamd can read.
+The token stays protected by file permissions (`root:clamfleet 0640`, and clamd's user is not in that group). The
+AppArmor profile gives that extra layer on Debian only.
+
+The package pre-creates `spool/events` and `spool/usage` (tmpfiles.d) before it labels them: a file created later
+inherits its parent's type, so a spool that `run` created first would be `var_lib_t` and denied.
+
+**On this family a failing event command leaves no line in clamd's journal**: `clamd@scan` is `Type=forking`, clamd closes
+its standard error, and the command's `event not spooled: ...` message goes nowhere (on Debian it reaches the journal).
+When detections stop arriving, look at the audit log (`ausearch -m avc -c clamfleet-agent`) and at the host's
+`virusevent_missing` rule. Group: the agent user is in `clamscan` (the spool) and `virusgroup` (EPEL's
+`/run/clamd.scan` is `clamscan:virusgroup 0710`; without it the agent cannot reach clamd's socket).
+Proven on AlmaLinux 9.8 with SELinux enforcing by **`make e2e-el9`** (see `docs/testing.md`).
 
 ## The Detections page and acknowledgement
 
