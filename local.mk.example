@@ -21,3 +21,9 @@ CFA_HOST ?= <incus-host>
 CFE_EXEC ?= ssh <incus-host> sudo incus exec <el9-vm> --
 # CFE_HOST: ssh target of the Incus host that holds the VM (its `clean` snapshot is restored before each scenario).
 CFE_HOST ?= <incus-host>
+#
+# The identity-provider container (make e2e-idp, docs/testing.md "The IdP container").
+# CFI_EXEC: command prefix that runs a command inside the container (same rule about arguments).
+CFI_EXEC ?= ssh <incus-host> sudo incus exec clamfleet-idp --
+# CFI_HOST: ssh target of the Incus host that holds it (its `clean` snapshot is restored before each scenario).
+CFI_HOST ?= <incus-host>
