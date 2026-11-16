@@ -430,6 +430,9 @@ type UserStore interface {
 	// UserByEmail: ErrNotFound when there is none (read pool).
 	UserByEmail(ctx context.Context, email string) (User, error)
 	ListUsers(ctx context.Context) ([]User, error)
+	// UsersByExternalName returns the users of an external source with this external name, oldest
+	// first (the CLI names an external user "source:name"; the caller refuses more than one).
+	UsersByExternalName(ctx context.Context, source, name string) ([]User, error)
 	CountUsers(ctx context.Context) (int64, error)
 	// SetPassword replaces the hash and deletes the user's sessions (all, or all
 	// but KeepSession). ErrNotFound for an unknown id.

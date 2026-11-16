@@ -47,3 +47,12 @@ DELETE FROM oidc_login_states WHERE expires_at <= sqlc.arg(now);
 
 -- name: CountOIDCStates :one
 SELECT count(*) FROM oidc_login_states;
+
+-- name: UsersByExternalName :many
+-- The operator names an external user as source:name (the CLI); the name is not unique by itself,
+-- so the caller refuses an ambiguous answer.
+SELECT id, email, display_name, role, auth_source, password_hash, password_must_change,
+       password_changed_at, disabled_at, created_at, last_login_at, auth_version,
+       totp_enabled_at, totp_failures, external_name
+FROM users WHERE auth_source = sqlc.arg(auth_source) AND external_name = sqlc.arg(external_name)
+ORDER BY id;

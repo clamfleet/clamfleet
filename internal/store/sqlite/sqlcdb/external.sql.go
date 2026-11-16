@@ -250,3 +250,75 @@ func (q *Queries) UserByExternalID(ctx context.Context, arg UserByExternalIDPara
 	)
 	return i, err
 }
+
+const usersByExternalName = `-- name: UsersByExternalName :many
+SELECT id, email, display_name, role, auth_source, password_hash, password_must_change,
+       password_changed_at, disabled_at, created_at, last_login_at, auth_version,
+       totp_enabled_at, totp_failures, external_name
+FROM users WHERE auth_source = ?1 AND external_name = ?2
+ORDER BY id
+`
+
+type UsersByExternalNameParams struct {
+	AuthSource   string
+	ExternalName sql.NullString
+}
+
+type UsersByExternalNameRow struct {
+	ID                 int64
+	Email              sql.NullString
+	DisplayName        sql.NullString
+	Role               string
+	AuthSource         string
+	PasswordHash       sql.NullString
+	PasswordMustChange int64
+	PasswordChangedAt  sql.NullInt64
+	DisabledAt         sql.NullInt64
+	CreatedAt          int64
+	LastLoginAt        sql.NullInt64
+	AuthVersion        int64
+	TotpEnabledAt      sql.NullInt64
+	TotpFailures       int64
+	ExternalName       sql.NullString
+}
+
+// The operator names an external user as source:name (the CLI); the name is not unique by itself,
+// so the caller refuses an ambiguous answer.
+func (q *Queries) UsersByExternalName(ctx context.Context, arg UsersByExternalNameParams) ([]UsersByExternalNameRow, error) {
+	rows, err := q.db.QueryContext(ctx, usersByExternalName, arg.AuthSource, arg.ExternalName)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []UsersByExternalNameRow
+	for rows.Next() {
+		var i UsersByExternalNameRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Email,
+			&i.DisplayName,
+			&i.Role,
+			&i.AuthSource,
+			&i.PasswordHash,
+			&i.PasswordMustChange,
+			&i.PasswordChangedAt,
+			&i.DisabledAt,
+			&i.CreatedAt,
+			&i.LastLoginAt,
+			&i.AuthVersion,
+			&i.TotpEnabledAt,
+			&i.TotpFailures,
+			&i.ExternalName,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}

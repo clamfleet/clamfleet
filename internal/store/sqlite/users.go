@@ -137,18 +137,39 @@ func (s *Store) ListUsers(ctx context.Context) ([]store.User, error) {
 	return out, nil
 }
 
+// UsersByExternalName implements store.UserStore.
+func (s *Store) UsersByExternalName(ctx context.Context, source, name string) ([]store.User, error) {
+	rows, err := sqlcdb.New(s.r).UsersByExternalName(ctx, sqlcdb.UsersByExternalNameParams{AuthSource: source, ExternalName: nullStr(name)})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]store.User, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, toUser(userRow(r)))
+	}
+	return out, nil
+}
+
 // CountUsers implements store.UserStore.
 func (s *Store) CountUsers(ctx context.Context) (int64, error) {
 	return sqlcdb.New(s.r).CountUsers(ctx)
 }
 
-// userEmail reads the email inside a write transaction, for the audit target.
+// userEmail reads the name of the user inside a write transaction, for the audit target: the
+// email, or "<source>:<external name>" for an external user without one (an audit row with an empty
+// target would say nothing about whom it concerns).
 func userEmail(ctx context.Context, q *sqlcdb.Queries, id int64) (string, error) {
 	u, err := q.UserByID(ctx, id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", store.ErrNotFound
 	}
-	return u.Email.String, err
+	if err != nil {
+		return "", err
+	}
+	if u.Email.String == "" {
+		return u.AuthSource + ":" + u.ExternalName.String, nil
+	}
+	return u.Email.String, nil
 }
 
 // SetPassword implements store.UserStore.

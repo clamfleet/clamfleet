@@ -76,10 +76,17 @@ func (a *app) user(ctx context.Context, args []string) int {
 		fmt.Fprintf(a.stderr, "user %s: --password-stdin only applies to add and reset-password\n", sub)
 		return exitUsage
 	}
-	if sub != "add" && sub != "list" {
+	if sub == "add" {
 		if _, err := store.NormalizeEmail(pos[0]); err != nil {
 			fmt.Fprintf(a.stderr, "user %s: %v\n", sub, err)
 			return exitUsage
+		}
+	} else if sub != "list" {
+		if _, _, ext := externalRef(pos[0]); !ext {
+			if _, err := store.NormalizeEmail(pos[0]); err != nil {
+				fmt.Fprintf(a.stderr, "user %s: %v (an external user is named ldap:NAME or oidc:NAME)\n", sub, err)
+				return exitUsage
+			}
 		}
 	}
 
@@ -116,14 +123,15 @@ func (a *app) user(ctx context.Context, args []string) int {
 	case "reset-password":
 		return a.userResetPassword(ctx, log, st, pos[0], password, *pwStdin, audit)
 	}
-	u, err := st.UserByEmail(ctx, pos[0])
-	if errors.Is(err, store.ErrNotFound) {
-		log.Error("no such user", "user", strings.ToLower(pos[0]))
+	u, ok := a.findUser(ctx, log, st, pos[0])
+	if !ok {
 		return exitError
 	}
-	if err != nil {
-		log.Error("cannot read user", "error", err.Error())
-		return exitError
+	if sub == "set-role" || sub == "reset-totp" {
+		if reason := externalRefusal(sub, u); reason != "" {
+			log.Error(reason, "user", userLabel(u))
+			return exitError
+		}
 	}
 	switch sub {
 	case "set-role":
@@ -140,10 +148,10 @@ func (a *app) user(ctx context.Context, args []string) int {
 		err = st.DisableTOTP(ctx, u.ID, nil, store.ActionTOTPReset, a.now(), audit)
 	}
 	if err != nil {
-		log.Error("cannot change user", "user", u.Email, "error", err.Error())
+		log.Error("cannot change user", "user", userLabel(u), "error", err.Error())
 		return exitError
 	}
-	log.Info("user changed", "user", u.Email, "command", sub, "actor", audit.Actor)
+	log.Info("user changed", "user", userLabel(u), "command", sub, "actor", audit.Actor)
 	return exitOK
 }
 
@@ -184,13 +192,12 @@ func (a *app) userAdd(ctx context.Context, log *slog.Logger, st store.Store, ema
 }
 
 func (a *app) userResetPassword(ctx context.Context, log *slog.Logger, st store.Store, email, password string, fromStdin bool, audit store.Audit) int {
-	u, err := st.UserByEmail(ctx, email)
-	if errors.Is(err, store.ErrNotFound) {
-		log.Error("no such user", "user", strings.ToLower(email))
+	u, ok := a.findUser(ctx, log, st, email)
+	if !ok {
 		return exitError
 	}
-	if err != nil {
-		log.Error("cannot read user", "error", err.Error())
+	if reason := externalRefusal("reset-password", u); reason != "" {
+		log.Error(reason, "user", userLabel(u))
 		return exitError
 	}
 	hash, err := webauth.NewHasher().Hash(ctx, password)
@@ -222,16 +229,94 @@ func (a *app) userList(ctx context.Context, log *slog.Logger, st store.Store, as
 		return a.printJSON(log, users)
 	}
 	tw := newTab(a.stdout)
-	fmt.Fprintln(tw, "EMAIL\tROLE\tSTATUS\tLAST LOGIN\tMUST CHANGE PASSWORD\tTOTP")
+	fmt.Fprintln(tw, "USER\tSOURCE\tROLE\tSTATUS\tLAST LOGIN\tMUST CHANGE PASSWORD\tTOTP")
 	for _, u := range users {
 		status := "active"
 		if u.Disabled {
 			status = "disabled"
 		}
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%v\t%s\n", u.Email, u.Role, status, fmtTime(u.LastLoginAt), u.MustChange, totpText(u))
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%v\t%s\n", userLabel(u), u.AuthSource, u.Role, status, fmtTime(u.LastLoginAt), u.MustChange, totpText(u))
 	}
 	tw.Flush()
 	return exitOK
+}
+
+// externalRef parses "ldap:NAME" or "oidc:NAME", the way the operator names an external user
+// (it may have no email at all).
+func externalRef(ident string) (source, name string, ok bool) {
+	for _, src := range []string{store.AuthLDAP, store.AuthOIDC} {
+		if n, found := strings.CutPrefix(ident, src+":"); found && n != "" {
+			return src, n, true
+		}
+	}
+	return "", "", false
+}
+
+// userLabel is how a user is named in output and logs: the email, or source:name.
+func userLabel(u store.User) string {
+	if u.Email != "" {
+		return u.Email
+	}
+	return u.AuthSource + ":" + u.ExternalName
+}
+
+// findUser resolves what the operator typed (an email, or ldap:NAME / oidc:NAME) to one user. It
+// logs why and returns false when there is none, or when a source:name is ambiguous.
+func (a *app) findUser(ctx context.Context, log *slog.Logger, st store.Store, ident string) (store.User, bool) {
+	if src, name, ext := externalRef(ident); ext {
+		us, err := st.UsersByExternalName(ctx, src, name)
+		switch {
+		case err != nil:
+			log.Error("cannot read user", "error", err.Error())
+		case len(us) == 0:
+			log.Error("no such user", "user", store.TruncateForAudit(ident))
+		case len(us) > 1:
+			// Two people can share a preferred_username at a provider. Never guess which is meant.
+			log.Error("more than one user has that name; use the email of the one you mean", "user", store.TruncateForAudit(ident), "matches", len(us))
+		default:
+			return us[0], true
+		}
+		return store.User{}, false
+	}
+	u, err := st.UserByEmail(ctx, ident)
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+		log.Error("no such user", "user", strings.ToLower(store.TruncateForAudit(ident)))
+	case err != nil:
+		log.Error("cannot read user", "error", err.Error())
+	default:
+		return u, true
+	}
+	return store.User{}, false
+}
+
+// externalRefusal is the reason a command does not apply to an external user, or "" when it does:
+// their role, password and second factor belong to the provider and are overwritten or ignored there
+// (decision 20). disable and enable apply to everyone and take effect at once.
+func externalRefusal(cmd string, u store.User) string {
+	var what string
+	switch u.AuthSource {
+	case store.AuthLocal:
+		return ""
+	case store.AuthLDAP:
+		what = "LDAP"
+	case store.AuthOIDC:
+		what = "the OIDC provider"
+	default:
+		what = "its identity provider"
+	}
+	switch cmd {
+	case "set-role":
+		if u.AuthSource == store.AuthLDAP {
+			return "the role of this user comes from LDAP groups at every sign-in; change it there (an edit here would be overwritten at the next sign-in)"
+		}
+		return "the role of this user comes from the OIDC claim at every sign-in; change it at " + what + " (an edit here would be overwritten at the next sign-in)"
+	case "reset-password":
+		return "this user has no ClamFleet password: it is managed by " + what
+	case "reset-totp":
+		return "this user has no ClamFleet second factor: it belongs to " + what
+	}
+	return ""
 }
 
 // totpText is the TOTP column of `user list`: off, on, or locked after too many

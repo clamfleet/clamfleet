@@ -348,3 +348,130 @@ func TestUserResetPasswordLiftsTheSecondFactorLock(t *testing.T) {
 		t.Fatal("reset-password removed the authenticator")
 	}
 }
+
+// seedExternal signs an external user in through the store (as the console does) and returns the user.
+func seedExternal(t *testing.T, db string, id store.ExternalIdentity) store.User {
+	t.Helper()
+	ctx := context.Background()
+	st, err := sqlite.Open(ctx, db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	tok, h, err := webauth.NewToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = tok
+	now := time.Now()
+	u, err := st.ExternalLogin(ctx, id, store.Session{TokenHash: h, CSRF: []byte("0123456789abcdef0123456789abcdef"), CreatedAt: now, ExpiresAt: now.Add(time.Hour)},
+		now, store.Audit{Kind: store.ActorUser, Actor: "seed"}, map[string]string{"source": id.Source})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return u
+}
+
+func sessionCount(t *testing.T, db string) int {
+	t.Helper()
+	raw, err := sql.Open("sqlite", "file:"+db+"?mode=ro")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer raw.Close()
+	var n int
+	if err := raw.QueryRow(`SELECT count(*) FROM user_sessions`).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
+// Plan 6.3 TestCLIExternalUsers: the list shows the source; the role, password and second factor of an
+// external user belong to the provider, so set-role, reset-password and reset-totp refuse with the reason
+// (exit 1, nothing changed); disable and enable work at once, by source:name.
+func TestCLIExternalUsers(t *testing.T) {
+	db, env := newDB(t)
+	if r := runServerStdin(t, env, "", "user", "add", "local@example.org", "--role", "viewer"); r.code != 0 {
+		t.Fatalf("%+v", r)
+	}
+	seedExternal(t, db, store.ExternalIdentity{Source: "ldap", ExternalID: "u1", Email: "ann@example.org", ExternalName: "ann", Role: "viewer"})
+	seedExternal(t, db, store.ExternalIdentity{Source: "oidc", ExternalID: "https://id.example sub-1", ExternalName: "oli", Role: "admin"}) // no email
+
+	r := runServer(t, env, "user", "list", "--json")
+	var users []store.User
+	if r.code != 0 || json.Unmarshal([]byte(r.stdout), &users) != nil || len(users) != 3 {
+		t.Fatalf("%+v", r)
+	}
+	src := map[string]string{}
+	for _, u := range users {
+		src[u.ExternalName+"|"+u.Email] = u.AuthSource
+	}
+	if src["|local@example.org"] != "local" || src["ann|ann@example.org"] != "ldap" || src["oli|"] != "oidc" {
+		t.Fatalf("%v", src)
+	}
+	tab := runServer(t, env, "user", "list")
+	if !strings.Contains(tab.stdout, "SOURCE") || !strings.Contains(tab.stdout, "oidc:oli") || !strings.Contains(tab.stdout, "ldap") {
+		t.Fatalf("%s", tab.stdout)
+	}
+
+	for _, c := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"user", "set-role", "ann@example.org", "admin"}, "LDAP groups"},
+		{[]string{"user", "set-role", "oidc:oli", "viewer"}, "OIDC claim"},
+		{[]string{"user", "reset-password", "ldap:ann"}, "no ClamFleet password"},
+		{[]string{"user", "reset-totp", "oidc:oli"}, "second factor"},
+	} {
+		r := runServerStdin(t, env, "", c.args...)
+		if r.code != 1 || !strings.Contains(r.stderr, c.want) || r.stdout != "" {
+			t.Errorf("%v: %+v", c.args, r)
+		}
+	}
+	// Nothing changed, and a local user is still managed as before.
+	after := runServer(t, env, "user", "list", "--json")
+	if after.stdout != r.stdout {
+		t.Fatal("a refused command changed a user")
+	}
+	if r := runServerStdin(t, env, "", "user", "set-role", "local@example.org", "admin"); r.code != 0 {
+		t.Fatalf("%+v", r)
+	}
+
+	// disable by source:name ends the sessions at once; enable brings the login back.
+	if sessionCount(t, db) != 2 {
+		t.Fatalf("%d sessions", sessionCount(t, db))
+	}
+	if r := runServerStdin(t, env, "", "user", "disable", "oidc:oli"); r.code != 0 || !strings.Contains(r.stderr, `"user":"oidc:oli"`) {
+		t.Fatalf("%+v", r)
+	}
+	if sessionCount(t, db) != 1 {
+		t.Fatalf("disable left %d sessions, want 1", sessionCount(t, db))
+	}
+	if !strings.Contains(runServer(t, env, "user", "list").stdout, "disabled") {
+		t.Fatal("not shown as disabled")
+	}
+	if r := runServerStdin(t, env, "", "user", "enable", "oidc:oli"); r.code != 0 {
+		t.Fatalf("%+v", r)
+	}
+	// The audit row names the user, never an empty target.
+	raw, _ := sql.Open("sqlite", "file:"+db+"?mode=ro")
+	defer raw.Close()
+	var n int
+	_ = raw.QueryRow(`SELECT count(*) FROM audit_log WHERE action IN ('user.disable','user.enable') AND target='oidc:oli'`).Scan(&n)
+	if n != 2 {
+		t.Fatalf("%d audit rows name oidc:oli", n)
+	}
+
+	// Unknown and ambiguous names.
+	if r := runServerStdin(t, env, "", "user", "disable", "ldap:nobody"); r.code != 1 || !strings.Contains(r.stderr, "no such user") {
+		t.Fatalf("%+v", r)
+	}
+	seedExternal(t, db, store.ExternalIdentity{Source: "oidc", ExternalID: "https://id.example sub-2", ExternalName: "oli", Role: "viewer"})
+	if r := runServerStdin(t, env, "", "user", "disable", "oidc:oli"); r.code != 1 || !strings.Contains(r.stderr, "more than one user") {
+		t.Fatalf("an ambiguous name must not pick one: %+v", r)
+	}
+	// A bad identifier is a usage error.
+	if r := runServerStdin(t, env, "", "user", "disable", "nobody"); r.code != 2 {
+		t.Fatalf("%+v", r)
+	}
+}
