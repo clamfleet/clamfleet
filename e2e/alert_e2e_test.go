@@ -235,12 +235,27 @@ func TestAlertTargetDownIsRecorded(t *testing.T) {
 	if retrying == 0 {
 		t.Fatalf("no retrying row with code 'connection refused':\n%+v\nserver journal:\n%s", alertLogRows(t), journal(t, serverUnit))
 	}
-	// The server still accepts reports (a one-shot report by the agent user).
-	before := showHost(t).ReportCount
+	// The server still accepts reports: a one-shot report by the agent user, as the ONLY writer,
+	// and in a later second than the last stored report. The server keeps one report per (host,
+	// second) and ignores a duplicate while still answering 202, so a one-shot that shares the
+	// second of an earlier report exits 0 and stores nothing. That failed this test about 2 runs
+	// in 10 with "1 -> 1", first because the agent service (every critInterval) was a second
+	// writer, and after stopping it because the retrying row can appear within a second of the
+	// service's first report. Waiting for the count to rise or retrying the one-shot would hide
+	// the collision, so it is excluded: stop the service (systemctl stop returns once the process
+	// has exited, so the count is stable) and wait until the container's clock is past the second
+	// of the last stored report. The container's clock stamps both, so no clock of ours is involved.
+	sh(t, "systemctl stop "+agentUnit)
+	h := showHost(t)
+	if h.LastReport == nil {
+		t.Fatalf("no stored report although a retrying row exists: %+v", h)
+	}
+	sh(t, "while [ \"$(date +%s)\" -le "+strconv.FormatInt(h.LastReport.TS.Unix(), 10)+" ]; do sleep 0.1; done")
+	before := h.ReportCount
 	if _, e, code := agentOnce(t); code != 0 {
 		t.Fatalf("ingest stopped working while a target is down: %d %s", code, e)
 	}
-	if after := showHost(t).ReportCount; after <= before {
-		t.Fatalf("no new report stored: %d -> %d", before, after)
+	if after := showHost(t).ReportCount; after != before+1 {
+		t.Fatalf("one one-shot report must store exactly one report: %d -> %d", before, after)
 	}
 }

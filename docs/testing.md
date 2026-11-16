@@ -112,7 +112,9 @@ with the CLI, expects the baseline NULL to WARN alert, stops clamd and expects e
 (the webhook verified with the key the CLI printed), restarts clamd and expects exactly one recovery on each,
 nothing redelivered, and a `sent` row per delivery in `alert log --json`. `TestAlertTargetDownIsRecorded`
 points a target at a closed loopback port and expects `retrying` rows with `connection refused` while ingest
-keeps working.
+keeps working. The one-shot report that proves ingest works is the only writer and
+lands in a later second than the last stored report (the server keeps one report per host and second and
+silently ignores a duplicate), so the test stops the agent service and waits for the container's clock first.
 
 The detection scenarios (`e2e/event_e2e_test.go`, milestone 5 acceptance) wire the container's real clamd to the real
 `clamfleet-agent event` with a `VirusEvent` line (added to `clamd.conf` only in this file's tests; the snapshot
