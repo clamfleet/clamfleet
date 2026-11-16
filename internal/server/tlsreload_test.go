@@ -94,6 +94,23 @@ func startReload(t *testing.T, mtls bool) *reloadEnv {
 			t.Error("server did not stop")
 		}
 	})
+	// Wait until the server has read its certificate files and says it is listening. Listen has
+	// already bound the port, so clients could connect at once, but the server reads the files only
+	// when ServeListenerReload runs on its own goroutine. A test that starts replacing the files
+	// before that read (the load test does, immediately) can hand the server cert B with key A:
+	// ServeListenerReload then returns "private key does not match public key", nothing drains
+	// e.reload any more, and the test blocks on its channel send until the go test timeout.
+	// Seen under CPU load, two runs of 200 out of two.
+	deadline := time.Now().Add(10 * time.Second)
+	for !strings.Contains(e.logs.String(), `"msg":"listening"`) {
+		if v := e.served.Load(); v != nil {
+			t.Fatalf("the server stopped before it was listening: %v", v)
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the server did not log \"listening\" within 10 s:\n%s", e.logs.String())
+		}
+		time.Sleep(time.Millisecond)
+	}
 	return e
 }
 
