@@ -94,6 +94,10 @@ address, never the header. Exported: hosts per state, one state series per host,
 database (`daily`, `main`, `bytecode`), open detections, alert deliveries (`pending`, `retrying`, `failed` within
 `retention.alert_log_days`) and the build version. **Never** a path, a signature or a tag.
 
+**With `tls.client_ca` set (mTLS) every client needs a certificate from that CA, Prometheus included**: the handshake
+is refused before the bearer token is looked at. Give the scraper a client certificate (`tls_config.cert_file` and
+`key_file` in its scrape job), or scrape through the reverse proxy that terminates TLS in front of the server.
+
 ```yaml
 # prometheus.yml
 scrape_configs:
@@ -101,6 +105,10 @@ scrape_configs:
     scheme: https
     authorization:
       credentials_file: /etc/prometheus/clamfleet-token
+    # tls_config:                     # only when the server has tls.client_ca (mTLS)
+    #   ca_file: /etc/prometheus/ca.pem
+    #   cert_file: /etc/prometheus/client.pem
+    #   key_file: /etc/prometheus/client.key
     static_configs: [{targets: ['clamfleet.example:443']}]
 ```
 
