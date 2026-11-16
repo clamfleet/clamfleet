@@ -193,6 +193,7 @@ func NewHandler(d Deps) http.Handler {
 	sessions := &webauth.Manager{
 		Store: d.Store, Now: d.Now, MaxAge: d.Console.SessionMaxAge, Idle: d.Console.SessionIdle,
 		Secure: d.Console.CookieSecure, Log: d.Log, TOTPRequired: d.Console.Local.TOTPRequired,
+		Sources: d.Console.EnabledSources(),
 	}
 	console := web.New(web.Deps{
 		Store: d.Store, Auth: sessions, Hasher: d.Hasher, Throttle: webauth.NewThrottle(d.Now), TOTPThrottle: webauth.NewThrottle(d.Now), Keys: d.Keys, Now: d.Now, Log: d.Log,

@@ -279,8 +279,16 @@ const (
 // ValidRole reports whether r is a known role.
 func ValidRole(r string) bool { return r == RoleViewer || r == RoleAdmin }
 
-// AuthLocal is the auth_source of password users.
-const AuthLocal = "local"
+// Identity sources of a console user (users.auth_source). Validated in Go, never by a
+// CHECK constraint (M3 decision 11), so a new source is not a table rebuild.
+const (
+	// AuthLocal is the source of password users.
+	AuthLocal = "local"
+	// AuthLDAP is a user from the configured LDAP directory (auth.ldap).
+	AuthLDAP = "ldap"
+	// AuthOIDC is a user from the configured OpenID Connect provider (auth.oidc).
+	AuthOIDC = "oidc"
+)
 
 // NormalizeEmail lowercases and trims an email and does the sanity check a
 // login name needs: one '@' with text on both sides, at most 254 bytes, no

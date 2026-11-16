@@ -23,6 +23,7 @@ import (
 	"github.com/clamfleet/clamfleet/internal/config"
 	"github.com/clamfleet/clamfleet/internal/health"
 	"github.com/clamfleet/clamfleet/internal/secrets"
+	"github.com/clamfleet/clamfleet/internal/store"
 )
 
 // DefaultConfigPath is used when neither --config nor CLAMFLEET_SERVER_CONFIG is set.
@@ -371,6 +372,13 @@ type AuthLocal struct {
 	// first use: until a user has enrolled, their password alone can enrol (docs/web.md).
 	// Turning it on needs a usable secret_key_file (the server refuses to start without).
 	TOTPRequired bool `yaml:"totp_required"`
+}
+
+// EnabledSources is the set of identity sources switched on in this configuration,
+// which is what may hold a console session (webauth.Manager.Sources). A provider that
+// is switched off ends its users' sessions at their next request.
+func (a Auth) EnabledSources() map[string]bool {
+	return map[string]bool{store.AuthLocal: a.Local.Enabled}
 }
 
 // Validate checks the auth keys. The bounds keep a typo from creating sessions

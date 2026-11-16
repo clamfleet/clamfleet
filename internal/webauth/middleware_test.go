@@ -52,7 +52,8 @@ var clk = time.Date(2031, 1, 1, 12, 0, 0, 0, time.UTC)
 func newMgr(f *fakeSessions) *Manager {
 	return &Manager{
 		Store: f, Now: func() time.Time { return clk }, MaxAge: 12 * time.Hour, Idle: time.Hour, Secure: true,
-		Log: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Sources: map[string]bool{store.AuthLocal: true, store.AuthLDAP: true, store.AuthOIDC: true},
+		Log:     slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 }
 
@@ -65,7 +66,7 @@ func signedIn(t *testing.T, f *fakeSessions, m *Manager, role string, mustChange
 	}
 	h := string(HashToken(tok))
 	sp := f.byHash[h]
-	sp.Role, sp.Email, sp.MustChange = role, "u@example.com", mustChange
+	sp.Role, sp.Email, sp.MustChange, sp.AuthSource = role, "u@example.com", mustChange, store.AuthLocal
 	f.byHash[h] = sp
 	return NewCookie(tok, true), Principal{csrf: sp.CSRF}
 }
@@ -344,8 +345,10 @@ func TestTOTPEnrolmentGate(t *testing.T) {
 	if w := do(h, "GET", "/", signedInAs(t, f, m, "local", false, true), nil, ""); w.Code != 200 {
 		t.Errorf("a user with TOTP: %d", w.Code)
 	}
-	if w := do(h, "GET", "/", signedInAs(t, f, m, "ldap", false, false), nil, ""); w.Code != 200 {
-		t.Errorf("an external user is gated: %d", w.Code)
+	for _, src := range []string{"ldap", "oidc"} {
+		if w := do(h, "GET", "/", signedInAs(t, f, m, src, false, false), nil, ""); w.Code != 200 {
+			t.Errorf("a %s user is gated although the provider owns the second factor: %d", src, w.Code)
+		}
 	}
 	off := newMgr(f)
 	if w := do(off.RequireUser(ok200), "GET", "/", signedInAs(t, f, off, "local", false, false), nil, ""); w.Code != 200 {
@@ -361,5 +364,106 @@ func TestTOTPEnrolmentGate(t *testing.T) {
 	}
 	if w := do(h, "GET", "/account", mc, nil, ""); w.Code != 200 {
 		t.Errorf("the password page must stay reachable: %d", w.Code)
+	}
+}
+
+// Rule (decision 21): the exempt list is explicit. A source that is not on it is GATED, so a source
+// a later milestone adds ("saml") fails safe. The session check below is the first line; this test
+// opens it (Sources lists saml) to prove the second line holds on its own.
+func TestTOTPGateGatesAnUnknownSource(t *testing.T) {
+	f := &fakeSessions{byHash: map[string]store.SessionPrincipal{}}
+	m := newMgr(f)
+	m.TOTPRequired = true
+	m.Sources["saml"] = true
+	h := m.RequireUser(ok200)
+	c := signedInAs(t, f, m, "saml", false, false)
+	if w := do(h, "GET", "/", c, nil, ""); w.Code != 303 || w.Header().Get("Location") != "/account/totp" {
+		t.Fatalf("an unknown source without TOTP: %d %q, want 303 to /account/totp", w.Code, w.Header().Get("Location"))
+	}
+	if w := do(h, "GET", "/", signedInAs(t, f, m, "saml", false, true), nil, ""); w.Code != 200 {
+		t.Fatalf("an unknown source with TOTP enrolled must pass: %d", w.Code)
+	}
+}
+
+// Rule: a session whose user's source is unknown, or switched off since, is no session at all
+// (303 to /login), whatever else the user is entitled to.
+func TestSessionOfASourceThatIsNotEnabledIsNoSession(t *testing.T) {
+	f := &fakeSessions{byHash: map[string]store.SessionPrincipal{}}
+	m := newMgr(f)
+	h := m.RequireUser(ok200)
+	saml := signedInAs(t, f, m, "saml", false, true) // unknown to this build, even with TOTP
+	if w := do(h, "GET", "/", saml, nil, ""); w.Code != 303 || w.Header().Get("Location") != "/login" {
+		t.Fatalf("an unknown source: %d %q, want 303 to /login", w.Code, w.Header().Get("Location"))
+	}
+	oidc := signedInAs(t, f, m, "oidc", false, false)
+	if w := do(h, "GET", "/", oidc, nil, ""); w.Code != 200 {
+		t.Fatalf("oidc while enabled: %d", w.Code)
+	}
+	m.Sources["oidc"] = false // auth.oidc.enabled switched off
+	if w := do(h, "GET", "/", oidc, nil, ""); w.Code != 303 {
+		t.Fatalf("oidc after it was switched off: %d, want no session", w.Code)
+	}
+	local := signedInAs(t, f, m, "local", false, false)
+	m.Sources["local"] = false // auth.local.enabled: false ends local sessions too (an M3 behaviour change)
+	if w := do(h, "GET", "/", local, nil, ""); w.Code != 303 {
+		t.Fatalf("local after auth.local.enabled: false: %d, want no session", w.Code)
+	}
+	// Fail closed: a Manager that was never told which sources are on accepts no session.
+	bare := newMgr(f)
+	bare.Sources = nil
+	if w := do(bare.RequireUser(ok200), "GET", "/", signedInAs(t, f, bare, "local", false, false), nil, ""); w.Code != 303 {
+		t.Fatalf("no Sources configured: %d, want no session", w.Code)
+	}
+}
+
+// The refusal is logged once per user and hour, not once per request.
+func TestSourceRefusalIsLoggedOncePerUserPerHour(t *testing.T) {
+	f := &fakeSessions{byHash: map[string]store.SessionPrincipal{}}
+	var logs bytes.Buffer
+	now := clk
+	m := newMgr(f)
+	m.Now = func() time.Time { return now }
+	m.Log = slog.New(slog.NewTextHandler(&logs, nil))
+	h := m.RequireUser(ok200)
+	c := signedInAs(t, f, m, "saml", false, false)
+	for i := 0; i < 5; i++ {
+		do(h, "GET", "/", c, nil, "")
+	}
+	if n := strings.Count(logs.String(), "session refused"); n != 1 {
+		t.Fatalf("%d warnings in one hour, want 1:\n%s", n, logs.String())
+	}
+	now = now.Add(61 * time.Minute)
+	do(h, "GET", "/", c, nil, "")
+	if n := strings.Count(logs.String(), "session refused"); n != 2 {
+		t.Fatalf("%d warnings after an hour, want 2", n)
+	}
+}
+
+// Plan 6.3: the gate compares r.URL.Path exactly. Alternate spellings and other methods of the
+// enrolment paths never reach a handler that is not on the list: each is a gate redirect or 403.
+// (Go's mux cleans or redirects most of these before any handler; this pins the gate on its own.)
+func TestTOTPGateDoesNotMatchAlternateSpellings(t *testing.T) {
+	f := &fakeSessions{byHash: map[string]store.SessionPrincipal{}}
+	m := newMgr(f)
+	m.TOTPRequired = true
+	reached := false
+	h := m.RequireUser(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { reached = true }))
+	c := signedInAs(t, f, m, "local", false, false)
+	for _, path := range []string{"/account/totp/", "/account//totp", "/ACCOUNT/totp", "/account/totp/../../events", "/account/totp/setup/", "/Account/Totp"} {
+		reached = false
+		do(h, "GET", path, c, nil, "")
+		if reached {
+			t.Errorf("GET %s reached the handler of a gated user", path)
+		}
+	}
+	// The allowed paths with another method are still only as allowed as the router makes them:
+	// the gate lets the path through (the mux answers 405), which is no handler of ours.
+	// What must hold is that a non-allowed path is not opened by a method.
+	for _, method := range []string{"HEAD", "PUT", "DELETE", "POST"} {
+		reached = false
+		do(h, method, "/account/password", c, nil, "a=b")
+		if reached {
+			t.Errorf("%s /account/password reached the handler of a gated user", method)
+		}
 	}
 }

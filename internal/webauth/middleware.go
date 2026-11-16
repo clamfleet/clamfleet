@@ -13,6 +13,9 @@
 //  3. a per-session synchronizer token (CSRF) in a form field or the
 //     X-CSRF-Token header, for every non-GET request with a session.
 //
+// A session is refused outright when its user's identity source is not in
+// Manager.Sources (unknown, or a provider switched off since).
+//
 // Two gates sit behind a valid session, in this order: a forced password change
 // (MustChange) and a forced TOTP enrolment (TOTPRequired).
 //
@@ -29,6 +32,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"sync"
 	"time"
 
 	"github.com/clamfleet/clamfleet/internal/store"
@@ -59,6 +63,19 @@ var totpEnrolAllowed = map[string]bool{
 	"/account/totp": true, "/account/totp/setup": true, "/account/totp/confirm": true, "/logout": true,
 }
 
+// exemptSources are the identity sources auth.local.totp_required does not gate:
+// OIDC (the provider owns the second factor) and LDAP (decision 21: LDAP has no
+// second factor ClamFleet can enforce, so its sign-ins are password-only, which
+// docs/auth.md says plainly).
+//
+// Rule: every other source, including one this build has never heard of, IS
+// gated. A source that is not listed here must be added deliberately, by a person
+// who has read this comment; forgetting to add it fails safe (the user is made to
+// enrol), where the old test "source == local" failed open (anything that was not
+// local walked through). The same goes for Manager.Sources below, the list of
+// sources that may hold a session at all.
+var exemptSources = map[string]bool{store.AuthLDAP: true, store.AuthOIDC: true}
+
 // SessionStore is what Manager needs from the store.
 type SessionStore interface {
 	CreateSession(ctx context.Context, s store.Session) error
@@ -77,10 +94,40 @@ type Manager struct {
 	// TOTPRequired is auth.local.totp_required: a local user without an
 	// authenticator reaches only the enrolment pages (RequireUser).
 	TOTPRequired bool
-	Log          *slog.Logger
+	// Sources is the set of identity sources that are switched on in the
+	// configuration (store.AuthLocal while auth.local.enabled, and so on).
+	// Authenticate treats a session whose user has any other source, one unknown
+	// to this build or one that has been switched off since, as no session at all.
+	// Rule: nil or empty means no source is enabled, so no session is valid (fail
+	// closed). A future source (SAML, a second LDAP) is refused until code adds it
+	// here, and is exempt from the TOTP gate only if it is also added to exemptSources.
+	Sources map[string]bool
+	Log     *slog.Logger
 	// Deny renders an error page for status 401 or 403 where the middleware
 	// refuses a request that cannot be redirected. Nil: a plain-text error.
 	Deny func(w http.ResponseWriter, r *http.Request, status int)
+
+	warnMu sync.Mutex
+	warned map[int64]time.Time // user id -> last "source not enabled" warning (injected clock)
+}
+
+// warnSourceOff logs at most once per user per hour that a session was refused
+// because its user's source is not enabled: a switched-off provider would
+// otherwise log on every request of every open tab.
+func (m *Manager) warnSourceOff(userID int64, source string, now time.Time) {
+	m.warnMu.Lock()
+	defer m.warnMu.Unlock()
+	if m.warned == nil {
+		m.warned = map[int64]time.Time{}
+	}
+	if last, ok := m.warned[userID]; ok && now.Sub(last) < time.Hour {
+		return
+	}
+	if len(m.warned) > 1024 { // bounded: a console has a handful of users, this is only a guard
+		m.warned = map[int64]time.Time{}
+	}
+	m.warned[userID] = now
+	m.Log.Warn("session refused: the sign-in method of this user is not enabled", "user_id", userID, "source", source)
 }
 
 // TouchEvery is how often a session's last-seen time is written at most; the
@@ -166,6 +213,13 @@ func (m *Manager) Authenticate(r *http.Request) (Principal, error) {
 	if err != nil {
 		return Principal{}, err
 	}
+	// Rule: a session is valid only while its user's identity source is enabled
+	// (decision 21). Checked before anything else about the session is used, and
+	// before the activity write: a refused session must not look alive.
+	if !m.Sources[sp.AuthSource] {
+		m.warnSourceOff(sp.UserID, sp.AuthSource, now)
+		return Principal{}, errNoSession
+	}
 	// Activity, written at most once a minute (also guarded inside the store). A failed touch must
 	// not fail the request: the session is valid, only its idle clock is stale.
 	if now.Sub(sp.LastSeen) >= TouchEvery {
@@ -212,13 +266,13 @@ func (m *Manager) RequireUser(next http.Handler) http.Handler {
 			m.gateRedirect(w, r, "/account")
 			return
 		}
-		// Rule: with auth.local.totp_required, a local user without an authenticator
-		// must enrol one before anything else. Second in order, so a one-time password
+		// Rule: with auth.local.totp_required, a user without an authenticator, of any
+		// source that is not in exemptSources, must enrol one before anything else. Second in order, so a one-time password
 		// is changed first and then the authenticator is set up, in one session.
 		// Evaluated on every request from the join (not cached in the session), so
-		// switching the setting on applies to sessions that already exist. External
-		// users are not gated: their second factor is the identity provider's.
-		if !p.MustChange && m.TOTPRequired && p.AuthSource == store.AuthLocal && !p.TOTPEnabled && !totpEnrolAllowed[r.URL.Path] {
+		// switching the setting on applies to sessions that already exist. Users of
+		// the exempt sources are not gated (see exemptSources: unknown means gated).
+		if !p.MustChange && m.TOTPRequired && !exemptSources[p.AuthSource] && !p.TOTPEnabled && !totpEnrolAllowed[r.URL.Path] {
 			m.gateRedirect(w, r, "/account/totp")
 			return
 		}
