@@ -61,3 +61,25 @@ jobs:
           make tools
       - run: make build
       - run: make ci
+
+  # Pull requests only (decision 13: DCO). The condition is the one `if:` workflows_test.sh allows on
+  # this required job: a push has no pull request to check, and the pull request already was.
+  dco:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      # fetch-depth: 0 so the whole range is present; dco.sh fails, rather than passing as empty,
+      # when either SHA is missing (hack/ci/dco.sh).
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      # The SHAs go through env, never into the script text: they come from the event, and
+      # an event field in a `run:` line is how workflows get injected.
+      - run: hack/ci/dco.sh "$BASE_SHA" "$HEAD_SHA"
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
