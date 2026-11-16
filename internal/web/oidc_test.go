@@ -612,3 +612,81 @@ func (e *env) dbHas(table, col string) string {
 	}
 	return sb.String()
 }
+
+// The refusal paths log too ("oidc: sign-in refused"), and the callback URL they are about carries the
+// code and the state: neither may reach a log line or an audit row on the replayed, expired and
+// state-mismatch paths, nor the provider's error text path.
+func TestOIDCRefusalPathsLogNoCodeOrState(t *testing.T) {
+	r := newOIDCRig(t, nil)
+	e := r.e
+	secrets := map[string]string{}
+	note := func(name, cb string) {
+		q := mustURL("http://x" + cb).Query()
+		secrets[name+" code"], secrets[name+" state"] = q.Get("code"), q.Get("state")
+	}
+
+	// Replayed: the callback works once, then the same URL with the same cookie again.
+	b := e.browser()
+	authLoc := authURL(t, r.start(b, ""))
+	cb := r.choose(t, authLoc, "ann")
+	note("replayed", cb)
+	cookie := stateCookie(t, e, b)
+	if got := b.get(cb); got.status != 303 {
+		t.Fatalf("%d", got.status)
+	}
+	again, _ := http.NewRequest("GET", e.srv.URL+cb, nil)
+	again.AddCookie(cookie)
+	resp, err := e.browser().c.Do(again)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != 400 {
+		t.Fatalf("replay: %d", resp.StatusCode)
+	}
+
+	// Expired.
+	b = e.browser()
+	cb = r.choose(t, authURL(t, r.start(b, "")), "ann")
+	note("expired", cb)
+	e.advance(11 * time.Minute)
+	if got := b.get(cb); got.status != 400 {
+		t.Fatalf("expired: %d", got.status)
+	}
+
+	// State parameter mismatch: the tampered value is a secret of the attacker's request, too.
+	b = e.browser()
+	cb = r.choose(t, authURL(t, r.start(b, "")), "ann")
+	note("mismatch", cb)
+	bad := strings.Replace(cb, "state=", "state=tampered-state-value-", 1)
+	secrets["mismatch tampered state"] = mustURL("http://x" + bad).Query().Get("state")
+	if got := b.get(bad); got.status != 400 {
+		t.Fatalf("mismatch: %d", got.status)
+	}
+
+	// The provider's error path.
+	b = e.browser()
+	loc := mustURL(authURL(t, r.start(b, "")))
+	st := loc.Query().Get("state")
+	secrets["provider-error state"] = st
+	if got := b.get("/login/oidc/callback?error=access_denied&state=" + url.QueryEscape(st)); got.status != 403 {
+		t.Fatalf("provider error: %d", got.status)
+	}
+
+	logs := e.logs.String()
+	if !strings.Contains(logs, "oidc: sign-in refused") {
+		t.Fatal("the refusal log line is not there: the test would pass vacuously")
+	}
+	var audit strings.Builder
+	for _, a := range []string{"user.login", "user.login.failed"} {
+		audit.WriteString(strings.Join(e.auditDetails(a), "\n"))
+	}
+	for name, secret := range secrets {
+		if len(secret) < 8 {
+			t.Fatalf("%s is %q: the test would pass vacuously", name, secret)
+		}
+		if strings.Contains(logs, secret) || strings.Contains(audit.String(), secret) {
+			t.Fatalf("the %s is in a log line or the audit log", name)
+		}
+	}
+}
