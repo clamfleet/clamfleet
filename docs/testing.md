@@ -17,8 +17,8 @@ signs in with a cookie-jar client and an injected clock, and posts real agent re
 `cmd/clamfleet-server` and `hack/webfixture` tests build the binaries themselves, which `go test` does not
 see as inputs: use `go test -count=1` when you change code they cover, or a cached "ok" proves nothing.
 
-`staticcheck` and `sqlc` must be installed (`go install honnef.co/go/tools/cmd/staticcheck@v0.8.2`;
-2026.2.2 supports Go 1.27; `CGO_ENABLED=0 go install github.com/sqlc-dev/sqlc/cmd/sqlc@v1.31.1`).
+`staticcheck` and `sqlc` must be installed: `make tools` installs the versions the Makefile pins (staticcheck v0.8.2,
+which is 2026.2.2 and supports Go 1.27; sqlc v1.31.1).
 `sqlc diff` fails when `internal/store/sqlite/sqlcdb` is stale: run `make generate`. The tests inject the clock, the time zone, `systemctl`/`journalctl` and the
 hostname, and replay recorded clamd sessions from `internal/agent/testdata`; none of them reads
 the real date or touches the machine.
@@ -42,6 +42,45 @@ the store to prove restart behaviour. `internal/web/alerts_test.go` goes through
 loopback webhook receiver and the SMTP fake. `cmd/clamfleet-server` tests run the real binaries (serve
 refusals, an alert delivered after the real agent reports a down clamd, the CLI's refusal to take a URL as an
 argument, key rotation and `key check`). Everything binds loopback only.
+
+## CI (`.github/workflows/ci.yml`)
+
+Four jobs. Their names are the repository's required status checks, so a rename blocks merges until the ruleset is
+changed first.
+
+| Job | Runs on | What it proves |
+|---|---|---|
+| `check` | every pull request (drafts too), every push to `develop` and `main`, weekly | `make ci`: vet, staticcheck, `sqlc diff`, the unit and script tests through the test gate, actionlint on the workflows, `go mod tidy -diff`, `go mod verify`, gofmt. About 5 minutes. |
+| `e2e` | ready pull requests and pushes | the e2e suite in a container with a real ClamAV and systemd (below, "The e2e suite in Docker") |
+| `web` | ready pull requests and pushes | the Playwright browser tests of the console (`make e2e-web`), the layer that sees a dead button |
+| `dco` | pull requests | every commit carries a `Signed-off-by` with the author's email (`hack/ci/dco.sh`) |
+
+**Draft pull requests run only `check`.** A draft cannot be merged, and marking it ready for review starts the full run.
+A job skipped by its `if:` reports success to a required check, which is safe only because of that rule;
+`deploy/test/workflows_test.sh` allows exactly this `if:` on the required jobs and no other.
+
+`make ci` is `make check` with `hack/testgate` in place of plain `go test`, plus `lint-workflows`, `go mod tidy -diff`,
+`go mod verify` and a gofmt check. Run it before you push. The gate reads `go test -json`, prints the output as text, and
+fails on a failed test, on a **skipped** test, on a package that does not build, and on a stream in which nothing passed.
+`go test` itself exits 0 for a skip, and a test that skips itself at run time cannot fail when the feature breaks. There is
+no allowlist: a test that cannot run in a CI job is excluded by a build tag in a reviewed change. `-expect-pkg ./e2e -tags e2e`
+also fails the run unless the set of top-level tests that passed equals the set the package declares (the go tool evaluates
+the build constraints, `go/parser` reads the files; subtests and `TestMain` do not count), so a narrowed `-run` or a test
+that never ran cannot pass. The gate has its own unit tests (`hack/testgate`).
+
+`-count=1` is used everywhere: the `cmd/*` and `hack/webfixture` tests build binaries that the test result cache cannot see.
+
+The workflows follow rules that `deploy/test/workflows_test.sh` (part of `make check`) and actionlint enforce: GitHub-owned
+actions only, each pinned by full commit SHA with its version in a comment; per-job `permissions:` and
+`persist-credentials: false`; no `pull_request_target` or `workflow_run`; no secrets in these jobs (pull requests from forks
+run them). The script is a guardrail over a list of patterns, not a proof that a workflow is safe.
+
+Other `make check` tests added for CI: `deploy/test/headers_test.sh` (every tracked file has both SPDX lines, or is a listed
+exception with its reason) and `deploy/test/dco_test.sh` (the sign-off check against a temporary repository, including a range
+that was never fetched, which must fail and not look empty).
+
+Tools are pinned in the Makefile and installed with `make tools` (staticcheck, sqlc); actionlint runs through `go run` at its
+pinned version. None of them is in `go.mod`.
 
 ## End-to-end tests (`make e2e`)
 
@@ -206,6 +245,39 @@ Things that fail in ways that do not look like the cause:
 - A missing `CFT_EXEC` is a hard failure, never a skip.
 - The container must be on UTC: freshclam's log times have no zone, and the tests compare them
   with UTC values. The suite checks this first.
+
+## The e2e suite in Docker (`make e2e-image`, `make e2e-docker`)
+
+What CI's `e2e` job runs, and what anyone with Docker can run: the same suite as `make e2e`, with the container replaced
+by one made from `deploy/test/ci/Dockerfile`. The maintainer has no Docker; the Incus suite is his equivalent.
+
+- **The image** is Debian 13 with systemd as PID 1 (the suite uses `systemctl`, `journalctl`, `systemd-run` and the
+  packages' units, which is why it is not the official ClamAV image), the distribution's ClamAV packages, and a frozen
+  copy of the signature databases taken from the official ClamAV image, pinned by digest. freshclam is never run and its
+  unit is disabled. Three tests take the Incus snapshot's one real freshclam run as their premise, so the image carries a
+  scrubbed recording of one (`deploy/test/ci/testdata`: `freshclam.log` as a file, the journal lines replayed at boot by a
+  oneshot). `make record-freshclam-history` re-records it from the Incus container; never hand-edit it.
+- **Each reset starts a new container** (`RESET_RUNTIME=docker` in `deploy/test/reset.sh`): `--privileged --cgroupns=private
+  --tmpfs /run --tmpfs /run/lock --network none`. `--privileged` is root on the runner VM, accepted because the VM is
+  discarded after the job, which holds no secrets (the policy test keeps `secrets` out of these jobs). The script asserts
+  `NetworkMode=none` with `docker inspect` and fails otherwise. A reset takes about 7 s; the suite about 8 minutes.
+- **What "no network" guarantees:** during the tests the container has no network, so nothing in them can reach the ClamAV
+  CDN or anything else; binaries and packages go in over `docker exec -i`. Building the image does use the network (Docker
+  Hub for the two base images, `deb.debian.org` for packages), but never contacts the ClamAV CDN.
+- **The gate:** `make e2e-docker` pipes `go test -json` through `hack/testgate -expect-pkg ./e2e -tags e2e`: every
+  top-level test the package declares (`TestMain` is not one) must pass, none may skip, and the set must equal what the package declares.
+- **Journals:** `reset.sh` writes the journal of each container to `dist/e2e-journals` (`E2E_JOURNAL_DIR`) before replacing
+  it, named by end time. CI uploads them for 7 days when the job fails. They hold synthetic data only.
+- **The image is cached** as a tarball by the Dockerfile hash and the ISO week, so Docker Hub is pulled a few times a
+  week at most (anonymous pulls are limited per address, and runners share addresses).
+- **Refreshing the signatures:** change the digest in the Dockerfile's first `FROM` (Dependabot proposes it monthly) and
+  let CI judge it. The old digest may disappear from Docker Hub; the weekly cache holds the built image until then.
+- **Distribution drift:** the image takes the live Debian 13 archive, so a ClamAV or systemd update can turn CI red.
+  Open an issue, fix it in its own pull request, and let others wait; the temporary escape is a pinned package version in the
+  Dockerfile with a removal date, in a reviewed commit. A red run is never simply re-run until it is green.
+- **A failure only CI shows:** read the uploaded journals and the test log first. If that is not enough, run the suite
+  in a Docker of your own (`make e2e-image`, `make e2e-docker`), or the Incus suite (`make e2e`), and say in the pull request what
+  you could not reproduce; the maintainer can look at the failing run's logs.
 
 ## Packages (`make packages`) and the package scenarios
 

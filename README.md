@@ -78,10 +78,8 @@ notice prints the `VirusEvent` line (and, on Debian, the two AppArmor lines) to 
 - **Go 1.27.4.** `go.mod` declares `go 1.26.0` and `toolchain go1.27.4`. With the default
   `GOTOOLCHAIN=auto`, the go command downloads the pinned toolchain if your installed Go is older.
 - **GNU make.**
-- **staticcheck v0.8.2** for `make check`:
-  `go install honnef.co/go/tools/cmd/staticcheck@v0.8.2`
-- **sqlc v1.31.1** for `make check` (`sqlc diff`) and `make generate`; build time only, nothing of it
-  is in the binaries: `CGO_ENABLED=0 go install github.com/sqlc-dev/sqlc/cmd/sqlc@v1.31.1`
+- **staticcheck v0.8.2** for `make check`, and **sqlc v1.31.1** for `make check` (`sqlc diff`) and `make generate`
+  (build time only, nothing of them is in the binaries). `make tools` installs both at the versions the Makefile pins.
 - **To run the agent:** Debian 13 with ClamAV, clamd and freshclam under systemd. See
   [Supported platforms](#supported-platforms).
 
@@ -89,10 +87,13 @@ notice prints the `VirusEvent` line (and, on Debian, the two AppArmor lines) to 
 
 ```
 make build      # static binaries bin/clamfleet-agent and bin/clamfleet-server (CGO_ENABLED=0)
+make tools      # install the pinned staticcheck and sqlc
 make check      # go vet, staticcheck, sqlc diff, go test ./..., script tests; no container needed
+make ci         # what CI runs: check plus workflow lint, module and gofmt checks, and a test gate that fails on skipped tests
 make generate   # regenerate internal/store/sqlite/sqlcdb after changing a migration or query
 make packages VERSION=x.y.z   # .deb and .rpm of the agent and the server into dist/ (nfpm v2.49.0, via go run)
 make e2e        # end-to-end tests inside a ClamAV container, including the packages; needs setup
+make e2e-docker # the same suite in a Debian 13 systemd container with no network (what CI runs); needs Docker
 make e2e-apparmor   # the detection path on a Debian 13 VM with AppArmor enforcing (docs/testing.md)
 make e2e-el9        # the rpm and the detection path on an AlmaLinux 9 VM with SELinux enforcing (docs/testing.md)
 make e2e-idp        # the real server against OpenLDAP and Keycloak in a throwaway container (docs/testing.md)
@@ -352,7 +353,7 @@ Milestones follow [docs/HANDOVER.md](docs/HANDOVER.md). Milestones 1 to 6b are b
 | 5 | Detection events, spool, events page, acknowledgement | Built. Tested on Debian 13 (container, and a VM with AppArmor enforcing). |
 | 6a | Packages (.deb and .rpm), retention for every table, backup, `/metrics`, TLS reload, NAT64 in the alert policy, `clamfleet-agent scan`, SELinux | Built. Tested on Debian 13 and AlmaLinux 9. |
 | 6b | LDAP and OpenID Connect sign-in, role mapping from groups or a claim | Built. Tested against OpenLDAP and Keycloak (and in a browser); Active Directory is documented and untested. |
-| 6c | CI, signed releases, checksums, SBOM, project files | Planned |
+| 6c | CI, signed releases, checksums, SBOM, project files | In progress: CI and project files first; signed releases next. |
 
 Built: local accounts with email and password and the roles `viewer` and `admin`, and TOTP two-factor
 sign-in (optional per user, or required for all local users with `auth.local.totp_required`; see `docs/web.md`).
@@ -370,8 +371,9 @@ agents pull from the server.
 
 ## Contributing
 
-Contribution guidelines are coming. Running the agent on the RHEL 9 family and reporting what breaks
-is especially welcome.
+See [CONTRIBUTING.md](CONTRIBUTING.md) (build, test, git flow, and the DCO sign-off), the
+[Code of Conduct](CODE_OF_CONDUCT.md) and [SECURITY.md](SECURITY.md) for reporting a vulnerability. Running
+the agent on the RHEL 9 family and reporting what breaks is especially welcome.
 
 ## Licence
 

@@ -123,14 +123,19 @@ func TestRetentionThroughBinary(t *testing.T) {
 				t.Errorf("host show: %d reports, %d events; want %d and %d", s.ReportCount, s.EventCount, c.wantAfter(m), m.AfterDefaults.Events)
 			}
 			// The guards: the state change and the event whose delivery is still retrying survive,
-			// and so does the delivery itself.
+			// and so does the delivery itself. The two seeded deliveries are counted by id, not "every
+			// pending one": the server is live, its health evaluator finds the seeded host (no report
+			// for days) STALE, records a state change and queues a delivery of its own for the seeded
+			// target. Reproduced with health.eval_interval=1s and a 5 s wait (3 state changes, 3
+			// deliveries); with the default interval it depends on the machine whether that has happened
+			// by the time of this query (it had on one CI run). It has nothing to do with retention.
 			for q, want := range map[string]int{
-				`SELECT count(*) FROM state_changes WHERE id = 104`:              1,
-				`SELECT count(*) FROM events WHERE path = '/srv/seed/2'`:         1,
-				`SELECT count(*) FROM alert_deliveries WHERE status = 'pending'`: 2,
+				`SELECT count(*) FROM state_changes WHERE id = 104`:                                                     1,
+				`SELECT count(*) FROM events WHERE path = '/srv/seed/2'`:                                                1,
+				`SELECT count(*) FROM alert_deliveries WHERE status = 'pending' AND alert_id IN ('seed-ev', 'seed-sc')`: 2,
 			} {
 				if n := dbCount(t, db, q); n != want {
-					t.Errorf("%s = %d, want %d", q, n, want)
+					t.Errorf("%s = %d, want %d\nall deliveries: %s\nserver log:\n%s", q, n, want, deliveryRows(t, db), srv.stderr.String())
 				}
 			}
 			if strings.Contains(srv.stderr.String(), "/srv/seed") {
@@ -138,6 +143,34 @@ func TestRetentionThroughBinary(t *testing.T) {
 			}
 		})
 	}
+}
+
+// deliveryRows lists every alert delivery (id, kind, status, attempts, creation time) for a failure
+// message. Added after the first CI run found a third pending delivery that nobody could explain from
+// "= 3, want 2" (it never happened locally, 60 runs under CPU load included): the next occurrence
+// names the row and, with the server log, who queued it.
+func deliveryRows(t *testing.T, db string) string {
+	t.Helper()
+	d, err := sql.Open("sqlite", "file:"+db+"?mode=ro")
+	if err != nil {
+		return err.Error()
+	}
+	defer d.Close()
+	rows, err := d.Query(`SELECT alert_id, kind, status, attempts, created_at FROM alert_deliveries ORDER BY id`)
+	if err != nil {
+		return err.Error()
+	}
+	defer rows.Close()
+	var b strings.Builder
+	for rows.Next() {
+		var id, kind, status string
+		var attempts, created int64
+		if err := rows.Scan(&id, &kind, &status, &attempts, &created); err != nil {
+			return err.Error()
+		}
+		fmt.Fprintf(&b, "\n  %s kind=%s status=%s attempts=%d created_at=%d", id, kind, status, attempts, created)
+	}
+	return b.String()
 }
 
 func dbCount(t *testing.T, db, q string) int {

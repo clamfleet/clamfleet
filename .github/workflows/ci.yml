@@ -1,0 +1,163 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# SPDX-FileCopyrightText: The ClamFleet Authors
+#
+# CI for every pull request and every push to the long-lived branches (docs/testing.md, "CI").
+#
+# Rules this file lives by, enforced by deploy/test/workflows_test.sh and actionlint (make ci):
+#   - every action is a GitHub-owned one pinned by full commit SHA, with its version in a comment;
+#   - the token is read-only and persisted nowhere (persist-credentials: false), and there are no
+#     secrets in these jobs: pull requests from forks run here;
+#   - never pull_request_target or workflow_run, which would give a fork's code the base repository's token;
+#   - the job names below are the required status checks of the repository rulesets. Renaming or
+#     removing one blocks every merge until the ruleset is updated first (docs/releasing.md).
+name: ci
+
+on:
+  pull_request:
+    branches: [develop, main]
+    types: [opened, synchronize, reopened, ready_for_review]
+  push:
+    branches: [develop, main]
+  # Weekly, so a change in the distribution's ClamAV or in a pinned tool shows up without a pull request.
+  # (GitHub stops scheduled runs of a repository with no activity for 60 days; the next pull request
+  # shows the same drift, so this is a convenience.)
+  schedule:
+    - cron: '17 4 * * 1'
+
+# Nothing at the top: each job asks for what it needs.
+permissions: {}
+
+# A newer push to a pull request makes the older run useless. Runs for branches are never cancelled:
+# a push to develop or main is the record that the merged commit was green.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  # Runs on every event, draft pull requests included: it is the cheap check (about 5 minutes).
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      # go.mod pins the toolchain with a `toolchain` line. setup-go installs a Go for the `go` line and
+      # the go command may switch (GOTOOLCHAIN) to the pinned one; either way the tests must run on the
+      # pinned release, so a mismatch fails here, not as a confusing difference later.
+      - name: Go is the toolchain go.mod pins
+        run: |
+          want="$(awk '$1 == "toolchain" { print $2 }' go.mod)"
+          got="$(go env GOVERSION)"
+          test -n "$want" || { echo "go.mod has no toolchain line" >&2; exit 1; }
+          test "$got" = "$want" || { echo "running $got, go.mod pins $want" >&2; exit 1; }
+      - run: |
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+          make tools
+      - run: make build
+      - run: make ci
+
+  # Ready pull requests and every push: the real agent and server inside a Debian 13 container with
+  # systemd as PID 1, the distribution's ClamAV and frozen signatures, and NO network (docs/testing.md,
+  # "The e2e suite in Docker"). A draft is skipped: a draft cannot merge, and ready_for_review starts
+  # a full run. workflows_test.sh allows exactly this `if:` on this required job.
+  e2e:
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
+    needs: check
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      # The image is cached as a tarball. The key is the Dockerfile plus the ISO week: the Dockerfile
+      # pins both base images by digest, but its apt packages come from the live Debian 13 archive,
+      # which the weekly refresh picks up (distribution drift shows up as a red CI, never silently).
+      - id: week
+        run: echo "week=$(date -u +%G-W%V)" >> "$GITHUB_OUTPUT"
+      - id: image
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/clamfleet-e2e-image.tar
+          key: e2e-image-${{ hashFiles('deploy/test/ci/**') }}-${{ steps.week.outputs.week }}
+      - if: steps.image.outputs.cache-hit != 'true'
+        run: |
+          make e2e-image
+          docker save -o "$RUNNER_TEMP/clamfleet-e2e-image.tar" clamfleet-e2e:ci
+      - if: steps.image.outputs.cache-hit == 'true'
+        run: docker load -i "$RUNNER_TEMP/clamfleet-e2e-image.tar"
+      - run: make e2e-docker
+      # One journal per container that lived (reset.sh saves it before replacing the container). They
+      # hold synthetic data only: EICAR paths under /tmp/e2e and per-run tokens.
+      - if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: e2e-journals
+          path: dist/e2e-journals
+          retention-days: 7
+          if-no-files-found: ignore
+
+  # Ready pull requests and every push, the browser is where a 404 on a button
+  # shows up, and no lower layer sees it. No retries: a flaky test is fixed, not run again.
+  web:
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+      # Playwright 1.63.0 (the lockfile) downloads its own Chromium build; the system libraries it needs
+      # come with --with-deps. The suite itself starts and stops its fixture server on 127.0.0.1.
+      - run: |
+          cd e2e/web
+          npm ci
+          npx playwright install --with-deps chromium
+      - run: make e2e-web
+      - if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: web-traces
+          path: e2e/web/test-results
+          retention-days: 7
+          if-no-files-found: ignore
+
+  # Pull requests only (decision 13: DCO). The condition is the one `if:` workflows_test.sh allows on
+  # this required job: a push has no pull request to check, and the pull request already was.
+  dco:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      # fetch-depth: 0 so the whole range is present; dco.sh fails, rather than passing as empty,
+      # when either SHA is missing (hack/ci/dco.sh).
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      # The SHAs go through env, never into the script text: they come from the event, and
+      # an event field in a `run:` line is how workflows get injected.
+      - run: hack/ci/dco.sh "$BASE_SHA" "$HEAD_SHA"
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}

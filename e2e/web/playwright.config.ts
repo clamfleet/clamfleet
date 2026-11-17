@@ -17,6 +17,9 @@ export default defineConfig({
   workers: 1,
   fullyParallel: false,
   retries: 0,
+  // A committed test.only would silently run one test and pass (deploy/test/webtests_test.sh also
+  // refuses skip and fixme in the specs).
+  forbidOnly: true,
   timeout: 60_000,
   expect: { timeout: 10_000 },
   reporter: [['list']],

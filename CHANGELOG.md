@@ -10,6 +10,14 @@ All notable changes are listed here. The format follows Keep a Changelog; versio
 ## Unreleased
 
 ### Added
+- Milestone 6c, continuous integration and project files (in progress). **CI** (`.github/workflows/ci.yml`): `make ci` on every pull request
+  (vet, staticcheck, sqlc diff, unit and script tests through a test gate that fails on skipped tests, actionlint, module and gofmt
+  checks), the Playwright browser tests of the console, and a DCO sign-off check (`hack/ci/dco.sh`); every action is GitHub-owned and pinned
+  by commit SHA (`deploy/test/workflows_test.sh`). Dependabot for actions, the CI image and Go security updates. `reset.sh` can reset a
+  Docker container as well as an Incus snapshot (`RESET_RUNTIME=docker`), with `deploy/test/ci/Dockerfile` (Debian 13, systemd, ClamAV,
+  frozen signatures) and `make e2e-image` and `make e2e-docker`. `make tools` and `make ci`; staticcheck, sqlc and actionlint are pinned in
+  the Makefile. Every tracked file is checked for its SPDX header. CONTRIBUTING.md, CODE_OF_CONDUCT.md (Contributor Covenant 2.1),
+  SECURITY.md, issue forms and a pull request template.
 - Milestone 6b, external sign-in (see `docs/auth.md`). **LDAP** (one directory; search, then bind; `ldaps://` or StartTLS, plaintext
   only to loopback; the name escaped into the filter; an empty password refused before any network I/O; the identity is the
   `entryUUID` or `objectGUID`, never the DN; groups from `memberOf` or a search) and **OpenID Connect** (one provider; the
@@ -38,6 +46,8 @@ All notable changes are listed here. The format follows Keep a Changelog; versio
   runtime dependency.
 
 ### Fixed
+- A spool test swapped a file for another and expected a different inode, which ext4 does not guarantee (it reuses the freed one); found by
+  the first CI run, the test now keeps the old inode allocated.
 - Milestone 6b: **the TOTP gate** was "source is local", so any user of another source skipped `auth.local.totp_required`. It now
   exempts only `ldap` and `oidc`; an unknown source is gated, and a session of an unknown source is no session at all.
 - Milestone 6a: **event prune** deleted events whose alert was still being delivered, or that were held in an open
