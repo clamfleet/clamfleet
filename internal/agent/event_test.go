@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -308,4 +309,44 @@ func TestEventItemIsJSONWithoutPathInName(t *testing.T) {
 		t.Fatalf("%v %s", err, raw)
 	}
 	_ = errors.New
+}
+
+// The spool directory can disappear (or the disk fail) between the first
+// Lstat and the one on the opened root. That must be a reported failure, not a
+// nil dereference: `event` runs as clamd's user and a panic there loses the
+// detection. The same nil FileInfo used to be a flake of the watchdog test,
+// whose abandoned goroutine hit the removed temp directory.
+func TestRunEventSurvivesAFailingRootLstat(t *testing.T) {
+	f := newEventFixture(t)
+	f.FS.fail["Lstat"] = syscall.EIO
+	res := RunEvent(f.Deps)
+	if res.Exit != EventFailed || !strings.Contains(res.Message, "spool/events") {
+		t.Fatalf("%+v", res)
+	}
+}
+
+// failingStatRoot is a root whose own Stat fails, as an fd to a deleted or
+// broken directory can.
+type failingStatRoot struct{ spoolRoot }
+
+func (failingStatRoot) Stat() (fs.FileInfo, error) { return nil, syscall.EIO }
+
+type failingStatFS struct{ osFS }
+
+func (failingStatFS) OpenRoot(dir string) (spoolRoot, error) {
+	r, err := osFS{}.OpenRoot(dir)
+	if err != nil {
+		return nil, err
+	}
+	return failingStatRoot{r}, nil
+}
+
+func TestOpenSpoolRootSurvivesAFailingStat(t *testing.T) {
+	ts := newTestSpool(t)
+	ts.OpenRun(t).Close()
+	o := SpoolOptions{Dir: ts.Dir, FS: failingStatFS{}}
+	o.defaults()
+	if _, err := openSpoolRoot(o, statInfo{}); !errors.Is(err, syscall.EIO) {
+		t.Fatalf("err = %v", err)
+	}
 }

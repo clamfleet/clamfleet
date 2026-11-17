@@ -76,8 +76,13 @@ func TestTLSReloadOnSIGHUP(t *testing.T) {
 			t.Fatalf("still serving the old certificate after SIGHUP:\n%s", srv.stderr.String())
 		}
 	}
-	if !strings.Contains(srv.stderr.String(), "tls certificate reloaded") {
-		t.Fatalf("no reload line:\n%s", srv.stderr.String())
+	// The reloader swaps the certificate (what serialSeen observes) before it
+	// writes its log line, so the line can trail the new serial by a moment:
+	// poll for it like the error line below instead of reading the log once.
+	for deadline := time.Now().Add(10 * time.Second); !strings.Contains(srv.stderr.String(), "tls certificate reloaded"); time.Sleep(50 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatalf("no reload line:\n%s", srv.stderr.String())
+		}
 	}
 
 	// A broken pair: the key of A with the certificate of B.
