@@ -123,11 +123,16 @@ func TestRetentionThroughBinary(t *testing.T) {
 				t.Errorf("host show: %d reports, %d events; want %d and %d", s.ReportCount, s.EventCount, c.wantAfter(m), m.AfterDefaults.Events)
 			}
 			// The guards: the state change and the event whose delivery is still retrying survive,
-			// and so does the delivery itself.
+			// and so does the delivery itself. The two seeded deliveries are counted by id, not "every
+			// pending one": the server is live, its health evaluator finds the seeded host (no report
+			// for days) STALE, records a state change and queues a delivery of its own for the seeded
+			// target. Reproduced with health.eval_interval=1s and a 5 s wait (3 state changes, 3
+			// deliveries); with the default interval it depends on the machine whether that has happened
+			// by the time of this query (it had on one CI run). It has nothing to do with retention.
 			for q, want := range map[string]int{
-				`SELECT count(*) FROM state_changes WHERE id = 104`:              1,
-				`SELECT count(*) FROM events WHERE path = '/srv/seed/2'`:         1,
-				`SELECT count(*) FROM alert_deliveries WHERE status = 'pending'`: 2,
+				`SELECT count(*) FROM state_changes WHERE id = 104`:                                                     1,
+				`SELECT count(*) FROM events WHERE path = '/srv/seed/2'`:                                                1,
+				`SELECT count(*) FROM alert_deliveries WHERE status = 'pending' AND alert_id IN ('seed-ev', 'seed-sc')`: 2,
 			} {
 				if n := dbCount(t, db, q); n != want {
 					t.Errorf("%s = %d, want %d\nall deliveries: %s\nserver log:\n%s", q, n, want, deliveryRows(t, db), srv.stderr.String())
