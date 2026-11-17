@@ -27,6 +27,12 @@ on:
 # Nothing at the top: each job asks for what it needs.
 permissions: {}
 
+# GitHub's default shell is `bash -e` with no pipefail, so a failing command before a pipe is lost.
+# `shell: bash` is `bash -eo pipefail`; workflows_test.sh requires it (rule 10).
+defaults:
+  run:
+    shell: bash
+
 # A newer push to a pull request makes the older run useless. Runs for branches are never cancelled:
 # a push to develop or main is the record that the merged commit was green.
 concurrency:

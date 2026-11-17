@@ -21,6 +21,12 @@ on:
 
 permissions: {}
 
+# GitHub's default shell is `bash -e` with no pipefail, so a failing command before a pipe is lost.
+# `shell: bash` is `bash -eo pipefail`; workflows_test.sh requires it (rule 10).
+defaults:
+  run:
+    shell: bash
+
 # A release is never cancelled half way: a second tag waits.
 concurrency:
   group: release
@@ -48,8 +54,14 @@ jobs:
         run: git fetch --force origin "refs/tags/$TAG:refs/tags/$TAG"
         env:
           TAG: ${{ github.ref_name }}
+      # No pipe: the script's exit status must be the step's. Its two output lines are appended only after it
+      # accepted, and the step then insists on both (a green `verify` with empty outputs must be impossible).
       - id: verify
-        run: deploy/release/verify-tag.sh "$TAG" | tee -a "$GITHUB_OUTPUT"
+        run: |
+          deploy/release/verify-tag.sh "$TAG" >"$RUNNER_TEMP/verify.out"
+          grep -Eq '^tag_object=[0-9a-f]{40}$' "$RUNNER_TEMP/verify.out"
+          grep -Eq '^commit=[0-9a-f]{40}$' "$RUNNER_TEMP/verify.out"
+          cat "$RUNNER_TEMP/verify.out" >>"$GITHUB_OUTPUT"
         env:
           TAG: ${{ github.ref_name }}
           GH_TOKEN: ${{ github.token }}
@@ -66,6 +78,13 @@ jobs:
     outputs:
       sums: ${{ steps.sums.outputs.sums }}
     steps:
+      # An empty output means verify did not accept a tag. Checking out an empty ref would build the default
+      # branch, so refuse before any checkout.
+      - name: Refuse an empty verified commit
+        run: |
+          test -n "$COMMIT" || { echo "verify produced no commit: nothing is built or signed" >&2; exit 1; }
+        env:
+          COMMIT: ${{ needs.verify.outputs.commit }}
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.verify.outputs.commit }}
@@ -108,6 +127,13 @@ jobs:
     permissions:
       contents: read
     steps:
+      # An empty output means verify did not accept a tag. Checking out an empty ref would build the default
+      # branch, so refuse before any checkout.
+      - name: Refuse an empty verified commit
+        run: |
+          test -n "$COMMIT" || { echo "verify produced no commit: nothing is built or signed" >&2; exit 1; }
+        env:
+          COMMIT: ${{ needs.verify.outputs.commit }}
       # For sign.sh and the published key only: nothing from the checkout is built or run but the script.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -151,6 +177,7 @@ jobs:
       - name: Publish a draft
         run: |
           set -euo pipefail
+          test -n "$TAG_OBJECT" || { echo "verify produced no tag object: nothing is published" >&2; exit 1; }
           now="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" --jq .object.sha)"
           test "$now" = "$TAG_OBJECT" || { echo "tag $TAG now points at $now, verify accepted $TAG_OBJECT" >&2; exit 1; }
           flags=(--draft --verify-tag --title "$TAG" --notes-file dist/release/notes.md)
