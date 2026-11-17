@@ -62,7 +62,7 @@ async function startFixture(extraArgs: string[]): Promise<Started> {
 // auth.local.totp_required. Two origins, so the cookies of the two never meet in one test.
 // Both run with --sso (the fake OpenID Connect provider and LDAP directory), so every local
 // sign-in and two-factor spec also runs with the SSO button and the "Email or user name" field
-// present: local sign-in must not regress when the form gained LDAP routing (plan 6.8).
+// present: local sign-in must not regress when the form gained LDAP routing.
 export default async function globalSetup(): Promise<() => Promise<void>> {
   const plain = await startFixture(['--sso']);
   let required: Started;

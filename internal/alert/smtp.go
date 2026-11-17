@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // SPDX-FileCopyrightText: The ClamFleet Authors
 
-// smtp.go: the SMTP client session on top of net/smtp (plan 4.8, M4 decision 11).
+// smtp.go: the SMTP client session on top of net/smtp (M4 decision 11).
 //
 // net/smtp is frozen but not deprecated, and has no LOGIN auth and no context
 // support; this file adds LOGIN, a session deadline and the delivery
@@ -12,7 +12,7 @@
 //
 // The commit point is the server's reply to the final "." of DATA: the
 // io.WriteCloser that Client.Data returns reads that reply in Close and returns
-// an error for a non-2xx reply (plan A11, checked against the Go source). A 2xx
+// an error for a non-2xx reply (checked against the Go source). A 2xx
 // there makes the attempt SENT whatever happens next: QUIT is best-effort, its
 // error or a dropped connection changes nothing. A lost connection or 4xx before
 // or instead of that reply is a retry (the message may then arrive twice, with

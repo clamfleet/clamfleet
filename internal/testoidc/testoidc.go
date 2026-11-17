@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: The ClamFleet Authors
 
 // Package testoidc is an in-process OpenID Connect provider for tests and for the browser
-// fixture (docs/plans/milestone-6.md section 2, "6b, new"): discovery, an authorization
+// fixture (milestone 6b): discovery, an authorization
 // endpoint that shows a page of users to choose from, and a token endpoint that checks
 // PKCE and the client's credentials and answers with an ID token.
 //

@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // SPDX-FileCopyrightText: The ClamFleet Authors
 
-// tlsreload.go: TLS settings that can be reloaded without a restart (milestone 6,
-// plan 4.8, M6 decision 15). A renewed certificate (an ACME client, a manual
+// tlsreload.go: TLS settings that can be reloaded without a restart (M6 decision 15). A renewed certificate (an ACME client, a manual
 // renewal) is picked up with `systemctl reload clamfleet-server` (SIGHUP).
 //
 // Design:

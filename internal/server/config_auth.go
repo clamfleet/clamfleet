@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: The ClamFleet Authors
 
 // config_auth.go: the auth.ldap and auth.oidc configuration subtrees and their
-// validation (docs/plans/milestone-6.md 4.16 and 4.17; M3 decision 3: one subtree per
+// validation (M3 decision 3: one subtree per
 // provider, several on at once). Only string, int, bool, duration and []string values
 // are used, so the shared loader (internal/config) takes them without changes.
 //

@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // SPDX-FileCopyrightText: The ClamFleet Authors
 
-// Identity-provider interoperability (milestone 6b, plan 6.7), run in the throwaway clamfleet-idp
+// Identity-provider interoperability, run in the throwaway clamfleet-idp
 // container by `make e2e-idp`: the REAL server binary signs users in against a REAL OpenLDAP (StartTLS,
 // the memberOf overlay) and a REAL Keycloak (authorization code flow with PKCE, a groups mapper). The
 // in-process fakes (internal/testldap, internal/testoidc) test our side of the protocol; this proves the

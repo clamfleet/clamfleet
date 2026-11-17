@@ -196,7 +196,7 @@ func TestRecordReportFillsFleetColumns(t *testing.T) {
 	}
 }
 
-// The interleaving the plan (4.2) exists for: an evaluation reads a host as
+// The interleaving the evaluation guard exists for: an evaluation reads a host as
 // silent; while it holds its inputs a report arrives and is evaluated OK. The
 // report must wait for the first evaluation to commit, so the history reads
 // NULL->STALE, STALE->OK and the final state is OK. With the inputs read

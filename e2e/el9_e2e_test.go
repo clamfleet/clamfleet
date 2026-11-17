@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // SPDX-FileCopyrightText: The ClamFleet Authors
 
-// RHEL 9 and SELinux (milestone 6, plan 6.6; milestone 5 decision 7 moved it here), run in the
+// RHEL 9 and SELinux (M5 decision 7 moved it to milestone 6), run in the
 // throwaway AlmaLinux 9 VM by `make e2e-el9`: the .rpm files are installed with dnf, SELinux is
 // Enforcing, clamd runs in antivirus_t, and the event command has to write its spool through the
 // module the package loads. A container cannot test any of this: it shares the Debian host's
@@ -243,7 +243,7 @@ func TestEL9DryRun(t *testing.T) {
 // The detection path under SELinux Enforcing: an EICAR scan by the real clamd reaches the sink,
 // clamd's journal holds nothing from our command, and the audit log has no denial for clamd's
 // domain (apart from the stock /selinux/enforce one): no spool, shell or binary denial. It also
-// proves antivirus_t can read the packaged agent.yaml [A22], which the event command needs.
+// proves antivirus_t can read the packaged agent.yaml, which the event command needs.
 func TestSELinuxEICARAlert(t *testing.T) {
 	el9Rig(t)
 	elPreconditions(t)

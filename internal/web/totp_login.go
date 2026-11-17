@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // SPDX-FileCopyrightText: The ClamFleet Authors
 
-// totp_login.go: the second sign-in step (docs/plans/milestone-3b.md 4.5).
+// totp_login.go: the second sign-in step.
 //
 // A correct password for a user with TOTP creates a login challenge (a row of
 // its own, a cookie of its own), not a session. POST /login/totp turns the

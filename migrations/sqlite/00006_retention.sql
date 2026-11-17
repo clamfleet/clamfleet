@@ -1,8 +1,7 @@
 -- SPDX-License-Identifier: AGPL-3.0-only
 -- SPDX-FileCopyrightText: The ClamFleet Authors
 
--- Milestone 6a schema: the child-side indexes behind cascaded prunes
--- (docs/plans/milestone-6.md 4.1).
+-- Milestone 6a schema: the child-side indexes behind cascaded prunes.
 --
 -- SQLite looks up child rows on every cascaded delete. Without these indexes
 -- each pruned event or state change scans alert_deliveries and alert_log in

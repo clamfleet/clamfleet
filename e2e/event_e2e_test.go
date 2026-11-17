@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // SPDX-FileCopyrightText: The ClamFleet Authors
 
-// Milestone 5 acceptance in the container (docs/plans/milestone-5.md 6.5): a real
+// Milestone 5 acceptance in the container: a real
 // clamd, wired to the real `clamfleet-agent event` through VirusEvent, scans an
 // EICAR test file, and the alert reaches the sink: with the agent running as a
 // service, across a server outage, behind a backlog, in a mass detection, and

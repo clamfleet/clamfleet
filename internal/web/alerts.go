@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // SPDX-FileCopyrightText: The ClamFleet Authors
 
-// alerts.go: alert target administration in the console (docs/plans/milestone-4.md
-// 4.10, 4.11 and 5). Admin class only: recipient addresses and receiver hosts
+// alerts.go: alert target administration in the console. Admin class only: recipient addresses and receiver hosts
 // are configuration, not fleet state, and a test send makes the server open
 // connections, so a viewer sees no menu item and the route table answers 403.
 //

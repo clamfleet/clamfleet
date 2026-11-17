@@ -12,7 +12,7 @@
 #     updates off and leaves the security ones on). Spec section 5 makes routine dependency updates a
 #     deliberate act of the maintainer, not a bot's monthly pull request.
 #   - Not configured on purpose: npm. e2e/web pins @playwright/test 1.63.0 to the browser build the
-#     maintainer's machine has (/opt/playwright); a bumped Playwright would want other browsers.
+#     maintainer's machine has; a bumped Playwright would want other browsers.
 #
 # Dependabot's commits carry no sign-off; hack/ci/dco.sh exempts them (a human merges the pull request).
 version: 2

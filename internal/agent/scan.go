@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // SPDX-FileCopyrightText: The ClamFleet Authors
 
-// scan.go: `clamfleet-agent scan`, the scheduled-scan wrapper (spec 6.4,
-// milestone 6 plan 4.10). It runs `clamdscan --multiscan` on scan.paths and
+// scan.go: `clamfleet-agent scan`, the scheduled-scan wrapper (spec 6.4). It runs `clamdscan --multiscan` on scan.paths and
 // writes last_scan.json in the proto.LastScan shape the report already carries.
 //
 // Rules, each of which a test pins:

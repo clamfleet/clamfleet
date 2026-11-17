@@ -5,7 +5,7 @@
 # selinux_test.sh - static check of deploy/selinux/clamfleet.cil (no SELinux, no VM).
 #
 # antivirus_t is the domain of clamd, freshclam and clamonacc alike, so every allow rule
-# in this module reaches all three. The module's contract (plan 4.13, M6 decision 10) is that
+# in this module reaches all three. The module's contract (M6 decision 10) is that
 # it grants access ONLY on its own type, clamfleet_spool_t; a rule on a stock type needs
 # the maintainer's sign-off. This test makes that mechanical: any allow rule whose target
 # is not clamfleet_spool_t, any other source domain, and any rule class beyond dir and

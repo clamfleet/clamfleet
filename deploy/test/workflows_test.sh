@@ -20,7 +20,7 @@
 #   6. a job-level `if:` on a REQUIRED check only in the two forms below. A job skipped by `if:`
 #      reports success to a required check, so any other condition could silently let a merge through;
 #   7. `secrets` is mentioned only in release.yml's `sign` job, and that job runs no go, make, npm
-#      or setup action: the signing key must never meet a build tool (plan 4.6; the key is the
+#      or setup action: the signing key must never meet a build tool (the key is the
 #      thing a compromised dependency would come for). Use `github.token`, not `secrets.GITHUB_TOKEN`,
 #      for the API token elsewhere;
 #   8. an image cache key built with hashFiles covers `deploy/test/ci/**`, not only the Dockerfile: the

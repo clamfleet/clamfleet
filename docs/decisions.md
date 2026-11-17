@@ -17,9 +17,9 @@ How to read it:
 - For milestones 2 to 6, the number is the position in the decision list of that milestone's plan. M6 covers 6a (packages, operations)
   and 6b (external sign-in); its decisions 16 to 22 are 6b's.
 - Only decisions that a tracked file cites are listed. A decision no file refers to is not here.
-- A reference such as "plan 4.8" or a `docs/plans/...` path in a comment points at those private design notes.
-  The comment around it states the rule that matters, and the user documentation in this directory describes
-  the behaviour. Nothing needs the plan to be understood.
+- Plan-section references ("plan 4.8", `docs/plans/...`) appear only in older commits. They point at those private
+  working notes. Nothing needs the plan to be understood: the user documentation in this directory describes the
+  behaviour.
 - A later decision can change an earlier one. The line says so where it matters.
 
 ## Milestone 1: the agent

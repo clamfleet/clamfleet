@@ -1,7 +1,7 @@
 -- SPDX-License-Identifier: AGPL-3.0-only
 -- SPDX-FileCopyrightText: The ClamFleet Authors
 
--- /metrics inputs (milestone 6, plan 4.6). Portable SQL only. Revoked hosts
+-- /metrics inputs. Portable SQL only. Revoked hosts
 -- (token_hash IS NULL) are excluded, as on the fleet page.
 
 -- name: MetricsHosts :many

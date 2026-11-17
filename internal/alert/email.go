@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // SPDX-FileCopyrightText: The ClamFleet Authors
 
-// email.go: rendering an alert payload as an email (plan 4.8).
+// email.go: rendering an alert payload as an email.
 //
 // Rules that carry the security of this file:
 //   - Headers hold NO host-controlled text. The subject is built from the

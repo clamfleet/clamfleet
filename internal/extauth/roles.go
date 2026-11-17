@@ -3,7 +3,7 @@
 
 // Package extauth is external sign-in: LDAP (search-then-bind) and OpenID Connect
 // (authorization code flow with PKCE), and the mapping of groups or claims to a console
-// role (docs/plans/milestone-6.md 4.16 to 4.18, docs/auth.md).
+// role (docs/auth.md).
 //
 // The package knows nothing of HTTP handlers, sessions or the database: it turns
 // credentials or a callback into a verified identity (an ExternalIdentity with a role),

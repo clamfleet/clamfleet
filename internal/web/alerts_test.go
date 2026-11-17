@@ -625,7 +625,7 @@ func TestFirstEvaluationOKDoesNotAlert(t *testing.T) {
 	}
 }
 
-// The spec 14 acceptance at functional level (plan 4.15 wording), mutations
+// The spec 14 acceptance at functional level, mutations
 // 1, 4, 5, 6, 17 and 43 (the planner, the flags, the cooldown, the recovery
 // summary and the per-attempt log), through the real router with a webhook and
 // an email target.

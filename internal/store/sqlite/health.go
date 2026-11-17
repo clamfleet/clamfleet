@@ -36,7 +36,7 @@ type healthRow struct {
 // The transaction is immediate (the writer's DSN), so it holds the write lock
 // from BeginTx on: a report arriving meanwhile waits for the commit and gets
 // its own evaluation afterwards. Reading the inputs outside this transaction
-// would let a slow evaluation overwrite a newer one (plan 4.2, mutation 18).
+// would let a slow evaluation overwrite a newer one.
 func (s *Store) EvaluateHosts(ctx context.Context, now time.Time, ids []int64, eval func(store.HealthInput) store.HealthOutcome) ([]store.Transition, error) {
 	var out []store.Transition
 	err := s.inTx(ctx, func(q *sqlcdb.Queries) error {

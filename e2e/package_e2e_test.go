@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // SPDX-FileCopyrightText: The ClamFleet Authors
 
-// The packages, for real (milestone 6, plan 6.4): the .deb files are installed in the
+// The packages, for real: the .deb files are installed in the
 // clamfleet-test container with apt, started by systemd under their hardening, upgraded and
 // removed. `make e2e` builds them first (`make packages VERSION=0.6.0-e2e1`); a missing
 // package fails the suite, it never skips.
@@ -492,7 +492,7 @@ func TestDebPurgeAcrossAMount(t *testing.T) {
 	sh(t, "test -f /var/lib/clamfleet/last_scan.json")
 }
 
-// A failed upgrade leaves the data alone (plan 6.4). The "new" package is built with the test-only
+// A failed upgrade leaves the data alone. The "new" package is built with the test-only
 // migration overlay (-tags e2e_migration, migrations/e2e_overlay.go), so upgrading to it means a schema
 // change. The backup directory is unwritable when the upgrade restarts the server, so the backup before the
 // migration fails and the server must: refuse to migrate (schema unchanged), prune NOTHING (the seeded

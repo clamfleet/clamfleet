@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // SPDX-FileCopyrightText: The ClamFleet Authors
 
-// backup.go: a consistent copy of the database with VACUUM INTO (milestone 6,
-// plan 4.4 and 4.5), published without ever exposing a partial file.
+// backup.go: a consistent copy of the database with VACUUM INTO,
+// published without ever exposing a partial file.
 //
-// Protocol (the numbers are the rows of the plan's stage table; the test seam
+// Protocol (the numbers are the stages in order; the test seam
 // `backupHook` is called at the ENTRY of each stage, and an error it returns
 // fails that stage, so a test can fail every stage in turn):
 //  1. directory checks and the lock;
@@ -58,7 +58,7 @@ const (
 	BackupPreMigrate
 )
 
-// preMigrateKeep is how many pre-migrate backups survive (plan 4.5).
+// preMigrateKeep is how many pre-migrate backups survive.
 const preMigrateKeep = 3
 
 // ErrBackupBusy: another backup holds the lock.
@@ -343,8 +343,7 @@ func newTempName(dir string) (string, error) {
 }
 
 // checkFreeSpace refuses a backup that cannot fit: free space must be at least
-// 1.1 times the database file, so a full disk fails before anything is written
-// (plan 4.5).
+// 1.1 times the database file, so a full disk fails before anything is written.
 func (s *Store) checkFreeSpace(dir string) error {
 	fi, err := os.Stat(s.path)
 	if err != nil {
@@ -368,7 +367,7 @@ func (s *Store) checkFreeSpace(dir string) error {
 }
 
 // vacuumInto runs VACUUM INTO on a connection of its own: not the writer, which
-// ingest needs, and not the query_only pool [A8]. The file name is a bound
+// ingest needs, and not the query_only pool. The file name is a bound
 // parameter, never concatenated.
 func (s *Store) vacuumInto(ctx context.Context, target string) error {
 	db, err := sql.Open("sqlite", dsn(s.path, ""))

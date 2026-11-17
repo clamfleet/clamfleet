@@ -14,7 +14,7 @@
 //
 // It prints one JSON object on stdout: what each table must hold after a retention pass
 // with the default keys, and after one with retention.reports_days: 14. The ages
-// (days before --now) are in the table below; "kept" rows are those the plan's guards
+// (days before --now) are in the table below; "kept" rows are those the prune guards
 // keep (an unfinished alert, an open detection window).
 //
 //	reports        45 d, 20 d, 5 d, and one that ARRIVED 2 d ago with an agent time 100 d old

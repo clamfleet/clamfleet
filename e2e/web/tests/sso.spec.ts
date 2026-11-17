@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // SPDX-FileCopyrightText: The ClamFleet Authors
 
-// Flows: sign in with OpenID Connect and with LDAP (docs/plans/milestone-6.md 6.8).
+// Flows: sign in with OpenID Connect and with LDAP.
 //
 // The console is https://127.0.0.1:<port> and the fake provider https://localhost:<port2>: two
 // different SITES, because SameSite is about sites and ports do not make sites different. That

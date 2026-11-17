@@ -64,7 +64,7 @@ type Config struct {
 }
 
 // Backup configures `clamfleet-server backup` and the automatic backup before a
-// migration (milestone 6, plan 4.4 and 4.5).
+// migration.
 type Backup struct {
 	// Dir holds the backups: absolute, a real directory owned by the server user
 	// with mode 0700 (the command checks it). It defaults under the state directory.
@@ -114,8 +114,7 @@ func (b Backup) Validate() error {
 	return nil
 }
 
-// Retention says how long data is kept, in days, per table (spec 8.2; plan
-// docs/plans/milestone-6.md 4.3). Every key counts from ARRIVAL on the server
+// Retention says how long data is kept, in days, per table (spec 8.2). Every key counts from ARRIVAL on the server
 // clock (received_at or ts of the server's own rows), never from the agent's
 // clock: a spooled event or report can be old when it arrives.
 type Retention struct {
@@ -137,7 +136,7 @@ type Retention struct {
 	AuditDays int `yaml:"audit_days"`
 }
 
-// Defaults and bounds of the retention keys (plan 4.3).
+// Defaults and bounds of the retention keys.
 const (
 	MinReportsDays, MaxReportsDays, DefaultReportsDays                = 14, 90, 30
 	MinEventsDays, MaxEventsDays, DefaultEventsDays                   = 7, 3650, 365
@@ -174,7 +173,7 @@ func (r Retention) Validate() error {
 	return nil
 }
 
-// Alert configures alert delivery (docs/plans/milestone-4.md 4.9).
+// Alert configures alert delivery.
 type Alert struct {
 	// Cooldown: at most one state alert per host per target per window; changes
 	// inside it are held and summarised at its end. 0 turns holds off.
@@ -182,7 +181,7 @@ type Alert struct {
 	Webhook  AlertWebhook  `yaml:"webhook"`
 }
 
-// AlertWebhook is the webhook destination policy (SSRF, plan 4.7) and timeout.
+// AlertWebhook is the webhook destination policy (SSRF) and timeout.
 type AlertWebhook struct {
 	// Timeout bounds one attempt, from the claim.
 	Timeout time.Duration `yaml:"timeout"`
@@ -352,7 +351,7 @@ func ParseDenyNetworks(list []string) ([]netip.Prefix, error) {
 // PublicBase is public_url without a trailing slash.
 func (c Config) PublicBase() string { return strings.TrimRight(c.PublicURL, "/") }
 
-// Auth configures console sign-in (docs/plans/milestone-3.md 4.4, 4.6). The
+// Auth configures console sign-in. The
 // shape is one subtree per provider, so local accounts, LDAP and OIDC can be
 // on at the same time later (M6): a local break-glass admin next to SSO.
 type Auth struct {
@@ -404,7 +403,7 @@ func (a Auth) Validate() error {
 
 // Health holds the thresholds of the health rules (spec 9) and how often the
 // evaluator runs. The key names follow spec 12; default_interval and
-// eval_interval are additions (docs/plans/milestone-3.md 4.6): the first is
+// eval_interval are additions: the first is
 // the fallback for agents that do not report their interval, the second lets
 // the e2e test see STALE in seconds.
 type Health struct {

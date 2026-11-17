@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // SPDX-FileCopyrightText: The ClamFleet Authors
 
-// totp.go: the signed-in user's own TOTP settings under /account/totp
-// (docs/plans/milestone-3b.md 4.6).
+// totp.go: the signed-in user's own TOTP settings under /account/totp.
 //
 // Every change asks for the CURRENT PASSWORD again, including the first
 // enrolment under auth.local.totp_required: a stolen session cookie alone must

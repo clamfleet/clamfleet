@@ -523,7 +523,7 @@ on in the real server's configuration (the secrets are in files in the temp dire
 **Two sites.** The console is `https://127.0.0.1:<port>` and the provider `https://localhost:<port2>` (the test certificate
 covers both names). Ports do not make sites different: with both on 127.0.0.1 even a `SameSite=Strict` cookie would be sent
 and the browser test of the Lax state cookie would pass for nothing. `sso.spec.ts` asserts first that the callback request
-carried `Sec-Fetch-Site: cross-site` (read with Playwright's `request.allHeaders()`; the plan had the fixture record it, but
+carried `Sec-Fetch-Site: cross-site` (read with Playwright's `request.allHeaders()`; the fixture could record it, but
 the browser is the one place that sees the header it actually sent).
 
 `make e2e-web` starts both of its fixtures with `--sso`, so every local sign-in and two-factor spec runs with the SSO button

@@ -5,7 +5,7 @@
 // and the shared step that turns a verified external identity into a user and a session.
 // OIDC has its own routes (oidc.go) and ends in the same completeExternal.
 //
-// Rules, all deliberate (docs/plans/milestone-6.md 4.15 to 4.19; docs/auth.md):
+// Rules, all deliberate (docs/auth.md):
 //   - A local account with exactly the typed email is tried first and LDAP is then never
 //     asked (M6 decision 18): a directory entry cannot shadow a local break-glass admin.
 //   - The identity of an external user is the provider's stable id, never the email, and

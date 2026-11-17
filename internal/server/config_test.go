@@ -208,7 +208,7 @@ func TestTrustedProxies(t *testing.T) {
 	}
 }
 
-// The spec 9 / plan 4.6 defaults, pinned: they are what an operator gets with no health: block.
+// The spec 9 defaults, pinned: they are what an operator gets with no health: block.
 func TestHealthDefaults(t *testing.T) {
 	h := DefaultConfig().Health
 	want := Health{StaleFactor: 3, DefaultInterval: 5 * time.Minute, DailyWarnHours: 24, DailyCritHours: 72,

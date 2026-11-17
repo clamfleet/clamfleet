@@ -29,7 +29,7 @@ type MetricsSnapshot struct {
 	DeliveriesPending, DeliveriesRetrying, DeliveriesFailed int64
 }
 
-// MetricsStore reads the numbers /metrics exports (milestone 6, plan 4.6).
+// MetricsStore reads the numbers /metrics exports.
 type MetricsStore interface {
 	// MetricsSnapshot reads on the read pool. failedSince bounds the failed
 	// deliveries that are counted (alert_log_days).

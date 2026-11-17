@@ -439,7 +439,7 @@ func TestSourceRefusalIsLoggedOncePerUserPerHour(t *testing.T) {
 	}
 }
 
-// Plan 6.3: the gate compares r.URL.Path exactly. Alternate spellings and other methods of the
+// The gate compares r.URL.Path exactly. Alternate spellings and other methods of the
 // enrolment paths never reach a handler that is not on the list: each is a gate redirect or 403.
 // (Go's mux cleans or redirects most of these before any handler; this pins the gate on its own.)
 func TestTOTPGateDoesNotMatchAlternateSpellings(t *testing.T) {

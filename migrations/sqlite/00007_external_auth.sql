@@ -1,7 +1,7 @@
 -- SPDX-License-Identifier: AGPL-3.0-only
 -- SPDX-FileCopyrightText: The ClamFleet Authors
 
--- Milestone 6b schema: external sign-in (docs/plans/milestone-6.md 4.14).
+-- Milestone 6b schema: external sign-in.
 --
 -- users already has auth_source, external_id with UNIQUE(auth_source, external_id), a nullable
 -- unique email and a nullable password_hash (M3 decision 11), so there is no table rebuild:

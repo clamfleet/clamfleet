@@ -2,7 +2,7 @@
 -- SPDX-FileCopyrightText: The ClamFleet Authors
 
 -- Milestone 5 schema: detection events, their idempotency receipts, and the
--- durable windows behind detection summaries (docs/plans/milestone-5.md 4.7).
+-- durable windows behind detection summaries.
 --
 -- Additive only: indexes, ADD COLUMNs with a constant default, new tables. No
 -- table rebuild, no CHECK constraints (M3 decision 11). The events table keeps its

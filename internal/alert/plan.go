@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // SPDX-FileCopyrightText: The ClamFleet Authors
 
-// plan.go: the pure alert planner (docs/plans/milestone-4.md 4.3).
+// plan.go: the pure alert planner.
 //
 // Planner.Plan turns flagged state changes and detections, the targets, and
 // what each target was last told about each host into deliveries, notify-state

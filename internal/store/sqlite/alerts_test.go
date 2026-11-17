@@ -572,7 +572,7 @@ func TestExpireLeasesAllAtStart(t *testing.T) {
 	}
 }
 
-// The switch-off rules (4.3), mutation 20.
+// The switch-off rules, mutation 20.
 func TestUpdateAlertTargetSwitchesOff(t *testing.T) {
 	ctx := context.Background()
 	setup := func(t *testing.T) *Store {

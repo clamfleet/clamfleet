@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: The ClamFleet Authors
 
 // metrics.go: GET /metrics in the Prometheus text exposition format 0.0.4
-// (milestone 6, plan 4.6, decisions 6 and 7).
+// (M6 decisions 6 and 7).
 //
 // Why our own encoder and not prometheus/client_golang: our metrics are a dozen
 // gauges computed per scrape, the text format is simple, and the library brings

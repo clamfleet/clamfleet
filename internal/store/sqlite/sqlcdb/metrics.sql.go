@@ -46,7 +46,7 @@ type MetricsHostsRow struct {
 
 // SPDX-License-Identifier: AGPL-3.0-only
 // SPDX-FileCopyrightText: The ClamFleet Authors
-// /metrics inputs (milestone 6, plan 4.6). Portable SQL only. Revoked hosts
+// /metrics inputs. Portable SQL only. Revoked hosts
 // (token_hash IS NULL) are excluded, as on the fleet page.
 func (q *Queries) MetricsHosts(ctx context.Context) ([]MetricsHostsRow, error) {
 	rows, err := q.db.QueryContext(ctx, metricsHosts)

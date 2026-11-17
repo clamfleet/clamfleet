@@ -186,7 +186,7 @@ func prefixes(t *testing.T, list ...string) []netip.Prefix {
 	return out
 }
 
-// The embedded-IPv4 table (plan 4.9, 6.1). Mutations: remove the NAT64 decode
+// The embedded-IPv4 table. Mutations: remove the NAT64 decode
 // (64:ff9b::a9fe:a9fe would be allowed), unblock 6to4 or Teredo, treat the local-use
 // range as private again, or check deny_networks on the decoded form only.
 func TestPolicyEmbeddedIPv4(t *testing.T) {

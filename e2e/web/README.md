@@ -40,6 +40,6 @@ user within 30 s passes `stepOffset` 1.
 
 Run: `make e2e-web` from the repo root. It builds `bin/`, runs `npm ci`, and the suite starts
 `bin/webfixture` on 127.0.0.1 itself and stops it afterwards (see `docs/testing.md`, "Browser
-fixture"). `PLAYWRIGHT_BROWSERS_PATH` must hold chromium-1243 (`source /opt/env.sh`); no browser is
+fixture"). `PLAYWRIGHT_BROWSERS_PATH` must hold chromium-1243 (point it at an installed Playwright browser cache); no browser is
 downloaded. The live-change spec takes about 15 s by design. `package.json` and the lockfile are
 JSON and carry the licence in their metadata only.

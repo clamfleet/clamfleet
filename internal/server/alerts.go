@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: The ClamFleet Authors
 
 // alerts.go: builds the alert dispatcher and the settings the console needs
-// from the configuration (docs/plans/milestone-4.md 4.9).
+// from the configuration.
 //
 // This is where files named in the configuration are read (smtp.password_file
 // under the key-file permission rule, the CA bundles), so a bad one refuses
