@@ -22,7 +22,10 @@
 #   7. `secrets` is mentioned only in release.yml's `sign` job, and that job runs no go, make, npm
 #      or setup action: the signing key must never meet a build tool (plan 4.6; the key is the
 #      thing a compromised dependency would come for). Use `github.token`, not `secrets.GITHUB_TOKEN`,
-#      for the API token elsewhere.
+#      for the API token elsewhere;
+#   8. an image cache key built with hashFiles covers `deploy/test/ci/**`, not only the Dockerfile: the
+#      image also bakes in the files next to it (the recorded freshclam history, the replay script and
+#      its unit), and a key that ignored them would serve a stale image after a re-recording.
 #
 # The workflows are parsed line by line with awk and assume the two-space indentation every
 # workflow here uses (jobs at 2, job keys at 4, steps `- ` at 6). A workflow in another style is
@@ -113,6 +116,8 @@ findings() {
 				if (u ~ /^actions\/checkout@/) checkout = 1
 				if (job == "sign" && base == "release.yml" && u ~ /^actions\/setup-/) bad(7, "the sign job must not use " u)
 			}
+			# Rule 8
+			if (code ~ /key:.*hashFiles\(/ && code ~ /deploy\/test\/ci/ && code !~ /deploy\/test\/ci\/\*\*/) bad(8, "the cache key must hash deploy/test/ci/**, not part of it: " t)
 			# Rule 5
 			if (t ~ /^persist-credentials:[ \t]*false$/) persist = 1
 			# Rule 7
@@ -204,6 +209,7 @@ expect "checkout keeping credentials"     5 "0,/persist-credentials: false/s//pe
 expect "an if on the check job"           6 "0,/^    runs-on: ubuntu-24.04/s//    if: github.ref == 'refs\/heads\/main'\n    runs-on: ubuntu-24.04/"
 expect "the wrong if on e2e"              6 "s/^    if: github.event_name != 'pull_request' .*/    if: github.event_name == 'push'/"
 expect "the draft if on dco"              6 "s/^    if: github.event_name == 'pull_request'/    if: $DRAFT/"
+expect "a cache key that hashes only the Dockerfile" 8 "s|^      - run: make ci|      - uses: actions/cache@$SHA # v6.1.0\n        with:\n          key: k-\\\${{ hashFiles('deploy/test/ci/Dockerfile') }}|"
 expect "secrets in ci.yml"                7 "s/- run: make ci/- run: echo \${{ secrets.TOKEN }}/" ci.yml
 
 # release.yml: secrets belong to the sign job and to no other, and the sign job runs no build tool.
