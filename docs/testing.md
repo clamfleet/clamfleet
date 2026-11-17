@@ -246,6 +246,38 @@ Things that fail in ways that do not look like the cause:
 - The container must be on UTC: freshclam's log times have no zone, and the tests compare them
   with UTC values. The suite checks this first.
 
+## The e2e suite in Docker (`make e2e-image`, `make e2e-docker`)
+
+What CI's `e2e` job runs, and what anyone with Docker can run: the same suite as `make e2e`, with the container replaced
+by one made from `deploy/test/ci/Dockerfile`. The maintainer has no Docker; the Incus suite is his equivalent.
+
+- **The image** is Debian 13 with systemd as PID 1 (the suite uses `systemctl`, `journalctl`, `systemd-run` and the
+  packages' units, which is why it is not the official ClamAV image), the distribution's ClamAV packages, and a frozen
+  copy of the signature databases taken from the official ClamAV image, pinned by digest. freshclam is never run and its
+  unit is disabled. Three tests take the Incus snapshot's one real freshclam run as their premise, so the image carries a
+  scrubbed recording of one (`deploy/test/ci/testdata`: `freshclam.log` as a file, the journal lines replayed at boot by a
+  oneshot). `make record-freshclam-history` re-records it from the Incus container; never hand-edit it.
+- **Each reset starts a new container** (`RESET_RUNTIME=docker` in `deploy/test/reset.sh`): `--privileged --cgroupns=private
+  --tmpfs /run --tmpfs /run/lock --network none`. `--privileged` is root on the runner VM, accepted because the VM is
+  discarded after the job, which holds no secrets (the policy test keeps `secrets` out of these jobs). The script asserts
+  `NetworkMode=none` with `docker inspect` and fails otherwise. A reset takes about 7 s; the suite about 8 minutes.
+- **What "no network" guarantees:** during the tests the container has no network, so nothing in them can reach the ClamAV
+  CDN or anything else; binaries and packages go in over `docker exec -i`. Building the image does use the network (Docker
+  Hub for the two base images, `deb.debian.org` for packages), but never contacts the ClamAV CDN.
+- **The gate:** `make e2e-docker` pipes `go test -json` through `hack/testgate -expect-pkg ./e2e -tags e2e`: all 30
+  top-level tests (not counting `TestMain`) must pass, none may skip, and the set must equal what the package declares.
+- **Journals:** `reset.sh` writes the journal of each container to `dist/e2e-journals` (`E2E_JOURNAL_DIR`) before replacing
+  it, named by end time. CI uploads them for 7 days when the job fails. They hold synthetic data only.
+- **The image is cached** as a tarball by the Dockerfile hash and the ISO week, so Docker Hub is pulled a few times a
+  week at most (anonymous pulls are limited per address, and runners share addresses).
+- **Refreshing the signatures:** change the digest in the Dockerfile's first `FROM` (Dependabot proposes it monthly) and
+  let CI judge it. The old digest may disappear from Docker Hub; the weekly cache holds the built image until then.
+- **Distribution drift:** the image takes the live Debian 13 archive, so a ClamAV or systemd update can turn CI red.
+  Open an issue, fix it in its own pull request, and let others wait; the temporary escape is a pinned package version in the
+  Dockerfile with a removal date, in a reviewed commit. A red run is never simply re-run until it is green.
+- **A failure only CI shows:** read the uploaded journals and the test log first. If that is not enough, ask for a Docker
+  container for this project on the dev tier.
+
 ## Packages (`make packages`) and the package scenarios
 
 `make packages VERSION=x.y.z` builds the static binaries and runs **nfpm v2.49.0** (`go run`, pinned in the Makefile and
