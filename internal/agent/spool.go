@@ -178,9 +178,15 @@ func openSpoolRoot(o SpoolOptions, spoolStat statInfo) (spoolRoot, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open spool: %w", err)
 	}
+	// A failed Stat returns a nil FileInfo, which statOf would dereference: the
+	// error is checked before the result is used.
 	fi, err := root.Stat()
+	if err != nil {
+		root.Close()
+		return nil, fmt.Errorf("open spool: %w", err)
+	}
 	st, ok := statOf(fi)
-	if err != nil || !ok || st.ID != spoolStat.ID {
+	if !ok || st.ID != spoolStat.ID {
 		root.Close()
 		return nil, ErrNotOurSpool
 	}
@@ -216,8 +222,16 @@ func OpenSpoolForEvent(o SpoolOptions) (*Queue, error) {
 	}
 	// events could have been swapped for a symlink since the Lstat above.
 	fi, err := root.Lstat(dirEvents)
+	if err != nil {
+		// Not ErrNotOurSpool: the directory vanished (or the disk failed),
+		// nothing says it is someone else's. A nil fi must never reach statOf:
+		// that was a panic in `event`, which runs as clamd's user and would
+		// lose the detection.
+		root.Close()
+		return nil, fmt.Errorf("spool/events: %w", err)
+	}
 	st, ok := statOf(fi)
-	if err != nil || !ok || st.ID != evSt.ID || fi.Mode()&fs.ModeSymlink != 0 {
+	if !ok || st.ID != evSt.ID || fi.Mode()&fs.ModeSymlink != 0 {
 		root.Close()
 		return nil, ErrNotOurSpool
 	}
