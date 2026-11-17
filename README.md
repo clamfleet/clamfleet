@@ -68,7 +68,7 @@ to stderr.
 ## Install
 
 Packages for Debian 13 and the RHEL 9 family (tested on AlmaLinux 9 with SELinux enforcing): `clamfleet-server` and
-`clamfleet-agent`, built by `make packages VERSION=x.y.z`. [docs/install.md](docs/install.md) has the steps,
+`clamfleet-agent`, from the GitHub release (amd64 only in v1; verify the signature first, [docs/install.md](docs/install.md#verifying-a-download)) or built by `make packages VERSION=x.y.z`. [docs/install.md](docs/install.md) has the steps,
 [docs/operations.md](docs/operations.md) retention, backup and restore, `/metrics` and TLS reload, and
 [docs/configuration.md](docs/configuration.md) every key. The packages never edit clamd's configuration: the install
 notice prints the `VirusEvent` line (and, on Debian, the two AppArmor lines) to add.
@@ -353,7 +353,7 @@ Milestones follow [docs/HANDOVER.md](docs/HANDOVER.md). Milestones 1 to 6b are b
 | 5 | Detection events, spool, events page, acknowledgement | Built. Tested on Debian 13 (container, and a VM with AppArmor enforcing). |
 | 6a | Packages (.deb and .rpm), retention for every table, backup, `/metrics`, TLS reload, NAT64 in the alert policy, `clamfleet-agent scan`, SELinux | Built. Tested on Debian 13 and AlmaLinux 9. |
 | 6b | LDAP and OpenID Connect sign-in, role mapping from groups or a claim | Built. Tested against OpenLDAP and Keycloak (and in a browser); Active Directory is documented and untested. |
-| 6c | CI, signed releases, checksums, SBOM, project files | In progress: CI and project files first; signed releases next. |
+| 6c | CI, signed releases, checksums, SBOM, project files | Built: CI, project files, and the signed release pipeline (scripts, workflow, runbook in [docs/releasing.md](docs/releasing.md)); the first release candidate and going public follow. |
 
 Built: local accounts with email and password and the roles `viewer` and `admin`, and TOTP two-factor
 sign-in (optional per user, or required for all local users with `auth.local.totp_required`; see `docs/web.md`).

@@ -6,10 +6,44 @@ SPDX-FileCopyrightText: The ClamFleet Authors
 # Installing ClamFleet from packages
 
 Two packages per format: **`clamfleet-server`** (one per site) and **`clamfleet-agent`** (one per ClamAV host).
-Build them with `make packages VERSION=x.y.z` (see [testing.md](testing.md)); a release channel is planned.
+Download them from the GitHub release (amd64 only in v1; check them first, see [Verifying a download](#verifying-a-download)) or build
+them with `make packages VERSION=x.y.z` (see [testing.md](testing.md)).
 Tested on **Debian 13** (a container and a VM with AppArmor enforcing) and **AlmaLinux 9** with SELinux
 enforcing, as the RHEL 9 stand-in (RHEL itself needs a subscription). Debian 12 is untested; the binaries are
 static and should work.
+
+## Verifying a download
+
+A release holds the tarball, the four packages, two SBOMs, `SHA256SUMS` and its signature `SHA256SUMS.asc`
+(`clamfleet-agent_1.0.0~rc.1_amd64.deb`, `clamfleet-agent-1.0.0~rc.1-1.x86_64.rpm`, and so on; see
+[releasing.md](releasing.md) for the list). The signing key is `deploy/release/clamfleet-release.asc` in this repository.
+
+**Every download.** Import the key, then **compare its fingerprint with one published somewhere other than this
+repository** (the README and `SECURITY.md` show it; so do the maintainer's website and keys.openpgp.org): a
+replaced key file would otherwise vouch for itself.
+
+```sh
+gpg --import clamfleet-release.asc
+gpg --fingerprint "ClamFleet"            # compare with the independent channel
+gpg --verify SHA256SUMS.asc SHA256SUMS   # must say "Good signature"
+sha256sum -c --ignore-missing SHA256SUMS # every file you downloaded must say OK
+```
+
+**RPM** (AlmaLinux, RHEL family). The rpm files are signed themselves, which rpm checks:
+
+```sh
+sudo rpm --import clamfleet-release.asc
+rpm -Kv clamfleet-agent-*.rpm
+```
+
+The output **must contain a line `Signature, key ID <id>: OK`**. If it shows only `digests OK` and no signature line,
+the package is **unsigned**, and `rpm -Kv` still exits 0: do not install it. Without the key you get `NOKEY` and exit
+status 1. `dnf install ./package.rpm` is believed not to check the signature of a local file by default, so run
+`rpm -Kv` first (recorded in the release rehearsal, see releasing.md).
+
+**Debian.** Debian does not check a `.deb` signature (dpkg ships with `no-debsig`, and `dpkg-sig` is not in Debian 13),
+so the signed `SHA256SUMS` above is the check: verify it, then install the files that `sha256sum -c` accepted
+(`sudo apt install ./clamfleet-agent_*.deb`).
 
 ## What the packages do, and do not do
 
