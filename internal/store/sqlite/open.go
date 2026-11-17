@@ -85,7 +85,7 @@ type Store struct {
 	// prove a failure midway rolls every row back. Always nil in production.
 	betweenResealRows func() error
 
-	// backupHook is a test seam: Backup calls it after each stage of its protocol,
+	// backupHook is a test seam: Backup calls it at the entry of each stage of its protocol,
 	// and a returned error fails that stage.
 	// backupEUID and backupFree replace the effective uid and the free space.
 	// All nil in production.

@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: The ClamFleet Authors
 
 // Package testldap is a minimal in-process LDAP server for tests and for the browser
-// fixture ("6b, new"). It speaks just enough of
+// fixture (milestone 6b). It speaks just enough of
 // LDAPv3 for ClamFleet's search-then-bind sign-in: simple bind, search with the filters
 // of RFC 4511 (and, or, not, equality, presence, substrings), the StartTLS extended
 // operation, and unbind. It uses the BER package that comes with go-ldap.

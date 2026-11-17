@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // SPDX-FileCopyrightText: The ClamFleet Authors
 
-// RHEL 9 and SELinux (milestone 5 decision 7 moved it here), run in the
+// RHEL 9 and SELinux (M5 decision 7 moved it to milestone 6), run in the
 // throwaway AlmaLinux 9 VM by `make e2e-el9`: the .rpm files are installed with dnf, SELinux is
 // Enforcing, clamd runs in antivirus_t, and the event command has to write its spool through the
 // module the package loads. A container cannot test any of this: it shares the Debian host's
