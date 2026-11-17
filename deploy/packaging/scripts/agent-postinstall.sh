@@ -42,7 +42,7 @@ esac
 
 # 1. The user and the directories (the M5 modes), then systemd.
 systemd-sysusers "$SYSUSERS"
-: # mutation
+systemd-tmpfiles --create "$TMPFILES"
 sd daemon-reload
 
 # 2. The confinement of the event command: ours only, never clamd's own files.

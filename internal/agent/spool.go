@@ -357,7 +357,7 @@ type PublishResult struct {
 // the temp file is removed.
 func (s *Queue) publish(dir, id string, body []byte) (PublishResult, error) {
 	tmp := itemPath(dir, tmpPrefix+s.o.NewID())
-	f, err := s.root.OpenFile(tmp, os.O_CREATE|os.O_EXCL|os.O_WRONLY|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0o640)
+	f, err := s.root.OpenFile(tmp, os.O_CREATE|os.O_EXCL|os.O_WRONLY|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0o600)
 	if err != nil {
 		return PublishResult{}, fmt.Errorf("create temp file: %w", err)
 	}
@@ -366,7 +366,7 @@ func (s *Queue) publish(dir, id string, body []byte) (PublishResult, error) {
 		s.root.Remove(tmp)
 		return PublishResult{}, fmt.Errorf("%s: %w", step, err)
 	}
-	if err := f.Chmod(0o640); err != nil {
+	if err := f.Chmod(0o600); err != nil {
 		return fail("chmod temp file", err)
 	}
 	n, err := f.Write(body)

@@ -151,7 +151,7 @@ func (w *Web) Handlers() map[string]http.HandlerFunc {
 		"GET /{$}":                                w.fleet,
 		"GET /fleet/rows":                         w.fleetRows,
 		"GET /hosts/{name}":                       w.host,
-		"GET /detections":                             w.eventsPage,
+		"GET /events":                             w.eventsPage,
 		"POST /events/{id}/ack":                   w.ackEvent,
 		"POST /events/ack":                        w.ackEvents,
 		"GET /admin/hosts":                        w.adminHosts,

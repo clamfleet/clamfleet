@@ -68,7 +68,6 @@ jobs:
   # a full run. workflows_test.sh allows exactly this `if:` on this required job.
   e2e:
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
-    needs: check
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     permissions:
