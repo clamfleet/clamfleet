@@ -73,6 +73,7 @@ scripts-test:
 	./deploy/test/headers_test.sh
 	./deploy/test/workflows_test.sh
 	./deploy/test/dco_test.sh
+	./deploy/test/webtests_test.sh
 
 # sqlc is a build-time tool only (pinned in CLAUDE.md): the generated code uses database/sql.
 generate:
