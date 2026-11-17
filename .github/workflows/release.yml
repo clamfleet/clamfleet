@@ -1,0 +1,166 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# SPDX-FileCopyrightText: The ClamFleet Authors
+#
+# Release pipeline, started by the maintainer's signed tag `vX.Y.Z` or `vX.Y.Z-rc.N` (docs/releasing.md).
+#
+#   verify   the tag is annotated, signed by an allowed key, on a commit whose full CI passed on main, and
+#            the CHANGELOG has the section (deploy/release/verify-tag.sh)
+#   build    the unsigned assets from exactly that commit, with NO secret and no environment
+#   sign     the only job that holds a secret, behind the `release` environment's approval; it runs no
+#            build tool, only deploy/release/sign.sh (workflows_test.sh enforces both)
+#   publish  a DRAFT release; the maintainer publishes it after checking it (docs/releasing.md)
+#
+# Why the split: a compromised dependency or build step must never meet the signing key. The build job
+# cannot sign, the sign job cannot build, and sign.sh signs only what the build job's checksum names.
+# Same rules as ci.yml: GitHub-owned actions pinned by SHA, read-only tokens, no pull_request_target.
+name: release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions: {}
+
+# A release is never cancelled half way: a second tag waits.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      tag_object: ${{ steps.verify.outputs.tag_object }}
+      commit: ${{ steps.verify.outputs.commit }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      # A checkout started by a tag push may leave a lightweight local tag in place of the tag object, and
+      # verify-tag.sh must see the object (its signature). Fetching it by name is harmless when it is
+      # already right. The repository is public, so no credential is needed.
+      - name: Fetch the tag object
+        run: git fetch --force origin "refs/tags/$TAG:refs/tags/$TAG"
+        env:
+          TAG: ${{ github.ref_name }}
+      - id: verify
+        run: deploy/release/verify-tag.sh "$TAG" | tee -a "$GITHUB_OUTPUT"
+        env:
+          TAG: ${{ github.ref_name }}
+          GH_TOKEN: ${{ github.token }}
+          # The SSH public keys that may sign a release tag: an administrator-only repository variable,
+          # so a pull request cannot change who may release.
+          RELEASE_ALLOWED_SIGNERS: ${{ vars.RELEASE_ALLOWED_SIGNERS }}
+
+  build:
+    needs: verify
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    outputs:
+      sums: ${{ steps.sums.outputs.sums }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.verify.outputs.commit }}
+          persist-credentials: false
+      # The tag may have moved since verify ran; the build is of the commit that was verified, or nothing.
+      - name: HEAD is the verified commit
+        run: test "$(git rev-parse HEAD)" = "$COMMIT"
+        env:
+          COMMIT: ${{ needs.verify.outputs.commit }}
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: Go is the toolchain go.mod pins
+        run: |
+          want="$(awk '$1 == "toolchain" { print $2 }' go.mod)"
+          got="$(go env GOVERSION)"
+          test -n "$want" || { echo "go.mod has no toolchain line" >&2; exit 1; }
+          test "$got" = "$want" || { echo "running $got, go.mod pins $want" >&2; exit 1; }
+      # release.sh's self-check needs rpm2cpio and rpm to look inside the rpm files.
+      - run: sudo apt-get install -y rpm cpio
+      - run: make release VERSION="${TAG#v}"
+        env:
+          TAG: ${{ github.ref_name }}
+      - id: sums
+        run: echo "sums=$(sha256sum dist/release/SHA256SUMS | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-unsigned
+          path: dist/release
+          retention-days: 1
+          if-no-files-found: error
+
+  sign:
+    needs: [verify, build]
+    # The maintainer approves here (required reviewer on the environment). The key is a secret of this
+    # environment only.
+    environment: release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      # For sign.sh and the published key only: nothing from the checkout is built or run but the script.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.verify.outputs.commit }}
+          persist-credentials: false
+      - run: sudo apt-get install -y rpm
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-unsigned
+          path: dist/release
+      # The key goes into a pipe (a descriptor sign.sh reads once), never a file of ours, and is removed from
+      # the environment of sign.sh and everything it starts. The key is the passphrase-free export of the
+      # signing SUBKEY only; sign.sh refuses an export that carries the primary secret key.
+      - run: |
+          env -u RELEASE_SIGNING_KEY RELEASE_SIGNING_SUBKEY_FD=3 \
+            deploy/release/sign.sh dist/release deploy/release/clamfleet-release.asc "$SUMS" \
+            3< <(printf '%s\n' "$RELEASE_SIGNING_KEY")
+        env:
+          RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_SUBKEY }}
+          SUMS: ${{ needs.build.outputs.sums }}
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-signed
+          path: dist/release
+          retention-days: 7
+          if-no-files-found: error
+
+  publish:
+    needs: [verify, sign]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-signed
+          path: dist/release
+      # The tag is resolved again through the API and must still be the object verify accepted: a tag moved
+      # or re-created during the run (it needs an administrator, but still) publishes nothing.
+      - name: Publish a draft
+        run: |
+          set -euo pipefail
+          now="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" --jq .object.sha)"
+          test "$now" = "$TAG_OBJECT" || { echo "tag $TAG now points at $now, verify accepted $TAG_OBJECT" >&2; exit 1; }
+          flags=(--draft --verify-tag --title "$TAG" --notes-file dist/release/notes.md)
+          case "$TAG" in *-rc.*) flags+=(--prerelease) ;; esac
+          # Every asset (notes.md is the release text, not an asset). A draft: the maintainer checks the
+          # files and publishes it by hand.
+          mapfile -d '' assets < <(find dist/release -maxdepth 1 -type f ! -name notes.md -print0 | sort -z)
+          gh release create "$TAG" "${flags[@]}" "${assets[@]}"
+        env:
+          TAG: ${{ github.ref_name }}
+          TAG_OBJECT: ${{ needs.verify.outputs.tag_object }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
