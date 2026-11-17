@@ -53,7 +53,7 @@ fi
 # (INCUS_HOST, CT) cannot change what is tested.
 iso="$tmp/iso"
 mkdir -p "$iso"
-cp "$here/reset.sh" "$iso/reset.sh"
+cp "$here/reset.sh" "$here/save-journal.sh" "$iso/"
 # The fake docker is stateful where it matters: `run` records the network it was given and
 # `inspect` reports it back (FAKE_NETMODE overrides, to play a daemon that ignored the flag).
 cat >"$tmp/docker" <<'FAKE'
@@ -132,6 +132,18 @@ if grep -q 'journalctl' "$tmp/log"; then
 	echo "FAIL: the journal was read without E2E_JOURNAL_DIR" >&2
 	exit 1
 fi
+
+# The exit trap of `make e2e-docker` runs save-journal.sh on its own, for the container that is still
+# there when the run is killed or times out: it must save that journal, and never fail.
+: >"$tmp/log"; rm -rf "$jd"
+PATH="$tmp:$PATH" FAKE_LOG="$tmp/log" CT=clamfleet-ci E2E_JOURNAL_DIR="$jd" "$iso/save-journal.sh" || { echo "FAIL: save-journal.sh failed" >&2; exit 1; }
+grep -rq 'journal line of the old container' "$jd" || { echo "FAIL: save-journal.sh did not save the last container's journal" >&2; exit 1; }
+rm -rf "$jd"
+PATH="$tmp:$PATH" FAKE_LOG="$tmp/log" FAKE_JOURNAL_FAILS=1 E2E_JOURNAL_DIR="$jd" "$iso/save-journal.sh" || { echo "FAIL: save-journal.sh failed on an unreadable journal" >&2; exit 1; }
+[ -z "$(ls -A "$jd")" ] || { echo "FAIL: save-journal.sh left a file for a journal it could not read" >&2; exit 1; }
+
+# And the Makefile's trap really does it, before the container is removed.
+grep -qE "trap '[^']*save-journal\\.sh[^']*docker rm" "$here/../../Makefile" || { echo "FAIL: make e2e-docker's exit trap does not save the journal before removing the container" >&2; exit 1; }
 
 if drun E2E_IMAGE=; then
 	echo "FAIL: the Docker reset ran without E2E_IMAGE" >&2

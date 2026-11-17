@@ -68,11 +68,7 @@ else
 	# replaces it), and the journal is the only record of what systemd and clamd did. Best effort: a
 	# first reset has no container, and a journal that cannot be read must not stop the run. The name
 	# is the end time, so the files sort in the order the containers lived.
-	if [ -n "${E2E_JOURNAL_DIR:-}" ]; then
-		mkdir -p "$E2E_JOURNAL_DIR"
-		j="$E2E_JOURNAL_DIR/$(date -u +%Y%m%dT%H%M%S.%N).$CT.journal"
-		docker exec "$CT" journalctl --no-pager -o short-iso </dev/null >"$j" 2>/dev/null || rm -f "$j"
-	fi
+	"$here/save-journal.sh"
 	# `rm -f` succeeds when there is no such container, and fails when the daemon is unreachable,
 	# which must stop the run. A failed `run` stops it here too, before any readiness check: a
 	# leftover container from an earlier run would otherwise pass the scan below.

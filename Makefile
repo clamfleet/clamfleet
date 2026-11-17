@@ -143,14 +143,14 @@ record-freshclam-history:
 # Needs a Docker daemon and the image (`make e2e-image`). The test gate with -expect-pkg fails the run when
 # the set of passed top-level tests differs from the set the package declares, so a narrowed -run cannot pass.
 # E2E_JOURNAL_DIR keeps each container's journal (reset.sh saves it before replacing the container); CI
-# uploads it when the run fails. The trap removes the last container however the run ends.
+# uploads it when the run fails. The trap saves the last container's journal, then removes it, however the run ends.
 E2E_JOURNAL_DIR ?= $(CURDIR)/dist/e2e-journals
 e2e-docker:
 	@command -v docker >/dev/null || { echo "e2e-docker: docker is not installed; the Incus suite is "make e2e" (docs/testing.md)" >&2; exit 1; }
 	$(MAKE) packages VERSION=0.6.0-e2e1
 	$(GO) build -o $(BIN)/testgate ./hack/testgate
 	mkdir -p $(E2E_JOURNAL_DIR)
-	trap 'docker rm -f $(E2E_CT) >/dev/null 2>&1' EXIT; \
+	trap 'CT=$(E2E_CT) E2E_JOURNAL_DIR=$(E2E_JOURNAL_DIR) ./deploy/test/save-journal.sh; docker rm -f $(E2E_CT) >/dev/null 2>&1' EXIT; \
 	CFT_EXEC="docker exec -i $(E2E_CT)" RESET_RUNTIME=docker CT=$(E2E_CT) E2E_IMAGE=$(E2E_IMAGE) READY_FILE=/etc/hostname E2E_JOURNAL_DIR=$(E2E_JOURNAL_DIR) \
 		bash -o pipefail -c '$(GO) test -tags e2e -count=1 -timeout 40m -json ./e2e/ | $(BIN)/testgate -expect-pkg ./e2e -tags e2e'
 
