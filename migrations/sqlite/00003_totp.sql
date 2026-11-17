@@ -1,8 +1,7 @@
 -- SPDX-License-Identifier: AGPL-3.0-only
 -- SPDX-FileCopyrightText: The ClamFleet Authors
 
--- Milestone 3b schema: TOTP second factor for local console users
--- (docs/plans/milestone-3b.md 4.1).
+-- Milestone 3b schema: TOTP second factor for local console users.
 --
 -- Additive only: ADD COLUMN with a constant default and new tables are cheap in
 -- SQLite and leave a running M3 binary's queries valid. There are still NO

@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: The ClamFleet Authors
 
 // external.go: store.ExternalStore on SQLite: users of LDAP and OIDC sign-in, and the one-time
-// OIDC login states (docs/plans/milestone-6.md 4.15).
+// OIDC login states.
 package sqlite
 
 import (

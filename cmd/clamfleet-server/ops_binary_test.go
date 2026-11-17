@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // SPDX-FileCopyrightText: The ClamFleet Authors
 
-// Retention and restore through the real server binary (milestone 6, plan 6.3): nothing
+// Retention and restore through the real server binary: nothing
 // is injected between the test and the process, the clock is the real one, and the
 // database is the file `hack/seeddb` wrote, with rows of known ages.
 package main

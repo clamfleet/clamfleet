@@ -177,7 +177,7 @@ func TestExternalLoginRejectsBadInput(t *testing.T) {
 	}
 }
 
-// Plan 4.15: the state is one-time. The second take finds nothing, an expired one is never returned,
+// The state is one-time. The second take finds nothing, an expired one is never returned,
 // and the cleanup removes only expired rows.
 func TestOIDCStateIsOneTime(t *testing.T) {
 	ctx := context.Background()

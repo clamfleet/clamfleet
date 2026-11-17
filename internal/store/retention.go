@@ -9,7 +9,7 @@ import (
 )
 
 // RetentionStore is what the daily retention runner needs besides EventStore's
-// prunes and AlertStore.PruneAlertHistory (milestone 6, plan 4.2). Every Prune*
+// prunes and AlertStore.PruneAlertHistory. Every Prune*
 // deletes in batches of `batch` rows, one transaction per batch, until a batch
 // deletes fewer rows than that; it returns the total.
 type RetentionStore interface {

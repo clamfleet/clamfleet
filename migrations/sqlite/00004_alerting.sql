@@ -1,7 +1,7 @@
 -- SPDX-License-Identifier: AGPL-3.0-only
 -- SPDX-FileCopyrightText: The ClamFleet Authors
 
--- Milestone 4 schema: email and webhook alerting (docs/plans/milestone-4.md 4.1).
+-- Milestone 4 schema: email and webhook alerting.
 --
 -- Additive only: two ADD COLUMNs with a constant default and new tables. There
 -- are NO CHECK constraints (M3 decision 11): types and statuses are validated

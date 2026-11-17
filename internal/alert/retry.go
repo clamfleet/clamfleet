@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // SPDX-FileCopyrightText: The ClamFleet Authors
 
-// retry.go: the retry schedule and the classification of delivery results
-// (docs/plans/milestone-4.md 4.4). Pure: no clock and no randomness of its
+// retry.go: the retry schedule and the classification of delivery results.
+// Pure: no clock and no randomness of its
 // own; the caller passes "now" and a jitter source.
 //
 // Schedule (M4 decision 5): at most 5 attempts per delivery, at planning and then

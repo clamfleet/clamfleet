@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: The ClamFleet Authors
 
 // key.go: the "key" admin commands and the start-up check of the secret key
-// file (docs/plans/milestone-3b.md 4.4).
+// file.
 //
 //	key generate [--file PATH] [--add]   create the key file (run as root at install)
 //	key reencrypt                        re-seal stored secrets with the active key

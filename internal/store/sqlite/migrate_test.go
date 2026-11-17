@@ -524,7 +524,7 @@ func TestM4BinaryRefusesAMigration00005Database(t *testing.T) {
 }
 
 // 00006 only adds indexes: it must keep every existing row, round-trip down and up,
-// and SQLite must actually use the new indexes for the cascade lookups (plan 4.1, [A19]).
+// and SQLite must actually use the new indexes for the cascade lookups.
 // Without them a pruned event or state change scans the alert tables in full.
 func TestMigration00006IndexesServeTheCascades(t *testing.T) {
 	ctx := context.Background()
@@ -616,7 +616,7 @@ func TestM5BinaryRefusesAMigration00006Database(t *testing.T) {
 	}
 }
 
-// Plan 4.14: 00007 adds users.external_name and the one-time OIDC state table, goes down and up
+// Migration 00007 adds users.external_name and the one-time OIDC state table, goes down and up
 // again, and keeps the rows of existing users.
 func TestMigration00007ExternalAuth(t *testing.T) {
 	ctx := context.Background()

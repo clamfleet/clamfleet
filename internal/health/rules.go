@@ -81,8 +81,7 @@ type Thresholds struct {
 	RequireVirusEvent bool
 }
 
-// DefaultThresholds are the spec 9 defaults plus the plan's additions
-// (docs/plans/milestone-3.md 4.6).
+// DefaultThresholds are the spec 9 defaults plus the additions below.
 func DefaultThresholds() Thresholds {
 	return Thresholds{
 		StaleFactor: 3, DefaultInterval: 5 * time.Minute,

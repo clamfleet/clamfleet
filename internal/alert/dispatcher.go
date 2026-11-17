@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // SPDX-FileCopyrightText: The ClamFleet Authors
 
-// dispatcher.go: plans, claims, sends and retries alerts (plan 4.4).
+// dispatcher.go: plans, claims, sends and retries alerts.
 //
 // A pass: (1) if anything is flagged, held, due or expired, (2) release expired
 // leases, (3) plan, (4) claim AS MANY due deliveries as there are idle workers

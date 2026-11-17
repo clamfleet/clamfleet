@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // SPDX-FileCopyrightText: The ClamFleet Authors
 
-// backup.go: the `backup` command (milestone 6, plan 4.4). The protocol (temp
+// backup.go: the `backup` command. The protocol (temp
 // file, fsync, no-replace link, lock, --keep) lives in the sqlite store; this file
 // is flags, the umask and the output contract: the path of the new backup on
 // stdout and nothing else, so BACKUP=$(clamfleet-server backup) works.

@@ -2,8 +2,8 @@
 -- SPDX-FileCopyrightText: The ClamFleet Authors
 
 -- Milestone 3 schema: host health state and its history (Part A), plus the
--- users and sessions tables of the web console (Part B), which the plan
--- (M3 plan 4.1, M3 decision 11) puts in this one migration so
+-- users and sessions tables of the web console (Part B), which M3 decision 11
+-- puts in this one migration so
 -- the shape that is hard to change later is settled once.
 --
 -- Only ALTER TABLE ADD COLUMN and new tables, both cheap in SQLite. What is hard

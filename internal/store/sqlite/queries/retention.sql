@@ -1,7 +1,7 @@
 -- SPDX-License-Identifier: AGPL-3.0-only
 -- SPDX-FileCopyrightText: The ClamFleet Authors
 
--- Retention prunes of milestone 6 (docs/plans/milestone-6.md 4.2). Each statement
+-- Retention prunes of milestone 6. Each statement
 -- deletes at most `batch` rows; the store runs it in a loop, one transaction per
 -- call, so the write lock is released between batches and ingest interleaves.
 -- PruneEvents, PruneClosedWindows and the alert-history prunes live beside their tables.

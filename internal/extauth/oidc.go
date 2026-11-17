@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: The ClamFleet Authors
 
 // oidc.go: the OpenID Connect authorization code flow with PKCE, on the standard library
-// (M6 decision 17; docs/plans/milestone-6.md 4.17).
+// (M6 decision 17).
 //
 // The client is deliberately small and strict:
 //   - discovery is fetched lazily at the first sign-in (an identity provider that is down

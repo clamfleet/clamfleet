@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // SPDX-FileCopyrightText: The ClamFleet Authors
 
-// oidc.go: the console side of OpenID Connect sign-in (docs/plans/milestone-6.md 4.17, docs/auth.md).
+// oidc.go: the console side of OpenID Connect sign-in (docs/auth.md).
 //
 //	POST /login/oidc          starts a sign-in: a state row, the state cookie, and a page that takes the
 //	                          browser to the provider (a meta refresh: a 303 would be blocked by form-action).

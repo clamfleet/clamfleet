@@ -97,7 +97,7 @@ func TestBackupCopyIsConsistentAndPrivate(t *testing.T) {
 	}
 }
 
-// Every stage of the plan's table is failed in turn, and the outcome of each is
+// Every stage of the backup protocol is failed in turn, and the outcome of each is
 // asserted: nothing final before stage 5; no temporary file after stages 2-5; the
 // backup kept after 6 and 7; foreign files untouched after 8.
 func TestBackupStageFailures(t *testing.T) {

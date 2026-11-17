@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // SPDX-FileCopyrightText: The ClamFleet Authors
 
-// netpolicy.go: where a webhook may connect (SSRF defence, plan 4.7) and the
+// netpolicy.go: where a webhook may connect (SSRF defence) and the
 // resolve-filter-dial step that enforces it at connection time.
 //
 // Why our own dial step: if a hostname is handed to net.Dialer, the resolver
@@ -18,7 +18,7 @@
 // (deny_networks) or turn private networks off. An egress firewall remains the
 // stronger control (docs/alerts.md).
 //
-// Embedded IPv4 (milestone 6, plan 4.9): an IPv6 address that carries an IPv4
+// Embedded IPv4: an IPv6 address that carries an IPv4
 // address must not be a way round the IPv4 rules. classify decodes the forms it
 // can (IPv4-mapped, the well-known NAT64 prefix 64:ff9b::/96 and any translation
 // prefix the operator lists in alert.webhook.nat64_prefixes), blocks the forms
@@ -63,7 +63,7 @@ var (
 		netip.MustParsePrefix("255.255.255.255/32"),
 	}
 	// metadataAddrs are cloud metadata and platform endpoints that fall OUTSIDE
-	// link-local, so the link-local rule does not catch them [plan A12]:
+	// link-local, so the link-local rule does not catch them:
 	//   100.100.100.200  Alibaba Cloud metadata (inside CGNAT)
 	//   fd00:ec2::254    AWS IMDS over IPv6 (inside ULA)
 	//   168.63.129.16    Azure WireServer / platform DNS (a public address)

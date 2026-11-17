@@ -386,7 +386,7 @@ func sessionCount(t *testing.T, db string) int {
 	return n
 }
 
-// Plan 6.3 TestCLIExternalUsers: the list shows the source; the role, password and second factor of an
+// TestCLIExternalUsers: the list shows the source; the role, password and second factor of an
 // external user belong to the provider, so set-role, reset-password and reset-totp refuse with the reason
 // (exit 1, nothing changed); disable and enable work at once, by source:name.
 func TestCLIExternalUsers(t *testing.T) {

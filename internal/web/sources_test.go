@@ -35,7 +35,7 @@ func carry(t *testing.T, e, e2 *env, b *browser) *browser {
 	return nb
 }
 
-// Plan 6.3 (the gate and sources, through the real router): a session whose user has a source this
+// The gate and sources, through the real router: a session whose user has a source this
 // build does not know is no session (303 to /login), and so is a local session once
 // auth.local.enabled is switched off. M6 decision 21; the second is an M3 behaviour change, in the CHANGELOG.
 func TestSessionOfAnUnknownOrSwitchedOffSourceIsNoSession(t *testing.T) {

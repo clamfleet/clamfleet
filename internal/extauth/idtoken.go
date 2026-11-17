@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // SPDX-FileCopyrightText: The ClamFleet Authors
 
-// idtoken.go: the checks on an OpenID Connect ID token (docs/plans/milestone-6.md 4.17).
+// idtoken.go: the checks on an OpenID Connect ID token.
 //
 // THE SIGNATURE IS NOT VERIFIED, on purpose (M6 decision 17; OIDC Core 1.0 section 3.1.3.7
 // rule 6): the token reaches us straight from the provider's token endpoint over a TLS

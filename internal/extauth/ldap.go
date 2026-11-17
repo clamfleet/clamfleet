@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // SPDX-FileCopyrightText: The ClamFleet Authors
 
-// ldap.go: LDAP sign-in by search-then-bind (docs/plans/milestone-6.md 4.16).
+// ldap.go: LDAP sign-in by search-then-bind.
 //
 // Sequence of Directory.Authenticate, and why each step is what it is:
 //  1. An empty password is refused BEFORE any network I/O. A simple bind with a name and

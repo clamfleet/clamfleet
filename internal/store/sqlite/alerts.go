@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // SPDX-FileCopyrightText: The ClamFleet Authors
 
-// alerts.go: store.AlertStore on SQLite (docs/plans/milestone-4.md 4.2).
+// alerts.go: store.AlertStore on SQLite.
 //
 // The alert queue is a transactional outbox: nothing alert-related lives only
 // in memory. Every decision is a conditional statement inside the single
@@ -250,7 +250,7 @@ func (s *Store) UpdateAlertTarget(ctx context.Context, name string, u store.Aler
 			}
 		}
 
-		// Switching off (plan 4.3): what is pending for a kind that is now off
+		// Switching off: what is pending for a kind that is now off
 		// must not go out later, and a hold or "last told" for state changes that
 		// are off is dropped so turning them back on starts fresh.
 		all := func(string) bool { return true }

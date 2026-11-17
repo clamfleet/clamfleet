@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // SPDX-FileCopyrightText: The ClamFleet Authors
 
-// Milestone 5, decision 7: the detection path on a host where AppArmor enforces
-// (docs/plans/milestone-5.md 6.6), run in the throwaway Debian 13 VM by
+// Milestone 5, decision 7: the detection path on a host where AppArmor enforces,
+// run in the throwaway Debian 13 VM by
 // `make e2e-apparmor`. The container suite cannot do this: it has no apparmor
 // package and clamd runs unconfined there, so a profile that refuses VirusEvent on
 // a stock Debian host would pass it.

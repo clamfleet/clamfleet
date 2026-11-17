@@ -286,7 +286,7 @@ func TestScanSignalOrOddExitIsAnError(t *testing.T) {
 	}
 }
 
-// The command line is exactly what the plan says: the agent's clamd.conf, --multiscan,
+// The command line is exactly what the scan rules say: the agent's clamd.conf, --multiscan,
 // the configured paths, and no --fdpass.
 func TestScanCommandLine(t *testing.T) {
 	e := newScanEnv(t)

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // SPDX-FileCopyrightText: The ClamFleet Authors
 
-// alert.go: the "alert" admin commands (docs/plans/milestone-4.md 4.12), for
+// alert.go: the "alert" admin commands, for
 // automation and the container e2e. Editing a target stays in the console.
 //
 //	alert list [--json]

@@ -117,7 +117,7 @@ func TestSMTPImplicitTLS(t *testing.T) {
 	if r := s.Send(context.Background(), testMessage("ops@x.example")); r.Outcome != OutcomeSent {
 		t.Fatalf("%+v", r)
 	}
-	if !srv.Saw("AUTH PLAIN tls=true") { // plan A5: smtp.NewClient on a *tls.Conn reports TLS to Auth
+	if !srv.Saw("AUTH PLAIN tls=true") { // smtp.NewClient on a *tls.Conn reports TLS to Auth
 		t.Fatalf("%v", srv.Events())
 	}
 	// A client that does not trust the CA fails the handshake (retry, "tls").

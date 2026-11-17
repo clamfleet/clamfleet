@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // SPDX-FileCopyrightText: The ClamFleet Authors
 
-// Milestone 5, flow: the Detections page and acknowledgement (docs/plans/milestone-5.md 6.7).
+// Milestone 5, flow: the Detections page and acknowledgement.
 // The fixture posts the detections through the real /v1/event; see docs/testing.md.
 //
 // What would turn it red: a route that is not mounted, the htmx swap blocked by the CSP (the

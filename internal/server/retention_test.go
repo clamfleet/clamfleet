@@ -114,7 +114,7 @@ type writerFunc func(p []byte) (int, error)
 
 func (f writerFunc) Write(p []byte) (int, error) { return f(p) }
 
-// Retention bounds and defaults of every key (plan 4.3). A bound that is dropped
+// Retention bounds and defaults of every key. A bound that is dropped
 // lets a typo delete history at once or keep personal data for centuries.
 func TestRetentionConfig(t *testing.T) {
 	d := DefaultRetention()
