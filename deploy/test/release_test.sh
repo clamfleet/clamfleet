@@ -423,4 +423,86 @@ sign_refused "no rpm at all" "no .rpm" "$d" "$tmp/k1/pub.asc"
 mkdist "$d"
 if (RELEASE_SIGNING_SUBKEY_FD="" "$rel/sign.sh" "$d" "$tmp/k1/pub.asc" "$(sha256sum "$d/SHA256SUMS" | cut -d' ' -f1)") >"$tmp/out" 2>&1; then fail "sign.sh ran without a key descriptor"; fi
 
+# ===================================================================================================
+# verify-tag.sh: a temporary repository, throwaway SSH keys and a stub gh that answers from a file.
+# ===================================================================================================
+ssh-keygen -q -t ed25519 -N '' -C signer -f "$tmp/sshkey" >/dev/null
+ssh-keygen -q -t ed25519 -N '' -C other -f "$tmp/sshother" >/dev/null
+allowed="maintainer $(cut -d' ' -f1,2 "$tmp/sshkey.pub")"
+export GITHUB_REPOSITORY=clamfleet/clamfleet
+cat >"$stubs/gh" <<'SH'
+#!/usr/bin/env bash
+# Stub for `gh api URL`: answers with the file named by STUB_RUNS, whatever the query says, so that the
+# script's own filtering is what the tests exercise.
+[ "$1" = api ] || exit 2
+case "$2" in repos/clamfleet/clamfleet/actions/workflows/ci.yml/runs\?*) cat "$STUB_RUNS" ;; *) echo "stub gh: unexpected $2" >&2; exit 2 ;; esac
+SH
+chmod +x "$stubs/gh"
+
+vt="$tmp/vt"
+mkdir -p "$vt"
+git -C "$vt" init -q -b main
+printf '# Changelog\n\n## [1.0.0-rc.1] - 2026-12-01\n\n- notes\n' >"$vt/CHANGELOG.md"
+git -C "$vt" add CHANGELOG.md
+git -C "$vt" -c commit.gpgsign=false commit -q -m "release commit"
+parent="$(git -C "$vt" rev-parse HEAD)"
+git -C "$vt" -c commit.gpgsign=false commit -q --allow-empty -m "child commit"
+head="$(git -C "$vt" rev-parse HEAD)"
+
+runs() { # SHA CONCLUSION [EVENT] [BRANCH] [STATUS]: a one-run answer
+	jq -n --arg sha "$1" --arg c "$2" --arg e "${3:-push}" --arg b "${4:-main}" --arg s "${5:-completed}" \
+		'{workflow_runs:[{event:$e, head_branch:$b, head_sha:$sha, status:$s, conclusion:$c, html_url:"https://example.invalid/run/1"}]}'
+}
+tagit() { # NAME KEY [annotated|light] [unsigned]: tags HEAD
+	local name="$1" key="$2" kind="${3:-annotated}"
+	git -C "$vt" tag -d "$name" >/dev/null 2>&1 || true
+	if [ "$kind" = light ]; then git -C "$vt" tag "$name"
+	elif [ "${4:-}" = unsigned ]; then git -C "$vt" tag -a -m "release $name" "$name"
+	else git -C "$vt" -c gpg.format=ssh -c "user.signingkey=$key" tag -s -m "release $name" "$name"; fi
+}
+vtag() { (cd "$vt" && RELEASE_ALLOWED_SIGNERS="${SIGNERS-$allowed}" "$rel/verify-tag.sh" "$@") >"$tmp/out" 2>"$tmp/err"; }
+vt_ok() { vtag "$@" || fail "verify-tag: $1 refused: $(cat "$tmp/err")"; }
+vt_refused() { # NAME TEXT TAG
+	if vtag "$3"; then fail "verify-tag: $1: accepted"; fi
+	grep -qF -- "$2" "$tmp/err" || fail "verify-tag: $1: refused for another reason (wanted '$2'): $(cat "$tmp/err")"
+}
+export STUB_RUNS="$tmp/runs.json"
+
+tagit v1.0.0-rc.1 "$tmp/sshkey"
+runs "$head" success >"$STUB_RUNS"
+vt_ok v1.0.0-rc.1
+[ "$(grep '^commit=' "$tmp/out")" = "commit=$head" ] || fail "verify-tag: wrong commit line: $(cat "$tmp/out")"
+[ "$(grep '^tag_object=' "$tmp/out")" = "tag_object=$(git -C "$vt" rev-parse refs/tags/v1.0.0-rc.1)" ] || fail "verify-tag: wrong tag_object line"
+[ "$(wc -l <"$tmp/out")" -eq 2 ] || fail "verify-tag: stdout must be exactly the two output lines: $(cat "$tmp/out")"
+
+runs "$parent" success >"$STUB_RUNS"   # Mutation 17: the only green run is for the parent.
+vt_refused "a commit whose only green run is for its parent" "no successful push run" v1.0.0-rc.1
+runs "$head" failure >"$STUB_RUNS"
+vt_refused "a failed run" "no successful push run" v1.0.0-rc.1
+runs "$head" success pull_request >"$STUB_RUNS"
+vt_refused "a green pull request run" "no successful push run" v1.0.0-rc.1
+runs "$head" success push develop >"$STUB_RUNS"
+vt_refused "a green run on another branch" "no successful push run" v1.0.0-rc.1
+runs "$head" "" push main in_progress >"$STUB_RUNS"
+vt_refused "a run still in progress" "no successful push run" v1.0.0-rc.1
+echo '{"workflow_runs":[]}' >"$STUB_RUNS"
+vt_refused "no run at all" "no successful push run" v1.0.0-rc.1
+runs "$head" success >"$STUB_RUNS"
+
+tagit v1.0.0-rc.2 "$tmp/sshkey" annotated unsigned
+vt_refused "an unsigned annotated tag" "signature" v1.0.0-rc.2
+tagit v1.0.0-rc.3 "$tmp/sshkey" light
+vt_refused "a lightweight tag" "lightweight" v1.0.0-rc.3
+tagit v1.0.0-rc.4 "$tmp/sshother"
+vt_refused "a signer that is not listed" "signature" v1.0.0-rc.4
+SIGNERS="" vt_refused "no allowed signers" "RELEASE_ALLOWED_SIGNERS is empty" v1.0.0-rc.1
+vt_refused "a tag that does not exist" "no tag" v1.0.0-rc.9
+tagit v1.0.0-beta.1 "$tmp/sshkey"
+vt_refused "a tag outside the version policy" "version policy" v1.0.0-beta.1
+tagit 1.0.0-rc.1 "$tmp/sshkey"
+vt_refused "a tag without the v" "does not start with v" 1.0.0-rc.1
+tagit v1.0.1 "$tmp/sshkey"
+vt_refused "a tag whose version has no changelog section" "no non-empty section" v1.0.1
+SIGNERS="maintainer $(cut -d' ' -f1,2 "$tmp/sshother.pub")" vt_refused "a key that did not sign the tag" "signature" v1.0.0-rc.1
+
 echo "release_test: ok"
