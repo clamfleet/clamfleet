@@ -10,7 +10,7 @@ BIN := bin
 VERSION ?= 0.0.0-dev
 LDFLAGS := -s -w -X github.com/clamfleet/clamfleet/internal/version.Version=$(VERSION)
 
-.PHONY: tools ci lint-workflows mod-check test-ci build vet staticcheck test scripts-test sqlc-check generate check packages e2e e2e-image e2e-docker record-freshclam-history e2e-apparmor e2e-el9 e2e-idp e2e-web fixtures webfixture web-fixture
+.PHONY: tools ci release release-snapshot lint-workflows mod-check test-ci build vet staticcheck test scripts-test sqlc-check generate check packages e2e e2e-image e2e-docker record-freshclam-history e2e-apparmor e2e-el9 e2e-idp e2e-web fixtures webfixture web-fixture
 
 # Build-time tools and their pins. The same versions are in CLAUDE.md and docs/testing.md: change all
 # together. They are installed with `go install`, never added to go.mod (the Go `tool` directive would
@@ -20,6 +20,8 @@ STATICCHECK_VERSION := v0.8.2
 SQLC_VERSION := v1.31.1
 # actionlint is not installed: `make lint-workflows` runs it with `go run` at this version.
 ACTIONLINT_VERSION := v1.7.12
+# cyclonedx-gomod writes the SBOMs of a release; deploy/release/release.sh runs it with `go run` at this version.
+CYCLONEDX_VERSION := v1.12.0
 
 tools:
 	$(GO) install honnef.co/go/tools/cmd/staticcheck@$(STATICCHECK_VERSION)
@@ -49,6 +51,16 @@ packages: build
 	done; done
 	ls -l $(PKG_DIR)
 
+# The unsigned release assets of VERSION (X.Y.Z or X.Y.Z-rc.N) into dist/release, with the script's self-checks
+# (docs/releasing.md). Needs go, git, jq, dpkg-deb, rpm, rpm2cpio and cpio. Signing is deploy/release/sign.sh and
+# happens only in the release workflow's sign job: the release key is never on a developer's machine.
+release:
+	CYCLONEDX_VERSION=$(CYCLONEDX_VERSION) ./deploy/release/release.sh $(VERSION)
+
+# The same with VERSION 0.0.0-rc.1, on a dirty tree, with the notes taken from "Unreleased". Never signed or published.
+release-snapshot:
+	RELEASE_SNAPSHOT=1 CYCLONEDX_VERSION=$(CYCLONEDX_VERSION) ./deploy/release/release.sh 0.0.0-rc.1
+
 vet:
 	$(GO) vet ./...
 	$(GO) vet -tags e2e ./...
@@ -73,6 +85,7 @@ scripts-test:
 	./deploy/test/headers_test.sh
 	./deploy/test/workflows_test.sh
 	./deploy/test/dco_test.sh
+	./deploy/test/release_test.sh
 	./deploy/test/webtests_test.sh
 
 # sqlc is a build-time tool only (pinned in CLAUDE.md): the generated code uses database/sql.

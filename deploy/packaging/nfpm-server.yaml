@@ -5,7 +5,8 @@
 # `make packages`, which runs nfpm once per format (-p deb, -p rpm) with two variables:
 #   VERSION     the package version (semver; a pre-release such as 0.6.0-rc1 becomes 0.6.0~rc1 in a deb)
 #   NFPM_ARCH   amd64
-# goreleaser (milestone 6c) reads this file unchanged. The server is not confined by AppArmor or SELinux.
+# The release script (deploy/release/release.sh) builds the packages with `make packages` from this file;
+# the rpms are signed afterwards by deploy/release/sign.sh, never by nfpm. The server is not confined by AppArmor or SELinux.
 name: clamfleet-server
 arch: ${NFPM_ARCH}
 platform: linux
