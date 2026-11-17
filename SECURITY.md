@@ -16,7 +16,7 @@ Please report it privately, not in a public issue or pull request.
 
 1. **Preferred: GitHub private vulnerability reporting.** Open the Security tab of this repository and
    choose "Report a vulnerability", or go to
-   <https://github.com/clamfleet/clamfleet/security/advisories/new>. Only the maintainer sees the report.
+   <https://github.com/clamfleet/clamfleet/security/advisories/new>. Only the maintainers (the repository administrators) see the report.
 2. **Or write to hi@madalin.me.**
 
 Include what you can of:

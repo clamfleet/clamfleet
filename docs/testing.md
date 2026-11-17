@@ -264,8 +264,8 @@ by one made from `deploy/test/ci/Dockerfile`. The maintainer has no Docker; the 
 - **What "no network" guarantees:** during the tests the container has no network, so nothing in them can reach the ClamAV
   CDN or anything else; binaries and packages go in over `docker exec -i`. Building the image does use the network (Docker
   Hub for the two base images, `deb.debian.org` for packages), but never contacts the ClamAV CDN.
-- **The gate:** `make e2e-docker` pipes `go test -json` through `hack/testgate -expect-pkg ./e2e -tags e2e`: all 30
-  top-level tests (not counting `TestMain`) must pass, none may skip, and the set must equal what the package declares.
+- **The gate:** `make e2e-docker` pipes `go test -json` through `hack/testgate -expect-pkg ./e2e -tags e2e`: every
+  top-level test the package declares (`TestMain` is not one) must pass, none may skip, and the set must equal what the package declares.
 - **Journals:** `reset.sh` writes the journal of each container to `dist/e2e-journals` (`E2E_JOURNAL_DIR`) before replacing
   it, named by end time. CI uploads them for 7 days when the job fails. They hold synthetic data only.
 - **The image is cached** as a tarball by the Dockerfile hash and the ISO week, so Docker Hub is pulled a few times a
@@ -275,8 +275,9 @@ by one made from `deploy/test/ci/Dockerfile`. The maintainer has no Docker; the 
 - **Distribution drift:** the image takes the live Debian 13 archive, so a ClamAV or systemd update can turn CI red.
   Open an issue, fix it in its own pull request, and let others wait; the temporary escape is a pinned package version in the
   Dockerfile with a removal date, in a reviewed commit. A red run is never simply re-run until it is green.
-- **A failure only CI shows:** read the uploaded journals and the test log first. If that is not enough, ask for a Docker
-  container for this project on the dev tier.
+- **A failure only CI shows:** read the uploaded journals and the test log first. If that is not enough, run the suite
+  in a Docker of your own (`make e2e-image`, `make e2e-docker`), or the Incus suite (`make e2e`), and say in the pull request what
+  you could not reproduce; the maintainer can look at the failing run's logs.
 
 ## Packages (`make packages`) and the package scenarios
 
