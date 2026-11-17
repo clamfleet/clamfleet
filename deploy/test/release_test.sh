@@ -107,11 +107,13 @@ for n in clamfleet-agent clamfleet-server; do
 	dpkg-deb --root-owner-group -Zgzip --build "$t" "$pkg/${n}_${dv}_amd64.deb" >/dev/null
 	# The rpm differs from the tarball's binary by one byte when asked to.
 	if [ -n "${STUB_RPM_TAMPER:-}" ]; then printf 'x' >>"$t/usr/bin/$n"; fi
-	(cd "$t" && echo "./usr/bin/$n" | cpio -o -H newc --quiet) >"$pkg/${n}-${dv}-1.x86_64.rpm"
+	# The "rpm" is a cpio archive: the binary plus a HDR member that the stub rpm answers header queries from.
+	printf '%s %s\n' "$n" "$dv" >"$t/HDR"
+	(cd "$t" && printf './usr/bin/%s\n./HDR\n' "$n" | cpio -o -H newc --quiet) >"$pkg/${n}-${dv}-1.x86_64.rpm"
 	rm -rf "${t:?}"
 done
 SH
-# rpm2cpio: the stub "rpm" is already a cpio archive. rpm -qp: the header fields come from the file name.
+# rpm2cpio: the stub "rpm" is already a cpio archive. rpm -qp: the header fields come from its HDR member.
 cat >"$stubs/rpm2cpio" <<'SH'
 #!/bin/sh
 cat "$1"
@@ -121,14 +123,14 @@ cat >"$stubs/rpm" <<'SH'
 # Stub for `rpm -qp --qf FMT FILE` (and, for sign.sh, the payload digest).
 set -euo pipefail
 [ "$1" = "-qp" ] || exit 2
-f="${*: -1}"; b="$(basename "$f")"
+f="${*: -1}"
 case "$*" in
 *PAYLOADDIGEST*)
 	# Everything but the signature line is "payload".
 	grep -av '^SIG:' "$f" | sha256sum | cut -d' ' -f1 ;;
 *)
-	[[ "$b" =~ ^(.+)-([^-]+)-([0-9]+)\.x86_64\.rpm$ ]] || exit 2
-	printf '%s %s x86_64' "${BASH_REMATCH[1]}" "${STUB_RPM_VERSION:-${BASH_REMATCH[2]}}" ;;
+	read -r hn hv < <(cpio -i --quiet --to-stdout '*HDR' <"$f")
+	printf '%s %s x86_64' "$hn" "${STUB_RPM_VERSION:-$hv}" ;;
 esac
 SH
 # cyclonedx-gomod: the output shape of v1.12 for `bin` (checked once by hand: name is the module path, the
@@ -227,13 +229,18 @@ $(cat "$tmp/out")"
 
 expect_ok 1.0.0-rc.1
 out="$proj/dist/release"
-for f in clamfleet_1.0.0-rc.1_linux_amd64.tar.gz clamfleet-agent_1.0.0~rc.1_amd64.deb clamfleet-server-1.0.0~rc.1-1.x86_64.rpm \
+for f in clamfleet_1.0.0-rc.1_linux_amd64.tar.gz clamfleet-agent_1.0.0-rc.1_amd64.deb clamfleet-server-1.0.0-rc.1-1.x86_64.rpm \
 	clamfleet-agent_1.0.0-rc.1_sbom.cdx.json clamfleet-server_1.0.0-rc.1_sbom.cdx.json SHA256SUMS notes.md; do
 	[ -f "$out/$f" ] || fail "a good run did not produce $f"
 done
 [ "$(cat "$out/notes.md")" = "- the first release candidate" ] || fail "notes.md is not the CHANGELOG section"
-if grep -q 'notes.md\|SHA256SUMS' "$out/SHA256SUMS"; then fail "SHA256SUMS must not list itself or notes.md"; fi
-[ "$(wc -l <"$out/SHA256SUMS")" -eq 7 ] || fail "SHA256SUMS lists $(wc -l <"$out/SHA256SUMS") files, wanted 7"
+if grep -q 'SHA256SUMS' "$out/SHA256SUMS"; then fail "SHA256SUMS must not list itself"; fi
+# Asset names never carry "~" (GitHub likely renames it; the packages' internal version keeps it).
+if ls "$out" | grep -q '~'; then fail "an asset name contains ~: $(ls "$out")"; fi
+if grep -q '~' "$out/SHA256SUMS"; then fail "SHA256SUMS lists a name with ~"; fi
+dpkg-deb -f "$out/clamfleet-agent_1.0.0-rc.1_amd64.deb" Version | grep -qx '1.0.0~rc.1' || fail "the deb's own version lost its ~"
+grep -q '^[0-9a-f]*  notes.md$' "$out/SHA256SUMS" || fail "SHA256SUMS must list notes.md (the sign job checks it against the build's hash)"
+[ "$(wc -l <"$out/SHA256SUMS")" -eq 8 ] || fail "SHA256SUMS lists $(wc -l <"$out/SHA256SUMS") files, wanted 8"
 jq -e '[.components[] | select(.name == "htmx.org")] | length == 1' "$out/clamfleet-server_1.0.0-rc.1_sbom.cdx.json" >/dev/null || fail "no htmx in the server SBOM"
 tar -tzf "$out/clamfleet_1.0.0-rc.1_linux_amd64.tar.gz" | sort | tr '\n' ' ' | grep -q 'LICENSE.*README.md' || fail "the tarball lacks LICENSE or README.md"
 
@@ -373,11 +380,11 @@ chmod +x "$stubs/rpmsign" "$stubs/rpmkeys"
 mkdist() {
 	local d="$1"
 	rm -rf "${d:?}"; mkdir -p "$d"
-	printf 'rpm payload agent\n' >"$d/clamfleet-agent-1.0.0~rc.1-1.x86_64.rpm"
-	printf 'rpm payload server\n' >"$d/clamfleet-server-1.0.0~rc.1-1.x86_64.rpm"
+	printf 'rpm payload agent\n' >"$d/clamfleet-agent-1.0.0-rc.1-1.x86_64.rpm"
+	printf 'rpm payload server\n' >"$d/clamfleet-server-1.0.0-rc.1-1.x86_64.rpm"
 	printf 'tarball\n' >"$d/clamfleet_1.0.0-rc.1_linux_amd64.tar.gz"
 	printf 'notes\n' >"$d/notes.md"
-	(cd "$d" && find . -maxdepth 1 -type f ! -name notes.md ! -name SHA256SUMS -printf '%f\n' | LC_ALL=C sort | xargs -d '\n' sha256sum >SHA256SUMS)
+	(cd "$d" && find . -maxdepth 1 -type f ! -name SHA256SUMS -printf '%f\n' | LC_ALL=C sort | xargs -d '\n' sha256sum >SHA256SUMS)
 }
 run_sign() { # DIR PUBKEY [SUMS-SHA] [SUBKEYFILE]
 	local d="$1" pub="$2" sums="${3:-}" key="${4:-$tmp/k1/subkey.gpg}"
@@ -396,10 +403,10 @@ before="$(sha256sum "$d/SHA256SUMS" | cut -d' ' -f1)"
 run_sign "$d" "$tmp/k1/pub.asc" || fail "sign.sh: a good run was refused:
 $(cat "$tmp/out")"
 [ -s "$d/SHA256SUMS.asc" ] || fail "sign.sh wrote no SHA256SUMS.asc"
-grep -q "^SIG:" "$d/clamfleet-agent-1.0.0~rc.1-1.x86_64.rpm" || fail "the rpm was not signed"
+grep -q "^SIG:" "$d/clamfleet-agent-1.0.0-rc.1-1.x86_64.rpm" || fail "the rpm was not signed"
 [ "$before" != "$(sha256sum "$d/SHA256SUMS" | cut -d' ' -f1)" ] || fail "SHA256SUMS was not regenerated after signing"
 (cd "$d" && sha256sum -c --quiet SHA256SUMS) || fail "the regenerated SHA256SUMS does not match the signed files"
-if grep -q notes.md "$d/SHA256SUMS"; then fail "notes.md is not an asset"; fi
+grep -q '  notes.md$' "$d/SHA256SUMS" || fail "the regenerated SHA256SUMS dropped notes.md"
 
 mkdist "$d"
 sign_refused "a checksum file that is not the one built" "the build job reported" "$d" "$tmp/k1/pub.asc" "$(printf '0%.0s' $(seq 64))"
@@ -416,8 +423,21 @@ STUB_CHANGE_PAYLOAD=1 sign_refused "signing that changes the payload" "changed t
 mkdist "$d"
 STUB_KEYID_OVERRIDE=deadbeef sign_refused "a signature line of another key" "no 'Signature, key ID" "$d" "$tmp/k1/pub.asc"
 mkdist "$d"
+# Files the build job's checksum file does not list must not be signed along: sign.sh regenerates the sums over
+# the directory, so without this check a planted file would be published as if the build had made it.
+mkdist "$d"; echo planted >"$d/planted.bin"
+sign_refused "an extra file in the directory" "not exactly the ones SHA256SUMS lists" "$d" "$tmp/k1/pub.asc"
+mkdist "$d"; rm "$d/notes.md"
+sign_refused "a listed file that is missing" "do not match SHA256SUMS" "$d" "$tmp/k1/pub.asc"
+mkdist "$d"; echo old >"$d/SHA256SUMS.asc"
+sign_refused "a leftover signature file" "not exactly the ones SHA256SUMS lists" "$d" "$tmp/k1/pub.asc"
+mkdist "$d"; mkdir "$d/sub"
+sign_refused "a directory" "not a regular file" "$d" "$tmp/k1/pub.asc"
+mkdist "$d"; ln -s notes.md "$d/link"
+sign_refused "a symlink" "not a regular file" "$d" "$tmp/k1/pub.asc"
+mkdist "$d"
 rm "${d:?}"/*.rpm
-(cd "$d" && find . -maxdepth 1 -type f ! -name notes.md ! -name SHA256SUMS -printf '%f\n' | xargs sha256sum >SHA256SUMS)
+(cd "$d" && find . -maxdepth 1 -type f ! -name SHA256SUMS -printf '%f\n' | xargs sha256sum >SHA256SUMS)
 sign_refused "no rpm at all" "no .rpm" "$d" "$tmp/k1/pub.asc"
 # The descriptor must be given and must be a number.
 mkdist "$d"

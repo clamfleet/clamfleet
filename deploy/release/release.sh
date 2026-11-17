@@ -4,7 +4,7 @@
 #
 # release.sh VERSION - builds every UNSIGNED release asset into $OUT (default dist/release) and checks what
 # it built: the tarball, the .deb and .rpm of the agent and the server, one CycloneDX SBOM per binary,
-# SHA256SUMS and notes.md (the CHANGELOG section). It never signs: sign.sh does that, in a separate job
+# SHA256SUMS and notes.md (the CHANGELOG section); asset names never contain "~". It never signs: sign.sh does that, in a separate job
 # that holds the only secret, so no build tool ever runs next to the signing key (docs/releasing.md).
 #
 # Why a script and not goreleaser: goreleaser cannot load our nfpm files and its prebuilt builder is Pro-only
@@ -83,6 +83,19 @@ rm -rf "$OUT"
 $MAKE packages VERSION="$version" PKG_DIR="$OUT"
 printf '%s\n' "$notes" >"$OUT/notes.md"
 
+# Asset names carry the plain version, never "~". nfpm names an rc package 1.0.0~rc.1 (the version INSIDE the
+# package must keep the "~" so an rc sorts before the release), but GitHub likely renames "~" in an asset name,
+# and then SHA256SUMS would list names that do not exist: `sha256sum -c --ignore-missing` would skip the
+# packages without a word. The publish job also compares the names GitHub holds with the files uploaded.
+rpm_version="${version/-/\~}"
+for pkg in clamfleet-agent clamfleet-server; do
+	for pair in "${pkg}_${rpm_version}_amd64.deb ${pkg}_${version}_amd64.deb" "${pkg}-${rpm_version}-1.x86_64.rpm ${pkg}-${version}-1.x86_64.rpm"; do
+		read -r from to <<<"$pair"
+		[ -f "$OUT/$from" ] || die "make packages did not produce $from"
+		[ "$from" = "$to" ] || mv "$OUT/$from" "$OUT/$to"
+	done
+done
+
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
@@ -118,9 +131,11 @@ jq --slurpfile extra deploy/release/sbom-extra.json '.components += [$extra[0].c
 mv "$tmp/server.sbom.json" "$server_sbom"
 
 # --- Checksums. -------------------------------------------------------------------------------------------
-# Every asset, sorted by name in the C locale, so the file is the same everywhere. notes.md is not an asset.
+# Every file, sorted by name in the C locale, so the file is the same everywhere. notes.md is listed too although it
+# is the release text and not an uploaded asset: the sign job's check against the build job's hash of this file then
+# covers the notes as well, and sign.sh can insist that the directory holds exactly what is listed.
 write_sums() {
-	(cd "$OUT" && find . -maxdepth 1 -type f ! -name SHA256SUMS ! -name SHA256SUMS.asc ! -name notes.md -printf '%f\n' |
+	(cd "$OUT" && find . -maxdepth 1 -type f ! -name SHA256SUMS ! -name SHA256SUMS.asc -printf '%f\n' |
 		LC_ALL=C sort | xargs -d '\n' sha256sum >SHA256SUMS)
 }
 write_sums
@@ -133,7 +148,6 @@ mkdir -p "$tmp/check"
 tar -xzf "$OUT/$tarball" -C "$tmp/check"
 tbin="$tmp/check/clamfleet_${version}_linux_amd64"
 sha_of() { sha256sum "$1" | cut -d' ' -f1; }
-rpm_version="${version/-/\~}"
 
 for name in clamfleet-agent clamfleet-server; do
 	# Rule: a binary announces exactly the release version: no "+e2e_migration", no default 0.0.0-dev.
@@ -154,8 +168,8 @@ for name in clamfleet-agent clamfleet-server; do
 	# Payload equality: the file inside each package is byte for byte the tarball's (a package that had
 	# been built by another step would otherwise be a different program with the same version).
 	want="$(sha_of "$tbin/$name")"
-	deb="$OUT/${name}_${rpm_version}_amd64.deb"
-	rpmf="$OUT/${name}-${rpm_version}-1.x86_64.rpm"
+	deb="$OUT/${name}_${version}_amd64.deb"
+	rpmf="$OUT/${name}-${version}-1.x86_64.rpm"
 	[ -f "$deb" ] || die "missing $deb"
 	[ -f "$rpmf" ] || die "missing $rpmf"
 	got="$(dpkg-deb --fsys-tarfile "$deb" | tar -xO "./usr/bin/$name" | sha256sum | cut -d' ' -f1)"

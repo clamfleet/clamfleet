@@ -51,6 +51,18 @@ cd "$dir"
 got="$(sha256sum SHA256SUMS | cut -d' ' -f1)"
 [ "$got" = "$want_sums" ] || die "SHA256SUMS is $got, the build job reported $want_sums"
 sha256sum -c --quiet SHA256SUMS || die "the assets do not match SHA256SUMS"
+# `sha256sum -c` proves the LISTED files are right, not that nothing else is here. Step 4 below regenerates the
+# checksums over the directory, so an extra file (a planted asset, a leftover) would be hashed, signed and
+# published as if the build job had made it. Refuse unless the directory holds exactly what the build job's
+# checksum file lists (notes.md included: release.sh lists it so the notes are covered too), and nothing that is
+# not a regular file; an existing SHA256SUMS.asc counts as an unlisted file.
+if [ -n "$(find . -mindepth 1 ! -type f -print -quit)" ]; then
+	die "$dir holds something that is not a regular file (a directory or a link)"
+fi
+listed="$(awk '{ sub(/^\*/, "", $2); print $2 }' SHA256SUMS | LC_ALL=C sort)"
+present="$(find . -maxdepth 1 -mindepth 1 -type f ! -name SHA256SUMS -printf '%f\n' | LC_ALL=C sort)"
+[ "$listed" = "$present" ] || die "the files in $dir are not exactly the ones SHA256SUMS lists (< listed, > present):
+$(diff <(printf '%s\n' "$listed") <(printf '%s\n' "$present") || true)"
 
 # 2. A private GNUPGHOME for the key (mode 700 from mktemp -d), always removed.
 work="$(mktemp -d)"
@@ -98,7 +110,7 @@ for f in "${rpms[@]}"; do
 done
 
 # 4. New checksums (the rpms changed), then the signature over them. Same file set as release.sh.
-find . -maxdepth 1 -type f ! -name SHA256SUMS ! -name SHA256SUMS.asc ! -name notes.md -printf '%f\n' |
+find . -maxdepth 1 -type f ! -name SHA256SUMS ! -name SHA256SUMS.asc -printf '%f\n' |
 	LC_ALL=C sort | xargs -d '\n' sha256sum >SHA256SUMS
 rm -f SHA256SUMS.asc
 gpg --batch --yes --armor --detach-sign --local-user "${subfpr}!" --output SHA256SUMS.asc SHA256SUMS ||

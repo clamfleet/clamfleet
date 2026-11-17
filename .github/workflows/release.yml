@@ -186,6 +186,12 @@ jobs:
           # files and publishes it by hand.
           mapfile -d '' assets < <(find dist/release -maxdepth 1 -type f ! -name notes.md -print0 | sort -z)
           gh release create "$TAG" "${flags[@]}" "${assets[@]}"
+          # GitHub may rename an asset (it likely does not keep "~" in file names, which is why ours carry none).
+          # SHA256SUMS lists the local names, so a renamed asset would be skipped silently by
+          # `sha256sum -c --ignore-missing`: the names GitHub holds must equal the ones we uploaded.
+          want="$(printf '%s\n' "${assets[@]##*/}" | LC_ALL=C sort)"
+          got="$(gh release view "$TAG" --json assets --jq '.assets[].name' | LC_ALL=C sort)"
+          test "$want" = "$got" || { echo "asset names differ from the uploaded files:" >&2; diff <(echo "$want") <(echo "$got") >&2 || true; exit 1; }
         env:
           TAG: ${{ github.ref_name }}
           TAG_OBJECT: ${{ needs.verify.outputs.tag_object }}
