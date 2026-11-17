@@ -27,6 +27,11 @@
 #      image also bakes in the files next to it (the recorded freshclam history, the replay script and
 #      its unit), and a key that ignored them would serve a stale image after a re-recording.
 #
+#   9. no `continue-on-error` anywhere, no step-level `if: false`, and a required job never `needs:` a
+#      job whose `if:` is not one of the two allowed conditions: each of these makes a red or skipped
+#      piece of work report success to a required check (a job skipped because its dependency was
+#      skipped counts as skipped, which a required check accepts).
+#
 # The workflows are parsed line by line with awk and assume the two-space indentation every
 # workflow here uses (jobs at 2, job keys at 4, steps `- ` at 6). A workflow in another style is
 # refused by rule 3 or 1 rather than waved through, because the keys would not be found.
@@ -50,13 +55,14 @@ ALLOWED="e2e=$DRAFT;web=$DRAFT;release-dry-run=$DRAFT;dco=$PRONLY"
 findings() {
 	local f
 	for f in "$@"; do
-		awk -v file="$f" -v base="$(basename "$f")" -v required="$REQUIRED" -v allowed="$ALLOWED" '
+		awk -v file="$f" -v base="$(basename "$f")" -v required="$REQUIRED" -v allowed="$ALLOWED" -v conds="$DRAFT;$PRONLY" '
 		function trim(s) { sub(/^[ \t]+/, "", s); sub(/[ \t]+$/, "", s); return s }
 		function bad(n, msg) { printf "%s:%d: rule %d: %s\n", file, FNR, n, msg; found = 1 }
 		function endstep() {
 			if (instep && checkout && !persist) bad(5, "actions/checkout without persist-credentials: false (step starting at line " stepline ")")
 			instep = 0; checkout = 0; persist = 0
 		}
+		function isreq(j) { return index(" " required " ", " " j " ") }
 		function endjob(   n, i, parts, kv, cond) {
 			endstep()
 			if (job == "") return
@@ -69,7 +75,21 @@ findings() {
 			}
 			job = ""
 		}
-		FNR == 1 { section = ""; job = ""; instep = 0; seenjobs = 0; topperm = 0 }
+		function endfile(   j, n, i, w, c, ok, parts) {
+			n = split(conds, parts, ";")
+			for (j in needs) {
+				if (!isreq(j)) continue
+				split(needs[j], w, " ")
+				for (i in w) {
+					if (w[i] == "" || jobifs[w[i]] == "") continue
+					ok = 0
+					for (c = 1; c <= n; c++) if (jobifs[w[i]] == parts[c]) ok = 1
+					if (!ok) { printf "%s: rule 9: required job %s needs %s, whose if: is not an allowed condition\n", file, j, w[i]; found = 1 }
+				}
+			}
+			delete needs; delete jobifs
+		}
+		FNR == 1 { delete needs; delete jobifs; innee = ""; section = ""; job = ""; instep = 0; seenjobs = 0; topperm = 0 }
 		{
 			raw = $0
 			code = raw
@@ -91,10 +111,17 @@ findings() {
 			}
 			if (section == "jobs" && ind == 4) {
 				if (t ~ /^permissions:/) jobperm = 1
+				innee = ""
+				if (t ~ /^needs:/) {
+					w = t; sub(/^needs:[ \t]*/, "", w); gsub(/[\[\],]/, " ", w)
+					needs[job] = " " w " "
+					if (trim(w) == "") innee = job
+				}
 				if (t ~ /^if:/) {
 					jobif = trim(substr(t, 4))
 					if (jobif ~ /^\${{.*}}$/) jobif = trim(substr(jobif, 4, length(jobif) - 5))
 					if (jobif ~ /^".*"$/ || jobif ~ /^\047.*\047$/) jobif = substr(jobif, 2, length(jobif) - 2)
+					jobifs[job] = jobif
 				}
 			}
 			# Steps: "- " at indent 6 starts one.
@@ -116,6 +143,10 @@ findings() {
 				if (u ~ /^actions\/checkout@/) checkout = 1
 				if (job == "sign" && base == "release.yml" && u ~ /^actions\/setup-/) bad(7, "the sign job must not use " u)
 			}
+			# Rule 9
+			if (innee != "" && ind == 6 && t ~ /^- /) { w = t; sub(/^- /, "", w); needs[innee] = needs[innee] " " w " " }
+			if (t ~ /^(- )?continue-on-error:/) bad(9, "continue-on-error is not allowed: " t)
+			if (ind >= 6 && t ~ /^(- )?if:[ \t]*(\$\{\{[ \t]*)?(false|0|"false"|\047false\047)[ \t]*(\}\})?$/) bad(9, "a step that never runs: " t)
 			# Rule 8
 			if (code ~ /key:.*hashFiles\(/ && code ~ /deploy\/test\/ci/ && code !~ /deploy\/test\/ci\/\*\*/) bad(8, "the cache key must hash deploy/test/ci/**, not part of it: " t)
 			# Rule 5
@@ -127,6 +158,7 @@ findings() {
 		}
 		END {
 			endjob()
+			endfile()
 			if (seenjobs && !topperm) { printf "%s:1: rule 3: no top-level permissions:\n", file; found = 1 }
 			exit 0
 		}' "$f"
@@ -210,6 +242,13 @@ expect "an if on the check job"           6 "0,/^    runs-on: ubuntu-24.04/s//  
 expect "the wrong if on e2e"              6 "s/^    if: github.event_name != 'pull_request' .*/    if: github.event_name == 'push'/"
 expect "the draft if on dco"              6 "s/^    if: github.event_name == 'pull_request'/    if: $DRAFT/"
 expect "a cache key that hashes only the Dockerfile" 8 "s|^      - run: make ci|      - uses: actions/cache@$SHA # v6.1.0\n        with:\n          key: k-\\\${{ hashFiles('deploy/test/ci/Dockerfile') }}|"
+expect "continue-on-error on a step"      9 "s|^      - run: make ci|      - run: make ci\n        continue-on-error: true|"
+expect "continue-on-error on a job"       9 "0,/^    runs-on: ubuntu-24.04/s//    continue-on-error: true\n    runs-on: ubuntu-24.04/"
+expect "a step with if: false"            9 "s|^      - run: make ci|      - if: false\n        run: make ci|"
+# A required job that needs a job with some other `if:` (here a non-required one) would be skipped with it.
+{ good | sed -e "s|^    if: github.event_name == 'pull_request'|    needs: lint\n    if: github.event_name == 'pull_request'|"
+  printf '  lint:\n    if: github.ref == '"'"'x'"'"'\n    runs-on: ubuntu-24.04\n    permissions: {}\n    steps:\n      - run: echo\n'; } >"$tmp/bad.yml"
+grep -q 'rule 9:' <<<"$(findings "$tmp/bad.yml")" || fail "self-test: 'a required job needing a job with another if' was not refused under rule 9"
 expect "secrets in ci.yml"                7 "s/- run: make ci/- run: echo \${{ secrets.TOKEN }}/" ci.yml
 
 # release.yml: secrets belong to the sign job and to no other, and the sign job runs no build tool.
