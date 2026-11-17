@@ -315,4 +315,112 @@ expect_refused "a bumped htmx file with a stale SBOM entry" "lists htmx" 1.0.0-r
 git -C "$proj" reset -q --hard HEAD~1
 expect_ok 1.0.0-rc.1
 
+# ===================================================================================================
+# sign.sh, with a real throwaway gpg key and stub rpm tools (rpmsign appends a signature line, rpmkeys
+# reports one only for a signed file).
+# ===================================================================================================
+export GNUPGHOME="$tmp/gh"
+mkdir -m 700 "$GNUPGHOME"
+mkkey() { # DIR NAME: a primary (certify only) with one signing subkey; writes DIR/pub.asc, DIR/subkey.gpg, DIR/full.gpg
+	local d="$1" fpr
+	mkdir -p "$d"
+	gpg --batch --pinentry-mode loopback --passphrase '' --quick-generate-key "$2 <$2@example.invalid>" ed25519 cert 1d 2>/dev/null
+	fpr="$(gpg --batch --list-keys --with-colons 2>/dev/null "$2@example.invalid" | awk -F: '$1 == "fpr" { print $10; exit }')"
+	gpg --batch --pinentry-mode loopback --passphrase '' --quick-add-key "$fpr" ed25519 sign 1d 2>/dev/null
+	gpg --batch --armor --export "$fpr" 2>/dev/null >"$d/pub.asc"
+	gpg --batch --export-secret-subkeys "$fpr" 2>/dev/null >"$d/subkey.gpg"
+	gpg --batch --export-secret-keys "$fpr" 2>/dev/null >"$d/full.gpg"
+}
+mkkey "$tmp/k1" release
+mkkey "$tmp/k2" other
+# The keys above live in the test's own GNUPGHOME; sign.sh makes its own, so it starts empty.
+unset GNUPGHOME
+
+cat >"$stubs/rpmsign" <<'SH'
+#!/usr/bin/env bash
+# Stub for `rpmsign --addsign --define ... FILE`: appends "SIG:<key>" where the key comes from the
+# _gpg_name define, and refuses to run without the __gpg define (the real macro points at a missing gpg2).
+set -euo pipefail
+name="" gpg="" f=""
+while [ "$#" -gt 0 ]; do case "$1" in --define) case "$2" in _gpg_name\ *) name="${2#_gpg_name }" ;; __gpg\ *) gpg="${2#__gpg }" ;; esac; shift 2 ;; --addsign) shift ;; *) f="$1"; shift ;; esac; done
+[ -x "$gpg" ] || { echo "stub rpmsign: __gpg is not defined as an executable" >&2; exit 1; }
+[ -z "${STUB_NO_SIGN:-}" ] || exit 0
+printf 'SIG:%s\n' "${name%!}" >>"$f"
+if [ -n "${STUB_CHANGE_PAYLOAD:-}" ]; then printf 'extra\n' >>"$f"; fi
+SH
+cat >"$stubs/rpmkeys" <<'SH'
+#!/usr/bin/env bash
+# Stub for `rpmkeys --dbpath DB --import KEY` and `rpmkeys --dbpath DB -Kv FILE`. Like the real one, an
+# unsigned file exits 0 and prints no signature line.
+set -euo pipefail
+db="$2"; shift 2
+case "$1" in
+--import) cp "$2" "$db/key.asc" ;;
+-Kv)
+	f="$2"
+	echo "$f:"
+	if [ -n "${STUB_KEYID_OVERRIDE:-}" ]; then echo "    Header V4 EdDSA/SHA512 Signature, key ID ${STUB_KEYID_OVERRIDE}: OK"; exit 0; fi
+	if grep -aq '^SIG:' "$f"; then
+		fp="$(grep -a '^SIG:' "$f" | tail -1 | cut -d: -f2)"
+		echo "    Header V4 EdDSA/SHA512 Signature, key ID $(tr 'A-F' 'a-f' <<<"${fp: -8}"): OK"
+	fi
+	echo "    Header SHA256 digest: OK" ;;
+esac
+SH
+chmod +x "$stubs/rpmsign" "$stubs/rpmkeys"
+
+# mkdist DIR: the unsigned artifact of a build job, with the checksums in the shape release.sh writes.
+mkdist() {
+	local d="$1"
+	rm -rf "${d:?}"; mkdir -p "$d"
+	printf 'rpm payload agent\n' >"$d/clamfleet-agent-1.0.0~rc.1-1.x86_64.rpm"
+	printf 'rpm payload server\n' >"$d/clamfleet-server-1.0.0~rc.1-1.x86_64.rpm"
+	printf 'tarball\n' >"$d/clamfleet_1.0.0-rc.1_linux_amd64.tar.gz"
+	printf 'notes\n' >"$d/notes.md"
+	(cd "$d" && find . -maxdepth 1 -type f ! -name notes.md ! -name SHA256SUMS -printf '%f\n' | LC_ALL=C sort | xargs -d '\n' sha256sum >SHA256SUMS)
+}
+run_sign() { # DIR PUBKEY [SUMS-SHA] [SUBKEYFILE]
+	local d="$1" pub="$2" sums="${3:-}" key="${4:-$tmp/k1/subkey.gpg}"
+	[ -n "$sums" ] || sums="$(sha256sum "$d/SHA256SUMS" | cut -d' ' -f1)"
+	(RELEASE_SIGNING_SUBKEY_FD=7 "$rel/sign.sh" "$d" "$pub" "$sums" 7<"$key") >"$tmp/out" 2>&1
+}
+sign_refused() { # NAME TEXT DIR PUBKEY [SUMS] [KEY]
+	if run_sign "${@:3}"; then fail "sign.sh: $1: accepted"; fi
+	grep -qF -- "$2" "$tmp/out" || fail "sign.sh: $1: refused for another reason (wanted '$2'):
+$(cat "$tmp/out")"
+}
+
+d="$tmp/dist"
+mkdist "$d"
+before="$(sha256sum "$d/SHA256SUMS" | cut -d' ' -f1)"
+run_sign "$d" "$tmp/k1/pub.asc" || fail "sign.sh: a good run was refused:
+$(cat "$tmp/out")"
+[ -s "$d/SHA256SUMS.asc" ] || fail "sign.sh wrote no SHA256SUMS.asc"
+grep -q "^SIG:" "$d/clamfleet-agent-1.0.0~rc.1-1.x86_64.rpm" || fail "the rpm was not signed"
+[ "$before" != "$(sha256sum "$d/SHA256SUMS" | cut -d' ' -f1)" ] || fail "SHA256SUMS was not regenerated after signing"
+(cd "$d" && sha256sum -c --quiet SHA256SUMS) || fail "the regenerated SHA256SUMS does not match the signed files"
+if grep -q notes.md "$d/SHA256SUMS"; then fail "notes.md is not an asset"; fi
+
+mkdist "$d"
+sign_refused "a checksum file that is not the one built" "the build job reported" "$d" "$tmp/k1/pub.asc" "$(printf '0%.0s' $(seq 64))"
+mkdist "$d"; printf 'x' >>"$d/clamfleet_1.0.0-rc.1_linux_amd64.tar.gz"
+sign_refused "an asset that no longer matches SHA256SUMS" "do not match SHA256SUMS" "$d" "$tmp/k1/pub.asc"
+mkdist "$d"
+sign_refused "a subkey whose primary is not the published one" "the published key's" "$d" "$tmp/k2/pub.asc"
+mkdist "$d"
+sign_refused "an export that carries the primary secret key" "PRIMARY secret key" "$d" "$tmp/k1/pub.asc" "" "$tmp/k1/full.gpg"
+mkdist "$d"
+STUB_NO_SIGN=1 sign_refused "an rpmsign that signs nothing (rpmkeys exits 0 on an unsigned rpm)" "no 'Signature, key ID" "$d" "$tmp/k1/pub.asc"
+mkdist "$d"
+STUB_CHANGE_PAYLOAD=1 sign_refused "signing that changes the payload" "changed the payload digest" "$d" "$tmp/k1/pub.asc"
+mkdist "$d"
+STUB_KEYID_OVERRIDE=deadbeef sign_refused "a signature line of another key" "no 'Signature, key ID" "$d" "$tmp/k1/pub.asc"
+mkdist "$d"
+rm "${d:?}"/*.rpm
+(cd "$d" && find . -maxdepth 1 -type f ! -name notes.md ! -name SHA256SUMS -printf '%f\n' | xargs sha256sum >SHA256SUMS)
+sign_refused "no rpm at all" "no .rpm" "$d" "$tmp/k1/pub.asc"
+# The descriptor must be given and must be a number.
+mkdist "$d"
+if (RELEASE_SIGNING_SUBKEY_FD="" "$rel/sign.sh" "$d" "$tmp/k1/pub.asc" "$(sha256sum "$d/SHA256SUMS" | cut -d' ' -f1)") >"$tmp/out" 2>&1; then fail "sign.sh ran without a key descriptor"; fi
+
 echo "release_test: ok"
