@@ -67,6 +67,7 @@ run)
 	echo "$net" >"$FAKE_STATE"
 	;;
 exec)
+	if [ "$3" = systemctl ] && [ "${FAKE_HISTORY_INACTIVE:-0}" = 1 ]; then exit 3; fi
 	if [ "$3" = journalctl ]; then
 		[ "${FAKE_JOURNAL_FAILS:-0}" = 1 ] && exit 1
 		echo "journal line of the old container"
@@ -144,6 +145,16 @@ PATH="$tmp:$PATH" FAKE_LOG="$tmp/log" FAKE_JOURNAL_FAILS=1 E2E_JOURNAL_DIR="$jd"
 
 # And the Makefile's trap really does it, before the container is removed.
 grep -qE "trap '[^']*save-journal\\.sh[^']*docker rm" "$here/../../Makefile" || { echo "FAIL: make e2e-docker's exit trap does not save the journal before removing the container" >&2; exit 1; }
+
+# Ready also means the replay of the recorded freshclam history has finished.
+if drun FAKE_HISTORY_INACTIVE=1 TIMEOUT=3; then
+	echo "FAIL: the Docker reset was ready while the freshclam history replay was not active" >&2
+	exit 1
+fi
+if grep -q 'clamdscan' "$tmp/log"; then
+	echo "FAIL: the Docker reset scanned before the freshclam history replay was active" >&2
+	exit 1
+fi
 
 if drun E2E_IMAGE=; then
 	echo "FAIL: the Docker reset ran without E2E_IMAGE" >&2

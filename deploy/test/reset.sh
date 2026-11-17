@@ -100,7 +100,10 @@ ready() {
 	if [ "$RESET_RUNTIME" = incus ]; then
 		ssh "$INCUS_HOST" "sudo incus exec $CT -- clamdscan --no-summary $READY_FILE </dev/null >/dev/null 2>&1"
 	else
-		docker exec "$CT" clamdscan --no-summary "$READY_FILE" </dev/null >/dev/null 2>&1
+		# The image replays a recorded freshclam run into the journal at boot (deploy/test/ci): tests
+		# read it, so "ready" means that oneshot has finished too, not only that clamd scans.
+		docker exec "$CT" systemctl is-active --quiet clamfleet-ci-freshclam-history.service </dev/null >/dev/null 2>&1 &&
+			docker exec "$CT" clamdscan --no-summary "$READY_FILE" </dev/null >/dev/null 2>&1
 	fi
 }
 deadline=$(( start + TIMEOUT ))
