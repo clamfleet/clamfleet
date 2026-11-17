@@ -10,7 +10,7 @@ BIN := bin
 VERSION ?= 0.0.0-dev
 LDFLAGS := -s -w -X github.com/clamfleet/clamfleet/internal/version.Version=$(VERSION)
 
-.PHONY: tools ci lint-workflows mod-check test-ci build vet staticcheck test scripts-test sqlc-check generate check packages e2e e2e-image e2e-docker e2e-apparmor e2e-el9 e2e-idp e2e-web fixtures webfixture web-fixture
+.PHONY: tools ci lint-workflows mod-check test-ci build vet staticcheck test scripts-test sqlc-check generate check packages e2e e2e-image e2e-docker record-freshclam-history e2e-apparmor e2e-el9 e2e-idp e2e-web fixtures webfixture web-fixture
 
 # Build-time tools and their pins. The same versions are in CLAUDE.md and docs/testing.md: change all
 # together. They are installed with `go install`, never added to go.mod (the Go `tool` directive would
@@ -133,6 +133,11 @@ E2E_IMAGE ?= clamfleet-e2e:ci
 E2E_CT := clamfleet-ci
 e2e-image:
 	docker build -t $(E2E_IMAGE) -f deploy/test/ci/Dockerfile deploy/test/ci
+
+# Re-records deploy/test/ci/testdata (the freshclam run the CI image carries) from the Incus test container.
+# Needs the Incus suite's settings (CFT_EXEC, INCUS_HOST). Never hand-edit the recorded files.
+record-freshclam-history:
+	./deploy/test/record-freshclam-history.sh
 
 # Needs a Docker daemon and the image (`make e2e-image`). The test gate with -expect-pkg fails the run when
 # the set of passed top-level tests differs from the set the package declares, so a narrowed -run cannot pass.

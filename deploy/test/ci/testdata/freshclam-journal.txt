@@ -1,0 +1,18 @@
+Started clamav-freshclam.service - ClamAV virus database updater.
+Thu Nov 12 10:01:08 2026 -> ClamAV update process started at Thu Nov 12 10:01:08 2026
+WARNING: Thu Nov 12 10:01:08 2026 -> Your ClamAV installation is OUTDATED!
+WARNING: Thu Nov 12 10:01:08 2026 -> Local version: 1.4.3 Recommended version: 1.4.6
+Thu Nov 12 10:01:08 2026 -> DON'T PANIC! Read https://docs.clamav.net/manual/Installing.html
+Thu Nov 12 10:01:08 2026 -> daily database available for download (remote version: 28181)
+Thu Nov 12 10:01:09 2026 -> Testing database: '/var/lib/clamav/tmp.71c4a565f3/clamav-099fabfa8e3597feed66b9f7fc66e5c8.tmp-daily.cvd' ...
+Thu Nov 12 10:01:11 2026 -> Database test passed.
+Thu Nov 12 10:01:11 2026 -> daily.cvd updated (version: 28181, sigs: 355854, f-level: 90, builder: svc.clamav-publisher)
+Thu Nov 12 10:01:11 2026 -> main database available for download (remote version: 63)
+Thu Nov 12 10:01:14 2026 -> Testing database: '/var/lib/clamav/tmp.71c4a565f3/clamav-c706d3736d70e8681d60a36b3e539695.tmp-main.cvd' ...
+Thu Nov 12 10:01:16 2026 -> Database test passed.
+Thu Nov 12 10:01:16 2026 -> main.cvd updated (version: 63, sigs: 3287027, f-level: 90, builder: tomjudge)
+Thu Nov 12 10:01:16 2026 -> bytecode database available for download (remote version: 339)
+Thu Nov 12 10:01:16 2026 -> Testing database: '/var/lib/clamav/tmp.71c4a565f3/clamav-cb82e9c9472a6eced79b5ffb0ba5bc0f.tmp-bytecode.cvd' ...
+Thu Nov 12 10:01:16 2026 -> Database test passed.
+Thu Nov 12 10:01:16 2026 -> bytecode.cvd updated (version: 339, sigs: 80, f-level: 90, builder: nrandolp)
+WARNING: Thu Nov 12 10:01:16 2026 -> Clamd was NOT notified: Can't connect to clamd through /var/run/clamav/clamd.ctl: No such file or directory
