@@ -435,6 +435,10 @@ mkdist "$d"; mkdir "$d/sub"
 sign_refused "a directory" "not a regular file" "$d" "$tmp/k1/pub.asc"
 mkdist "$d"; ln -s notes.md "$d/link"
 sign_refused "a symlink" "not a regular file" "$d" "$tmp/k1/pub.asc"
+# Two keys in one stream: the awk parsing stops at the first, so the count of `sec` records must catch it.
+cat "$tmp/k1/subkey.gpg" "$tmp/k2/subkey.gpg" >"$tmp/two.gpg"
+mkdist "$d"
+sign_refused "two keys imported at once" "not exactly one key" "$d" "$tmp/k1/pub.asc" "" "$tmp/two.gpg"
 mkdist "$d"
 rm "${d:?}"/*.rpm
 (cd "$d" && find . -maxdepth 1 -type f ! -name SHA256SUMS -printf '%f\n' | xargs sha256sum >SHA256SUMS)
