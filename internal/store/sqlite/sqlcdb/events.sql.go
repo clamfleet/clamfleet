@@ -218,7 +218,7 @@ type InsertEventParams struct {
 // ESCAPE clause (sqlc's SQLite parser rejects LIKE ... ESCAPE) or unescaped LIKE,
 // where the wildcard and escape rules differ between SQLite and PostgreSQL.
 // instr() has no wildcards, so % _ and \ in the filter match themselves.
-// Maintainer decision (Gabriel), recorded as an exception to the portability rule.
+// Maintainer decision, recorded as an exception to the portability rule.
 // When a PostgreSQL backend is added, swap it in all four queries for the
 // equivalent form: strpos(lower(signature), lower($n)) > 0.
 // alert_pending = 1 only ever lands on a NEW row: a conflict on the natural key

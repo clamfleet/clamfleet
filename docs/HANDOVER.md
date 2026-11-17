@@ -11,7 +11,7 @@ Central management and reporting for ClamAV on Linux servers.
 | --- | --- |
 | Status | Milestones 1 to 6b built; 6c (release engineering: CI, signed releases, project files) in progress |
 | Project type | Open source, public repository, community contributions expected |
-| Maintainer | Gabriel |
+| Maintainer | The ClamFleet Authors (hi@madalin.me) |
 | Target fleet | 50 to 100 Linux servers |
 | Languages | Go (server and agent), htmx (UI) |
 | Database | SQLite (Postgres possible later behind the same interface) |
