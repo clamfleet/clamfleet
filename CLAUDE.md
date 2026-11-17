@@ -20,7 +20,7 @@ that is missing from the log gets a line there in the same change).
 - `make e2e-el9`: the rpm and the detection path on the AlmaLinux 9 VM (SELinux enforcing); part of milestone 6 acceptance, together with `make e2e` and `make e2e-apparmor`. Needs `CFE_EXEC` and `CFE_HOST`; fails, never skips (`docs/testing.md`).
 - `make e2e-idp`: the real server against OpenLDAP and Keycloak in the Incus container `clamfleet-idp` (milestone 6b). Needs `CFI_EXEC` and `CFI_HOST`; fails, never skips. Built with `-tags e2e_idp` without `e2e` (`docs/testing.md`).
 - `make e2e-apparmor`: the detection path on the VM `clamfleet-aa` (Debian 13, AppArmor enforcing); part of milestone 5 acceptance, together with `make e2e`. Needs `CFA_EXEC` and `CFA_HOST`; it fails, never skips (see `docs/testing.md`).
-- `make e2e-web`: Playwright browser tests of the console (`e2e/web`, `@playwright/test` 1.63.0 on Chromium 1243 from `/opt/playwright/browsers`); run from a fresh shell so `/opt/env.sh` is loaded.
+- `make e2e-web`: Playwright browser tests of the console (`e2e/web`, `@playwright/test` 1.63.0 on Chromium 1243 from the browser cache `PLAYWRIGHT_BROWSERS_PATH` points at); run from a shell that has that variable set.
 - Tests in `cmd/*` and `hack/webfixture` build binaries that `go test` caching cannot see: use `-count=1` when changing code they cover.
 - `make fixtures`: re-records `internal/agent/testdata` from the container. Never hand-edit recorded files.
 - `make generate` runs sqlc over `migrations/sqlite` and `internal/store/sqlite/queries`; `make check` runs `sqlc diff`. Never hand-edit `internal/store/sqlite/sqlcdb`.
