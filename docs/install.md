@@ -15,16 +15,16 @@ static and should work.
 ## Verifying a download
 
 A release holds the tarball, the four packages, two SBOMs, `SHA256SUMS` and its signature `SHA256SUMS.asc`
-(`clamfleet-agent_1.0.0~rc.1_amd64.deb`, `clamfleet-agent-1.0.0~rc.1-1.x86_64.rpm`, and so on; see
+(`clamfleet-agent_1.0.0-rc.1_amd64.deb`, `clamfleet-agent-1.0.0-rc.1-1.x86_64.rpm`, and so on; the package's own version is `1.0.0~rc.1`, but file names carry no `~`; see
 [releasing.md](releasing.md) for the list). The signing key is `deploy/release/clamfleet-release.asc` in this repository.
 
-**Every download.** Import the key, then **compare its fingerprint with one published somewhere other than this
+**Every download.** Look at the key's fingerprints and **compare them with the ones published somewhere other than this
 repository** (the README and `SECURITY.md` show it; so do the maintainer's website and keys.openpgp.org): a
 replaced key file would otherwise vouch for itself.
 
 ```sh
+gpg --show-keys --with-subkey-fingerprints clamfleet-release.asc   # compare BEFORE importing, with the independent channel
 gpg --import clamfleet-release.asc
-gpg --fingerprint "ClamFleet"            # compare with the independent channel
 gpg --verify SHA256SUMS.asc SHA256SUMS   # must say "Good signature"
 sha256sum -c --ignore-missing SHA256SUMS # every file you downloaded must say OK
 ```

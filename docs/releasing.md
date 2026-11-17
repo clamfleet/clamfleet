@@ -14,12 +14,12 @@ Contributors do not need this page; users who want to check a download need [doc
 | Asset | Name | Signed by |
 |---|---|---|
 | Binaries, `LICENSE`, `README.md` | `clamfleet_VERSION_linux_amd64.tar.gz` | `SHA256SUMS.asc` |
-| Agent and server packages | `clamfleet-agent_VERSION_amd64.deb`, `clamfleet-server_VERSION_amd64.deb` (an rc is `1.0.0~rc.1`) | `SHA256SUMS.asc` |
+| Agent and server packages | `clamfleet-agent_VERSION_amd64.deb`, `clamfleet-server_VERSION_amd64.deb` | `SHA256SUMS.asc` |
 | | `clamfleet-agent-VERSION-1.x86_64.rpm`, `clamfleet-server-VERSION-1.x86_64.rpm` | the rpm itself **and** `SHA256SUMS.asc` |
 | SBOMs (CycloneDX JSON) | `clamfleet-agent_VERSION_sbom.cdx.json`, `clamfleet-server_VERSION_sbom.cdx.json` | `SHA256SUMS.asc` |
 | Checksums and their signature | `SHA256SUMS`, `SHA256SUMS.asc` | the release subkey |
 
-amd64 only in v1. The `.deb` files carry no per-file signature: nothing on a stock Debian checks one (dpkg
+amd64 only in v1. **File names carry the plain version (`1.0.0-rc.1`), never `~`**: the version inside an rc package is `1.0.0~rc.1` (so it sorts before `1.0.0`), but GitHub likely renames a `~` in an asset name, and `SHA256SUMS` would then list names that do not exist (`sha256sum -c --ignore-missing` would skip the packages without a word). `release.sh` renames the files, and `publish` fails unless the asset names GitHub holds equal the files uploaded. `SHA256SUMS` also lists `notes.md` (the release text, not an uploaded asset), so the notes are covered by the checksum the sign job compares with the build job's. The .deb files carry no per-file signature: nothing on a stock Debian checks one (dpkg
 ships with `no-debsig`, and `dpkg-sig` is not in Debian 13), so the signed checksums are the check. The
 `.rpm` files are signed with the release subkey, which `rpm -Kv` verifies after `rpm --import`.
 The server SBOM lists the vendored htmx (a JavaScript file a Go SBOM tool cannot see) next to the Go modules.
@@ -44,15 +44,25 @@ branch, rename `## Unreleased` to the heading and start a new empty `## Unreleas
 2. Merge it. The push to `main` runs full CI on the merge commit; **wait for it to pass**: the release
    workflow refuses a commit with no successful push run of `ci.yml` on `main` for exactly that SHA.
 3. Tag that merge commit with **your signature** (an SSH key whose public half is in the repository variable
-   `RELEASE_ALLOWED_SIGNERS`) and push the tag:
+   `RELEASE_ALLOWED_SIGNERS`), check the signature locally the way the workflow will, and only then push:
 
    ```sh
-   git tag -s -m "ClamFleet 1.0.0-rc.1" v1.0.0-rc.1 <merge-commit>
+   git -c gpg.format=ssh -c user.signingkey=~/.ssh/release_signing.pub \
+       tag -s -m "ClamFleet 1.0.0-rc.1" v1.0.0-rc.1 <merge-commit>
+
+   # The same allowed-signers format as the variable: one `principal key` line per signer.
+   printf 'maintainer %s\n' "$(cut -d' ' -f1,2 ~/.ssh/release_signing.pub)" >/tmp/allowed_signers
+   git -c gpg.ssh.allowedSignersFile=/tmp/allowed_signers verify-tag v1.0.0-rc.1   # must print "Good ... signature"
+
    git push origin v1.0.0-rc.1
    ```
 
-   The tag must be annotated; a lightweight tag is refused. Tags cannot be moved or deleted (ruleset
-   `release-tags`), so a wrong tag costs a new version, not a retag.
+   (`user.signingkey` is the public key file when the private key is in `ssh-agent`, or the private key file.)
+   The tag must be annotated; a lightweight tag is refused. The ruleset `release-tags` restricts creating,
+   updating and deleting `v*` tags to the maintainer, but a repository administrator can bypass a ruleset,
+   so a tag is not immutable: `publish` re-reads the tag through the API and refuses unless it still points at
+   the object `verify` accepted, which catches a tag moved during a run. A wrong tag after publishing costs a new
+   version, not a retag.
 4. The workflow runs `verify` and `build`, then waits at `sign` for your approval of the `release`
    environment (Actions, the run, "Review deployments"). Check the `verify` log first: it names the signer and
    the CI run it accepted.
@@ -96,10 +106,20 @@ Done once, offline, by the maintainer (never on a fleet machine):
 
 1. A certify-only primary key and one signing subkey, RSA-4096 (tested on EL9's rpm 4.16), both expiring in
    two years. Store the primary key and its **revocation certificate** offline.
-2. Export **the subkey only**, without a passphrase, into a temporary `GNUPGHOME` on your machine:
-   `gpg --export-secret-subkeys FINGERPRINT > subkey.gpg`, then `gpg --armor --export-secret-subkeys` for
-   the secret (the armored form is what goes into the environment secret). A passphrase kept in the same
-   secret store would protect nothing, and `sign.sh` refuses an export that still carries the primary secret key.
+2. Export **the subkey only**, without a passphrase. If the subkey has a passphrase (it normally does in
+   your offline keyring), remove it in a temporary home so the offline keyring is never changed:
+
+   ```sh
+   export GNUPGHOME="$(mktemp -d)"                                  # a temporary home, removed at the end
+   gpg --homedir ~/offline-gnupg --export-secret-subkeys FINGERPRINT | gpg --batch --import
+   gpg --pinentry-mode loopback --passwd FINGERPRINT                # old passphrase, then an EMPTY new one
+   gpg --armor --export-secret-subkeys FINGERPRINT > subkey.asc     # this file is the environment secret
+   rm -rf "$GNUPGHOME"; unset GNUPGHOME
+   ```
+
+   (`--export-secret-subkeys` exports stubs for the primary, so the temporary home never holds the primary
+   secret key; `sign.sh` refuses an export that does.) A passphrase kept in the same secret store would
+   protect nothing, which is why the export has none. Delete `subkey.asc` once the secret is stored.
 3. Publish the public key as `deploy/release/clamfleet-release.asc` (a pull request), and its **fingerprint on an
    independent channel**: README, `SECURITY.md`, your website, keys.openpgp.org. A user compares the file with
    those, so a replaced `.asc` alone cannot pass.
