@@ -171,8 +171,9 @@ Decided 2026-11-18. R1 decisions 1 and 4 supersede M6 decisions 11 and 12 and th
   "untested" instead of holding the release.
 - **R1 decision 6, fork pull requests on the Incus host.** A level-1 run executes the pull request's code as root in
   VMs on the maintainer's machine. For a fork it is run only after the maintainer has read the diff and said so;
-  `deploy/test/l1-guard.sh` is the speed bump (a pushed branch of this repository passes, anything else needs
-  `L1_APPROVED` set to the full commit SHA). It is not a security boundary. Whether the VMs also lose their route
+  `deploy/test/l1-guard.sh` is the speed bump (a branch of the canonical repository, checked by origin's URL and
+  fetch refspec, passes; anything else needs `L1_APPROVED` set to the full commit SHA). It guards every target that
+  runs the commit on the Incus host: `e2e`, `e2e-apparmor`, `e2e-el9`, `e2e-idp`, `fixtures`, `record-freshclam-history`. It is not a security boundary. Whether the VMs also lose their route
   to the LAN is a separate infrastructure change.
 - **R1 decision 7, who needs a level-1 run.** The globs live in one file, `deploy/test/l1-paths.txt`; a non-required CI
   job prints the verdict in the job summary and the maintainer decides at merge. A commit status plus a gate job was

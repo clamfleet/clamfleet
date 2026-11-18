@@ -137,6 +137,7 @@ export CFT_EXEC INCUS_HOST CFA_EXEC CFA_HOST CFE_EXEC CFE_HOST CFI_EXEC CFI_HOST
 
 e2e:
 	@test -n "$(CFT_EXEC)" -a -n "$(INCUS_HOST)" || { echo "e2e: set CFT_EXEC and INCUS_HOST (environment or local.mk, see local.mk.example)" >&2; exit 1; }
+	./deploy/test/l1-guard.sh
 	$(MAKE) packages VERSION=0.6.0-e2e1
 	$(GO) test -tags e2e -count=1 -timeout 20m -v ./e2e/
 
@@ -153,6 +154,7 @@ e2e-image:
 # Re-records deploy/test/ci/testdata (the freshclam run the CI image carries) from the Incus test container.
 # Needs the Incus suite's settings (CFT_EXEC, INCUS_HOST). Never hand-edit the recorded files.
 record-freshclam-history:
+	./deploy/test/l1-guard.sh
 	./deploy/test/record-freshclam-history.sh
 
 # Needs a Docker daemon and the image (`make e2e-image`). The test gate with -expect-pkg fails the run when
@@ -173,8 +175,9 @@ e2e-docker:
 # milestone 5 acceptance; `make e2e` does not run it because it needs the VM. Without CFA_EXEC and
 # CFA_HOST it FAILS (it never skips). The same suite code runs against the VM: the environment points
 # CFT_EXEC and INCUS_HOST at it, CT/SNAP make deploy/test/reset.sh restore the VM's `clean` snapshot.
-# deploy/test/l1-guard.sh runs first in both L1 targets and in e2e-idp (it also runs the commit as root on the Incus host): it refuses a commit that is on no origin branch
-# (a fork's code) unless L1_APPROVED names it (R1 decision 6, docs/testing.md "Which changes need an L1 run").
+# deploy/test/l1-guard.sh runs first in every target that runs the commit as root on the Incus host (e2e,
+# e2e-apparmor, e2e-el9, e2e-idp, fixtures, record-freshclam-history): it refuses a commit that is on no
+# branch of the canonical origin (a fork's code) unless L1_APPROVED names it (R1 decision 6, docs/testing.md "Which changes need an L1 run").
 e2e-apparmor:
 	@test -n "$(CFA_EXEC)" -a -n "$(CFA_HOST)" || { echo "e2e-apparmor: set CFA_EXEC and CFA_HOST (environment or local.mk, see local.mk.example and docs/testing.md)" >&2; exit 1; }
 	./deploy/test/l1-guard.sh
@@ -205,6 +208,7 @@ e2e-idp:
 		$(GO) test -tags e2e_idp -count=1 -timeout 30m -v ./e2e/
 
 fixtures:
+	./deploy/test/l1-guard.sh
 	./deploy/test/capture-fixtures.sh
 
 # Browser fixture (docs/testing.md "Browser fixture"): a throwaway server on 127.0.0.1 with
