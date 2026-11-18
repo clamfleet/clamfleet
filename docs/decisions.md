@@ -20,6 +20,7 @@ How to read it:
 - Plan-section references ("plan 4.8", `docs/plans/...`) appear only in older commits. They point at those private
   working notes. Nothing needs the plan to be understood: the user documentation in this directory describes the
   behaviour.
+- Release 1.0 (distribution support) cites its decisions as "R1 decision <n>", numbered in the order of its section.
 - A later decision can change an earlier one. The line says so where it matters.
 
 ## Milestone 1: the agent
@@ -118,9 +119,11 @@ How to read it:
   presets. The first server install creates the secret key file. A purge never deletes the database or the key file.
 - **M6 decision 10, SELinux.** A small module: one label for the detection spool and permission for clamd's domain to
   write there, and nothing else. It is installed at priority 300 only.
-- **M6 decision 11, test machines.** Throwaway machines: a Debian 13 VM with AppArmor, an AlmaLinux 9 VM with SELinux
+- **M6 decision 11, test machines.** (Superseded by R1 decision 1 for the machines: the Rocky Linux 10 VM and the
+  Ubuntu runner job join them.) Throwaway machines: a Debian 13 VM with AppArmor, an AlmaLinux 9 VM with SELinux
   enforcing as the RHEL 9 stand-in, and a Debian 13 container with OpenLDAP and Keycloak for 6b.
-- **M6 decision 12, Debian 12.** Not in the supported list; untested.
+- **M6 decision 12, Debian 12.** Not in the supported list; untested. (Superseded by R1 decision 4: Debian 12 is
+  install-tested until 2028-06-30.)
 - **M6 decision 13, container image.** None in v1.
 - **M6 decision 15, certificate reload.** `systemctl reload` (SIGHUP) re-reads certificate, key and client CA, all or
   nothing; a broken new file keeps the old one.
@@ -144,3 +147,37 @@ How to read it:
 - **M6 decision 22, LDAP encryption.** `ldaps://` or StartTLS, except to a directory on the same machine. Unlike
   alert receivers (M4 decision 19) there is no plaintext to private networks, because LDAP carries every user's
   password.
+
+## Release 1.0: distribution support
+
+Decided 2026-11-18. R1 decisions 1 and 4 supersede M6 decisions 11 and 12 and the specification's section 15, question 5
+(`docs/HANDOVER.md`).
+
+- **R1 decision 1, the test matrix.** Three Incus VMs run the full level-1 scenarios with the mandatory access control
+  enforcing: Debian 13 (AppArmor), AlmaLinux 9 (SELinux) and Rocky Linux 10 (SELinux). Ubuntu 24.04 and 26.04 get the
+  same level on the GitHub-hosted runner VM (AppArmor), on every ready pull request. Level 2 (a systemd container on a
+  runner, on every ready pull request) covers Debian 12, Ubuntu 22.04, Rocky Linux 9 and AlmaLinux 10; Debian 13 stays
+  the existing `e2e` job. One VM per release was rejected for its monthly snapshot refresh and RAM; the runner is free
+  and already runs Ubuntu with AppArmor on.
+- **R1 decision 2, EL vendors.** Rocky Linux is the bug-for-bug RHEL rebuild and AlmaLinux the ABI-compatible one; one of
+  each is tested at both levels so the README can name both, and neither lets it say "tested on RHEL".
+- **R1 decision 3, not supported.** EL8 has no test leg and is not supported. CentOS Stream and RHEL itself are
+  "untested" (expected to work): Stream runs ahead of RHEL and would turn CI red for reasons that are not ours.
+- **R1 decision 4, end dates.** Ubuntu 22.04 is supported until 2027-05-31 (the end of its standard support, and its
+  runner image goes away in 2027-04, so it is a container leg only). Debian 12 is "install-tested, Debian LTS" until
+  2028-06-30.
+- **R1 decision 5, rc.1 and 1.0.0.** v1.0.0-rc.1 ships with its current claim (Debian 13, AlmaLinux 9). The matrix is
+  built on `develop` during the soak and rc.2 carries the wider claim; a target still red at 1.0.0 is listed as
+  "untested" instead of holding the release.
+- **R1 decision 6, fork pull requests on the Incus host.** A level-1 run executes the pull request's code as root in
+  VMs on the maintainer's machine. For a fork it is run only after the maintainer has read the diff and said so;
+  `deploy/test/l1-guard.sh` is the speed bump (a pushed branch of this repository passes, anything else needs
+  `L1_APPROVED` set to the full commit SHA). It is not a security boundary. Whether the VMs also lose their route
+  to the LAN is a separate infrastructure change.
+- **R1 decision 7, who needs a level-1 run.** The globs live in one file, `deploy/test/l1-paths.txt`; a non-required CI
+  job prints the verdict in the job summary and the maintainer decides at merge. A commit status plus a gate job was
+  rejected for now: a gate must be re-run after the status is posted. Every release candidate runs all level-1 targets.
+- **R1 decision 8, adding a required check.** The new check is added to the `protect` ruleset after the pull request
+  that adds the job has run (its run shows the exact check names, which a matrix generates) and before that pull
+  request merges. Adding it earlier would mean guessing the names, and a wrong guess blocks every merge. Renaming or
+  removing a required check still means the ruleset first, then the workflow.
