@@ -231,3 +231,84 @@ func TestGateExpectPkg(t *testing.T) {
 		}
 	})
 }
+
+// -expect-run narrows the declared set the way `go test -run` narrows what runs.
+func TestGateExpectRun(t *testing.T) {
+	dir := writeModule(t)
+	const p = "example.test/m/e"
+	base := options{expectPkg: "./e", tags: "e2e", goBin: "go", dir: dir}
+	with := func(re string) options { o := base; o.expectRun = re; return o }
+
+	t.Run("the matching tests passed", func(t *testing.T) {
+		in := stream("pass|"+p+"|TestOne", "pass|"+p)
+		if code, _, errOut := gate(t, in, with("^TestOne$")); code != 0 {
+			t.Fatalf("code %d:\n%s", code, errOut)
+		}
+	})
+	t.Run("a matching test missing from the stream", func(t *testing.T) {
+		in := stream("pass|"+p+"|TestOne", "pass|"+p)
+		code, _, errOut := gate(t, in, with("^Test(One|Two)$"))
+		if code != 1 || !strings.Contains(errOut, "TestTwo") {
+			t.Fatalf("code %d:\n%s", code, errOut)
+		}
+	})
+	t.Run("an unanchored pattern matches like go test -run", func(t *testing.T) {
+		in := stream("pass|"+p+"|TestOne", "pass|"+p)
+		code, _, errOut := gate(t, in, with("Tw"))
+		if code != 1 || !strings.Contains(errOut, "TestTwo") {
+			t.Fatalf("code %d:\n%s", code, errOut)
+		}
+	})
+	t.Run("a declared test the pattern does not match passing is fine", func(t *testing.T) {
+		in := stream("pass|"+p+"|TestOne", "pass|"+p+"|TestTwo", "pass|"+p)
+		if code, _, errOut := gate(t, in, with("^TestOne$")); code != 0 {
+			t.Fatalf("code %d:\n%s", code, errOut)
+		}
+	})
+	t.Run("an undeclared test passing is still a finding", func(t *testing.T) {
+		in := stream("pass|"+p+"|TestOne", "pass|"+p+"|TestGhost", "pass|"+p)
+		code, _, errOut := gate(t, in, with("^TestOne$"))
+		if code != 1 || !strings.Contains(errOut, "TestGhost") {
+			t.Fatalf("code %d:\n%s", code, errOut)
+		}
+	})
+	t.Run("a pattern matching nothing fails even when other tests passed", func(t *testing.T) {
+		in := stream("pass|"+p+"|TestOne", "pass|"+p)
+		code, _, errOut := gate(t, in, with("^TestNope"))
+		if code != 1 || !strings.Contains(errOut, "matches none") {
+			t.Fatalf("code %d:\n%s", code, errOut)
+		}
+	})
+	t.Run("a test that failed is still a failure", func(t *testing.T) {
+		in := stream("fail|"+p+"|TestOne", "fail|"+p)
+		if code, _, _ := gate(t, in, with("^TestOne$")); code != 1 {
+			t.Fatalf("code %d", code)
+		}
+	})
+	t.Run("a slash outside brackets is refused", func(t *testing.T) {
+		in := stream("pass|"+p+"|TestTwo", "pass|"+p)
+		code, _, errOut := gate(t, in, with("^TestTwo$/sub"))
+		if code != 2 || !strings.Contains(errOut, `unbracketed "/"`) {
+			t.Fatalf("code %d:\n%s", code, errOut)
+		}
+	})
+	t.Run("a slash inside a bracket or after a backslash is not a separator", func(t *testing.T) {
+		in := stream("pass|"+p+"|TestOne", "pass|"+p)
+		for _, re := range []string{"^TestOne[/]?$", `^TestOne\/?$`} {
+			if code, _, errOut := gate(t, in, with(re)); code != 0 {
+				t.Errorf("%s: code %d:\n%s", re, code, errOut)
+			}
+		}
+	})
+	t.Run("an invalid regexp is refused", func(t *testing.T) {
+		if code, _, _ := gate(t, stream("pass|"+p+"|TestOne"), with("(")); code != 2 {
+			t.Fatalf("code %d, want 2", code)
+		}
+	})
+	t.Run("without -expect-pkg it is refused", func(t *testing.T) {
+		code, _, errOut := gate(t, stream("pass|"+p+"|TestOne"), options{expectRun: "TestOne"})
+		if code != 2 || !strings.Contains(errOut, "needs -expect-pkg") {
+			t.Fatalf("code %d:\n%s", code, errOut)
+		}
+	})
+}

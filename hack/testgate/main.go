@@ -24,6 +24,11 @@
 //     and a typo in a filter. Build constraints are evaluated by the go tool (`go list -tags ...`),
 //     never by a regexp, and the files are parsed with go/parser. Subtests are ignored, and so is
 //     TestMain, which is not a test.
+//   - with -expect-run REGEXP (needs -expect-pkg): the same comparison, but the declared set is first
+//     narrowed to the top-level tests REGEXP matches. It is the pattern the caller also gives to
+//     `go test -run`, so a deliberately narrowed run (a VM suite that runs a few tests of a package)
+//     still fails when one of them did not run. A pattern that selects no declared test is a failure,
+//     so a typo cannot pass, and a pattern with an unbracketed "/" is refused (see checkRunPattern).
 //
 // The stream is read to the end even after the first problem, so the log shows every failure.
 // Test output goes to stdout unchanged; the gate's own findings go to stderr.
@@ -45,6 +50,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"unicode"
@@ -65,6 +71,7 @@ type event struct {
 // options are the command line of the gate.
 type options struct {
 	expectPkg string // package whose declared top-level tests must all pass, "" for no check
+	expectRun string // regexp the same `go test -run` gets: narrows the declared set, "" for no narrowing
 	tags      string // build tags for the `go list` of expectPkg
 	goBin     string // the go command, replaceable in tests
 	dir       string // working directory of `go list`, "" for the current one
@@ -73,11 +80,12 @@ type options struct {
 func main() {
 	var o options
 	flag.StringVar(&o.expectPkg, "expect-pkg", "", "package (as `go list` takes it) whose declared top-level tests must equal the set that passed")
+	flag.StringVar(&o.expectRun, "expect-run", "", "regexp given to `go test -run`: only the declared top-level tests it matches are expected (needs -expect-pkg)")
 	flag.StringVar(&o.tags, "tags", "", "build tags for -expect-pkg, as for `go test -tags`")
 	flag.StringVar(&o.goBin, "go", "go", "the go command")
 	flag.Parse()
 	if flag.NArg() != 0 {
-		fmt.Fprintln(os.Stderr, "usage: go test -json ... | testgate [-expect-pkg PKG [-tags TAGS]]")
+		fmt.Fprintln(os.Stderr, "usage: go test -json ... | testgate [-expect-pkg PKG [-tags TAGS] [-expect-run REGEXP]]")
 		os.Exit(2)
 	}
 	os.Exit(run(os.Stdin, os.Stdout, os.Stderr, o))
@@ -87,6 +95,19 @@ func main() {
 // 0 all good, 1 a finding, 2 the gate itself could not do its job (unreadable input, or go list failed).
 // It reads from in and writes to out and errw only, so tests can drive it with recorded streams.
 func run(in io.Reader, out, errw io.Writer, o options) int {
+	// Checked before reading anything: a gate that is mis-called must not look like a verdict on the tests.
+	var runRE *regexp.Regexp
+	if o.expectRun != "" {
+		if o.expectPkg == "" {
+			fmt.Fprintln(errw, "testgate: -expect-run needs -expect-pkg: there is no declared set to narrow")
+			return 2
+		}
+		var err error
+		if runRE, err = compileRunPattern(o.expectRun); err != nil {
+			fmt.Fprintln(errw, "testgate:", err)
+			return 2
+		}
+	}
 	var (
 		passed   = map[string]bool{} // "pkg\x00Test" of top-level tests that passed, for expect-pkg
 		nPass    int
@@ -154,6 +175,20 @@ func run(in io.Reader, out, errw io.Writer, o options) int {
 			fmt.Fprintln(errw, "testgate:", err)
 			return 2
 		}
+		declared := want
+		if runRE != nil {
+			// regexp.MatchString semantics (unanchored), as go test -run applies it to a top-level name.
+			want = map[string]bool{}
+			for name := range declared {
+				if runRE.MatchString(name) {
+					want[name] = true
+				}
+			}
+			if len(want) == 0 {
+				fmt.Fprintf(errw, "testgate: -expect-run %q matches none of the %d tests %s declares (a typo, or wrong -tags)\n", o.expectRun, len(declared), pkg)
+				return 1
+			}
+		}
 		var missing, extra []string
 		for name := range want {
 			if !passed[pkg+"\x00"+name] {
@@ -162,7 +197,7 @@ func run(in io.Reader, out, errw io.Writer, o options) int {
 		}
 		for k := range passed {
 			p, name, _ := strings.Cut(k, "\x00")
-			if p == pkg && !want[name] {
+			if p == pkg && !declared[name] {
 				extra = append(extra, name)
 			}
 		}
@@ -176,7 +211,7 @@ func run(in io.Reader, out, errw io.Writer, o options) int {
 			problems = append(problems, fmt.Sprintf("tests passed that %s does not declare: %s", pkg, strings.Join(extra, ", ")))
 		}
 		if len(missing) == 0 && len(extra) == 0 {
-			fmt.Fprintf(errw, "testgate: all %d top-level tests of %s passed\n", len(want), pkg)
+			fmt.Fprintf(errw, "testgate: all %d expected top-level tests of %s passed\n", len(want), pkg)
 		}
 	}
 
@@ -189,6 +224,33 @@ func run(in io.Reader, out, errw io.Writer, o options) int {
 		fmt.Fprintln(errw, "  "+p)
 	}
 	return 1
+}
+
+// compileRunPattern compiles the -expect-run pattern. `go test -run` splits its pattern at every "/"
+// outside brackets and matches the first element against top-level names and the rest against
+// subtests. The gate only compares top-level names, so it refuses such a pattern: it would silently
+// disagree with go about what was selected. A "/" inside [...] is not a separator for go either.
+func compileRunPattern(pat string) (*regexp.Regexp, error) {
+	inClass := false
+	for i := 0; i < len(pat); i++ {
+		switch pat[i] {
+		case '\\':
+			i++ // an escaped character is never a separator or a bracket
+		case '[':
+			inClass = true
+		case ']':
+			inClass = false
+		case '/':
+			if !inClass {
+				return nil, fmt.Errorf("-expect-run %q contains an unbracketed \"/\": go test -run would split it into per-subtest patterns, which the gate does not model", pat)
+			}
+		}
+	}
+	re, err := regexp.Compile(pat)
+	if err != nil {
+		return nil, fmt.Errorf("-expect-run %q: %w", pat, err)
+	}
+	return re, nil
 }
 
 // declaredTests returns the import path of o.expectPkg and the names of the top-level tests that
