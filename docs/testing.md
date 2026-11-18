@@ -45,8 +45,9 @@ argument, key rotation and `key check`). Everything binds loopback only.
 
 ## CI (`.github/workflows/ci.yml`)
 
-Five jobs. Their names are the repository's required status checks, so a rename blocks merges until the ruleset is
-changed first.
+Five required jobs and one advisory one. The names of the five are the repository's required status checks, so a
+rename blocks merges until the ruleset is changed first; a new required check is added to the ruleset after its pull
+request has run and before it merges (docs/releasing.md, "Adding a required check").
 
 | Job | Runs on | What it proves |
 |---|---|---|
@@ -55,6 +56,7 @@ changed first.
 | `web` | ready pull requests and pushes | the Playwright browser tests of the console (`make e2e-web`), the layer that sees a dead button |
 | `release-dry-run` | ready pull requests and pushes | the release build and signing path with a throwaway key (below, "Release dry run") |
 | `dco` | pull requests | every commit carries a `Signed-off-by` with the author's email (`hack/ci/dco.sh`) |
+| `l1-paths` (not required) | pull requests, drafts too | prints in the job summary whether the change needs an L1 run (below); blocks nothing |
 
 **Draft pull requests run only `check`.** A draft cannot be merged, and marking it ready for review starts the full run.
 A job skipped by its `if:` reports success to a required check, which is safe only because of that rule;
@@ -95,6 +97,25 @@ real `rpm` tools behave as the stubs pretend, so the CI job `release-dry-run` ru
 **throwaway key** generated in the job and verifies the result against that key's public half. The key lives for the job and is
 never an asset. A snapshot (`0.0.0-rc.1`, dirty tree allowed) is never signed or published. What neither can show, the first
 release candidate does (docs/releasing.md).
+
+### Which changes need an L1 run
+
+L1 is the real packages in a VM with the mandatory access control enforcing (`make e2e-apparmor`, `make e2e-el9`;
+CI has no such VM). It is expensive, so a pull request needs one only when it touches what only an enforcing system
+can check: the packaging, the AppArmor and SELinux files, the systemd units, the shipped example configs, the agent
+(`cmd/clamfleet-agent`, `internal/agent` apart from `*_test.go` and `testdata/`), `go.mod` (a toolchain bump can add a
+start-up file read that the AppArmor profile must list), the `Makefile`, and the L1 harness itself. The globs are in
+**one file**, `deploy/test/l1-paths.txt` (its header gives the format); `hack/ci/l1-required.sh BASE HEAD` applies
+them to the merge-base diff and prints `L1 required: <paths>` or `L1 not required`. The `l1-paths` job puts that line
+in the pull request's job summary, and the maintainer decides at merge: nothing blocks. The script fails, and does not
+say "not required", on a range that was not fetched or an empty glob file. `deploy/test/l1paths_test.sh` tests it
+with a row per glob class and exclusion. Every release candidate runs all L1 targets whatever the file says.
+
+A pull request from a fork needs more: an L1 run executes its code as root in VMs on the maintainer's machines, so
+nobody runs one until the maintainer has read the diff and said so. Both L1 targets start with
+`deploy/test/l1-guard.sh`, which refuses a commit that is on no branch of `origin` unless `L1_APPROVED` equals its full
+SHA (approval is per commit; a later push needs a new one). An agent never sets `L1_APPROVED` on its own. This is a
+speed bump against a slip, not a security boundary: whoever has the shell can bypass it.
 
 ## End-to-end tests (`make e2e`)
 

@@ -49,6 +49,11 @@ make e2e-web     # Playwright browser tests of the console
 [docs/testing.md](docs/testing.md) has the prerequisites of each. If you cannot run one, say so in the
 pull request: CI runs them all on a ready pull request.
 
+Some changes (packaging, the AppArmor and SELinux files, the agent) also get an extra test run in virtual
+machines on the maintainer's machines, with the mandatory access control enforcing. A CI job tells the maintainer
+which pull requests those are. For a pull request from a fork that run happens only after he has read your diff,
+because it executes your code there; it may therefore come later than the CI results.
+
 ## Writing code
 
 - **Every source, script and config file starts with two lines**:
