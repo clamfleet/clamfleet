@@ -85,6 +85,7 @@ scripts-test:
 	./deploy/test/headers_test.sh
 	./deploy/test/workflows_test.sh
 	./deploy/test/dco_test.sh
+	./deploy/test/l1paths_test.sh
 	./deploy/test/release_test.sh
 	./deploy/test/webtests_test.sh
 

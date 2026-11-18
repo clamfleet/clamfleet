@@ -1,0 +1,50 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# SPDX-FileCopyrightText: The ClamFleet Authors
+#
+# The changes that need a level-1 (L1) run: the real packages, with the mandatory access control
+# enforcing, in the VMs on the maintainer's machines (docs/testing.md, "Which changes need an L1 run";
+# R1 decision 7 in docs/decisions.md). Read by hack/ci/l1-required.sh, which the `l1-paths` CI job runs
+# and which prints the verdict in the job summary; tested by deploy/test/l1paths_test.sh.
+#
+# Format: one bash pattern per line, matched against the path from the repository root; `*` also
+# matches `/`. A leading `!` excludes. Blank lines and lines starting with `#` are ignored. The LAST
+# line that matches a path decides, so an exclusion must come after the pattern it carves out of.
+# A path that matches nothing does not need an L1 run.
+#
+# Every release candidate runs all L1 targets whatever this file says.
+
+# What the packages install and what the mandatory access control and systemd confine.
+deploy/packaging/*
+deploy/apparmor/*
+deploy/selinux/*
+deploy/systemd/*
+deploy/agent*.yaml.example
+deploy/server.yaml.example
+
+# The agent. A new start-up file read or exec is what an AppArmor profile or an SELinux rule must
+# list, and only an enforcing system shows it. Unit tests and recordings cannot change that.
+cmd/clamfleet-agent/*
+internal/agent/*
+!internal/agent/*_test.go
+!internal/agent/testdata/*
+
+# go.mod: a toolchain bump can add a start-up file read that the AppArmor profile must list.
+go.mod
+# The Makefile builds the packages the L1 targets install.
+Makefile
+
+# The L1 harness itself.
+e2e/apparmor_e2e_test.go
+e2e/el_e2e_test.go
+e2e/el9_e2e_test.go
+e2e/distro_e2e_test.go
+e2e/distro_test.go
+e2e/package_e2e_test.go
+deploy/test/aa-prepare.sh
+deploy/test/el-prepare.sh
+deploy/test/el9-prepare.sh
+deploy/test/host-reset.sh
+deploy/test/runner-prepare.sh
+deploy/test/prepare-agent.sh
+deploy/test/prepare-server.sh
+deploy/test/reset.sh

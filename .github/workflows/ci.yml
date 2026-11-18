@@ -212,3 +212,31 @@ jobs:
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+
+  # NOT a required check, and no required job needs it: it only tells the maintainer whether the pull
+  # request touches what needs a level-1 run (VMs with the mandatory access control enforcing, on his
+  # machines), by printing a line in the job summary (R1 decision 7, docs/testing.md "Which changes
+  # need an L1 run"). Pull requests only: a push has no merge base to compare with. It runs on drafts
+  # too, being cheap. Its name must stay out of the ruleset.
+  l1-paths:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      # fetch-depth: 0 so the merge base is present; l1-required.sh fails, rather than answering
+      # "not required", when either SHA is missing (hack/ci/l1-required.sh).
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      # The SHAs go through env, never into the script text (event fields are injectable).
+      - name: Print the verdict in the job summary
+        run: |
+          verdict="$(hack/ci/l1-required.sh "$BASE_SHA" "$HEAD_SHA")"
+          echo "$verdict"
+          printf '### L1 run\n\n%s\n' "$verdict" >> "$GITHUB_STEP_SUMMARY"
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
