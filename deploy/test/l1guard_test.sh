@@ -18,6 +18,9 @@ export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null
 git init -q -b main "$tmp/origin"
 git -C "$tmp/origin" -c user.name=x -c user.email=x@example.com -c commit.gpgsign=false commit -q --allow-empty -m pushed
 git clone -q "$tmp/origin" "$tmp/work"
+# The fixture's origin is a local path: the canonical-URL check is told to accept exactly it. The real
+# pattern (github.com/clamfleet/clamfleet) is exercised below by running without this variable.
+export L1_GUARD_CANONICAL_URL="$tmp/origin"
 cd "$tmp/work"
 git config user.name x
 git config user.email x@example.com
@@ -61,6 +64,39 @@ git update-ref refs/remotes/fork/main "$local_sha"
 # Once the commit is on a real origin branch it passes without approval.
 git update-ref refs/remotes/origin/feature/x "$local_sha"
 [ "$(run L1_APPROVED=)" = 0 ] || fail "a commit on an origin branch was refused: $(cat "$tmp/out")"
+
+# The refspec rule: an origin that also maps pull requests into its namespace is not trusted, even with
+# a genuine-looking branch name for the commit.
+git config --add remote.origin.fetch '+refs/pull/*/head:refs/remotes/origin/pr/*'
+[ "$(run L1_APPROVED=)" = 1 ] || fail "an origin that maps pull refs was trusted"
+git config --unset-all remote.origin.fetch '\+refs/pull/'
+[ "$(run L1_APPROVED=)" = 0 ] || fail "the default refspec was refused: $(cat "$tmp/out")"
+git config --replace-all remote.origin.fetch '+refs/heads/main:refs/remotes/origin/main'
+[ "$(run L1_APPROVED=)" = 1 ] || fail "a narrowed refspec was trusted"
+git config --replace-all remote.origin.fetch '+refs/heads/*:refs/remotes/origin/*'
+
+# The URL rule: a clone of a fork (origin elsewhere) is not trusted whatever refs it holds.
+git remote set-url origin https://github.com/someone/clamfleet.git
+[ "$(run L1_APPROVED=)" = 1 ] || fail "a non-canonical origin URL was trusted"
+# Without the test override the real pattern applies: the fixture's path is not canonical...
+git remote set-url origin "$tmp/origin"
+code=0
+env -u L1_GUARD_CANONICAL_URL L1_APPROVED= "$guard" >"$tmp/out" 2>&1 || code=$?
+[ "$code" = 1 ] || fail "a local-path origin passed the real pattern (exit $code)"
+# ...and the canonical forms are, with the exact SHA still the only other way in.
+for u in https://github.com/clamfleet/clamfleet https://github.com/clamfleet/clamfleet.git git@github.com:clamfleet/clamfleet.git ssh://git@github.com/clamfleet/clamfleet.git; do
+	git remote set-url origin "$u"
+	code=0
+	env -u L1_GUARD_CANONICAL_URL L1_APPROVED= "$guard" >"$tmp/out" 2>&1 || code=$?
+	[ "$code" = 0 ] || fail "canonical origin $u was refused: $(cat "$tmp/out")"
+done
+for u in https://github.com/clamfleet/clamfleet-evil https://github.com/evil/clamfleet https://evilgithub.com/clamfleet/clamfleet https://github.com/clamfleet/clamfleet/x; do
+	git remote set-url origin "$u"
+	code=0
+	env -u L1_GUARD_CANONICAL_URL L1_APPROVED= "$guard" >"$tmp/out" 2>&1 || code=$?
+	[ "$code" = 1 ] || fail "look-alike origin $u was trusted (exit $code)"
+done
+git remote set-url origin "$tmp/origin"
 
 # Outside a work tree: exit 2.
 cd "$tmp"
