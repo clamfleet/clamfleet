@@ -40,7 +40,10 @@ branch, rename `## Unreleased` to the heading and start a new empty `## Unreleas
 ## Making a release (git flow)
 
 1. `git switch -c release/VERSION develop`; write the CHANGELOG section; open a PR into `main`. Full CI runs,
-   `release-dry-run` included.
+   `release-dry-run` included. **Every release candidate needs all L1 targets green** (`make e2e-apparmor`,
+   `make e2e-el9`, and the targets later added to the matrix, R1 decision 7) on the release branch's commit,
+   whatever `deploy/test/l1-paths.txt` says; the verifier keeps the logs (they name hosts, so they stay out
+   of the PR).
 2. Merge it. The push to `main` runs full CI on the merge commit; **wait for it to pass**: the release
    workflow refuses a commit with no successful push run of `ci.yml` on `main` for exactly that SHA.
 3. Tag that merge commit with **your signature** (an SSH key whose public half is in the repository variable
@@ -158,14 +161,17 @@ the ruleset, then the workflow.
 
 ```sh
 # protect: the checks, on main and develop. No bypass: the maintainer's own pull requests meet the checks too.
+# integration_id 15368 is GitHub Actions: without it a status of that name posted by any other app counts.
 gh api -X POST repos/clamfleet/clamfleet/rulesets --input - <<'JSON'
 {
   "name": "protect", "target": "branch", "enforcement": "active",
   "conditions": { "ref_name": { "include": ["refs/heads/main", "refs/heads/develop"], "exclude": [] } },
   "rules": [
     { "type": "required_status_checks", "parameters": { "strict_required_status_checks_policy": false,
-      "required_status_checks": [ { "context": "check" }, { "context": "e2e" }, { "context": "web" },
-                                  { "context": "dco" }, { "context": "release-dry-run" } ] } },
+      "required_status_checks": [
+        { "context": "check", "integration_id": 15368 }, { "context": "e2e", "integration_id": 15368 },
+        { "context": "web", "integration_id": 15368 }, { "context": "dco", "integration_id": 15368 },
+        { "context": "release-dry-run", "integration_id": 15368 } ] } },
     { "type": "non_fast_forward" },
     { "type": "deletion" }
   ]
@@ -197,6 +203,22 @@ gh api -X POST repos/clamfleet/clamfleet/rulesets --input - <<'JSON'
 }
 JSON
 ```
+
+### Adding a required check (R1 decision 8)
+
+The new check's name is not guessed: a matrix job's context is GitHub's `job (leg)` name, and a wrong guess in the
+ruleset blocks every merge. So, per pull request that adds a job:
+
+1. The pull request adds the job, its name in `REQUIRED` and `ALLOWED` in `deploy/test/workflows_test.sh`, and the
+   name in `CLAUDE.md`, `docs/testing.md` and the JSON above. Its own run shows the exact check names.
+2. **Before it merges**, the maintainer reads the names from that run and updates `protect`: a `PUT` of the whole
+   rule list (the existing contexts plus the new ones, each with `"integration_id": 15368`), then reads the
+   ruleset back and compares it with the JSON in this page.
+3. Then the pull request is merged. Every other open pull request now waits for checks it has never run: it merges
+   `develop` first.
+
+Renaming or removing a required check: the ruleset first, then the workflow. A job that is not in the ruleset (like
+`l1-paths`) is never listed in `REQUIRED`.
 
 Keeping the checks in a ruleset of their own, with no bypass, is what makes the maintainer's bypass of `review` skip
 the approval and nothing else.
