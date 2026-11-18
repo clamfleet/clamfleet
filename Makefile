@@ -178,12 +178,21 @@ e2e-docker:
 # deploy/test/l1-guard.sh runs first in every target that runs the commit as root on the Incus host (e2e,
 # e2e-apparmor, e2e-el9, e2e-idp, fixtures, record-freshclam-history): it refuses a commit that is on no
 # branch of the canonical origin (a fork's code) unless L1_APPROVED names it (R1 decision 6, docs/testing.md "Which changes need an L1 run").
+# The -run pattern of each VM target is ONE variable, used twice: as `go test -run` and as the gate's
+# -expect-run, so the two cannot drift. The pattern reaches the inner shell through the environment
+# (E2E_RUN_RE), never spliced into the quoted command, so a `$` or a quote in it cannot break the quoting.
+# The gate then fails when a test the pattern selects did not run, which a bare -run reports as a pass.
+# -v is gone: the gate prints the same output from the -json events. bash and pipefail as in test-ci.
+AA_RUN := TestAppArmor|TestClamdOnlyExecsTheAgent
+EL9_RUN := TestEL9|TestSELinux
+
 e2e-apparmor:
 	@test -n "$(CFA_EXEC)" -a -n "$(CFA_HOST)" || { echo "e2e-apparmor: set CFA_EXEC and CFA_HOST (environment or local.mk, see local.mk.example and docs/testing.md)" >&2; exit 1; }
 	./deploy/test/l1-guard.sh
 	$(MAKE) packages VERSION=0.6.0-e2e1
-	CFT_EXEC="$(CFA_EXEC)" INCUS_HOST="$(CFA_HOST)" CT=clamfleet-aa SNAP=clean READY_FILE=/var/lib/clamav/freshclam.dat \
-		$(GO) test -tags "e2e e2e_apparmor" -count=1 -timeout 30m -v -run 'TestAppArmor|TestClamdOnlyExecsTheAgent' ./e2e/
+	$(GO) build -o $(BIN)/testgate ./hack/testgate
+	E2E_RUN_RE='$(AA_RUN)' CFT_EXEC="$(CFA_EXEC)" INCUS_HOST="$(CFA_HOST)" CT=clamfleet-aa SNAP=clean READY_FILE=/var/lib/clamav/freshclam.dat \
+		bash -o pipefail -c '$(GO) test -tags "e2e e2e_apparmor" -count=1 -timeout 30m -json -run "$$E2E_RUN_RE" ./e2e/ | $(BIN)/testgate -expect-pkg ./e2e -tags "e2e e2e_apparmor" -expect-run "$$E2E_RUN_RE"'
 
 # RHEL 9 and SELinux Enforcing, in the throwaway AlmaLinux 9 VM (docs/testing.md "The AlmaLinux 9 VM"):
 # the .rpm files are installed with dnf and the detection path must work through the SELinux module the
@@ -193,8 +202,9 @@ e2e-el9:
 	@test -n "$(CFE_EXEC)" -a -n "$(CFE_HOST)" || { echo "e2e-el9: set CFE_EXEC and CFE_HOST (environment or local.mk, see local.mk.example and docs/testing.md)" >&2; exit 1; }
 	./deploy/test/l1-guard.sh
 	$(MAKE) packages VERSION=0.6.0-e2e1
-	CFT_EXEC="$(CFE_EXEC)" INCUS_HOST="$(CFE_HOST)" CT=clamfleet-el9 SNAP=clean READY_FILE=/var/lib/clamav/bytecode.cvd \
-		$(GO) test -tags "e2e e2e_el9" -count=1 -timeout 40m -v -run 'TestEL9|TestSELinux' ./e2e/
+	$(GO) build -o $(BIN)/testgate ./hack/testgate
+	E2E_RUN_RE='$(EL9_RUN)' CFT_EXEC="$(CFE_EXEC)" INCUS_HOST="$(CFE_HOST)" CT=clamfleet-el9 SNAP=clean READY_FILE=/var/lib/clamav/bytecode.cvd \
+		bash -o pipefail -c '$(GO) test -tags "e2e e2e_el9" -count=1 -timeout 40m -json -run "$$E2E_RUN_RE" ./e2e/ | $(BIN)/testgate -expect-pkg ./e2e -tags "e2e e2e_el9" -expect-run "$$E2E_RUN_RE"'
 
 # OpenLDAP and Keycloak in the throwaway clamfleet-idp container (docs/testing.md "The IdP container"): the real
 # server signs users in against both. Part of the milestone 6b acceptance; `make e2e` does not run it. Without

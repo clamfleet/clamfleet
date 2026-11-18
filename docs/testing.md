@@ -69,7 +69,12 @@ fails on a failed test, on a **skipped** test, on a package that does not build,
 no allowlist: a test that cannot run in a CI job is excluded by a build tag in a reviewed change. `-expect-pkg ./e2e -tags e2e`
 also fails the run unless the set of top-level tests that passed equals the set the package declares (the go tool evaluates
 the build constraints, `go/parser` reads the files; subtests and `TestMain` do not count), so a narrowed `-run` or a test
-that never ran cannot pass. The gate has its own unit tests (`hack/testgate`).
+that never ran cannot pass. `-expect-run REGEXP` (needs `-expect-pkg`) narrows that declared set to the top-level tests the
+regexp matches, the way `go test -run` narrows what runs: `make e2e-apparmor` and `make e2e-el9` give the gate the same
+pattern they give `go test -run` (one Make variable, `AA_RUN` and `EL9_RUN`, used twice), so a selected test that did not
+run fails the target instead of passing as "fewer tests". A pattern that matches no declared test fails (a typo cannot
+pass), and one with an unbracketed `/` is refused, because `go test -run` would split it into per-subtest patterns. The
+gate has its own unit tests (`hack/testgate`).
 
 `-count=1` is used everywhere: the `cmd/*` and `hack/webfixture` tests build binaries that the test result cache cannot see.
 
