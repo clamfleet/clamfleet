@@ -179,8 +179,9 @@ e2e-docker:
 # e2e-apparmor, e2e-el9, e2e-idp, fixtures, record-freshclam-history): it refuses a commit that is on no
 # branch of the canonical origin (a fork's code) unless L1_APPROVED names it (R1 decision 6, docs/testing.md "Which changes need an L1 run").
 # The -run pattern of each VM target is ONE variable, used twice: as `go test -run` and as the gate's
-# -expect-run, so the two cannot drift. The pattern reaches the inner shell through the environment
-# (E2E_RUN_RE), never spliced into the quoted command, so a `$` or a quote in it cannot break the quoting.
+# -expect-run, so the two cannot drift. The pattern reaches the inner bash -c through the environment
+# (E2E_RUN_RE), not spliced into its command string. The outer assignment still single-quotes it, so a
+# pattern may hold a double quote or a `$` (written `$$` for make) but never a single quote (a syntax error).
 # The gate then fails when a test the pattern selects did not run, which a bare -run reports as a pass.
 # -v is gone: the gate prints the same output from the -json events. bash and pipefail as in test-ci.
 AA_RUN := TestAppArmor|TestClamdOnlyExecsTheAgent
