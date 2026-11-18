@@ -112,7 +112,7 @@ say "not required", on a range that was not fetched or an empty glob file. `depl
 with a row per glob class and exclusion. Every release candidate runs all L1 targets whatever the file says.
 
 A pull request from a fork needs more: an L1 run executes its code as root in VMs on the maintainer's machines, so
-nobody runs one until the maintainer has read the diff and said so. Both L1 targets start with
+nobody runs one until the maintainer has read the diff and said so. Both L1 targets and `make e2e-idp` start with
 `deploy/test/l1-guard.sh`, which refuses a commit that is on no branch of `origin` unless `L1_APPROVED` equals its full
 SHA (approval is per commit; a later push needs a new one). An agent never sets `L1_APPROVED` on its own. This is a
 speed bump against a slip, not a security boundary: whoever has the shell can bypass it.

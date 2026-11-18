@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # SPDX-FileCopyrightText: The ClamFleet Authors
 #
-# l1-guard.sh - the first step of the level-1 make targets (e2e-apparmor, e2e-el9): refuse to run the
+# l1-guard.sh - the first step of the level-1 make targets (e2e-apparmor, e2e-el9) and of e2e-idp, which also runs the commit as root on those machines: refuse to run the
 # checked-out commit in the VMs on the maintainer's machines unless it is code a maintainer put on this
 # repository. An L1 run executes the commit as root in VMs on those machines, so running a fork's
 # pull request by habit is the thing to prevent (R1 decision 6).

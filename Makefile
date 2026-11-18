@@ -173,7 +173,7 @@ e2e-docker:
 # milestone 5 acceptance; `make e2e` does not run it because it needs the VM. Without CFA_EXEC and
 # CFA_HOST it FAILS (it never skips). The same suite code runs against the VM: the environment points
 # CFT_EXEC and INCUS_HOST at it, CT/SNAP make deploy/test/reset.sh restore the VM's `clean` snapshot.
-# deploy/test/l1-guard.sh runs first in both L1 targets: it refuses a commit that is on no origin branch
+# deploy/test/l1-guard.sh runs first in both L1 targets and in e2e-idp (it also runs the commit as root on the Incus host): it refuses a commit that is on no origin branch
 # (a fork's code) unless L1_APPROVED names it (R1 decision 6, docs/testing.md "Which changes need an L1 run").
 e2e-apparmor:
 	@test -n "$(CFA_EXEC)" -a -n "$(CFA_HOST)" || { echo "e2e-apparmor: set CFA_EXEC and CFA_HOST (environment or local.mk, see local.mk.example and docs/testing.md)" >&2; exit 1; }
@@ -200,6 +200,7 @@ e2e-el9:
 # INCUS_HOST, which this target points at the container.
 e2e-idp:
 	@test -n "$(CFI_EXEC)" -a -n "$(CFI_HOST)" || { echo "e2e-idp: set CFI_EXEC and CFI_HOST (environment or local.mk, see local.mk.example and docs/testing.md)" >&2; exit 1; }
+	./deploy/test/l1-guard.sh
 	CFT_EXEC="$(CFI_EXEC)" INCUS_HOST="$(CFI_HOST)" CT=clamfleet-idp SNAP=clean \
 		$(GO) test -tags e2e_idp -count=1 -timeout 30m -v ./e2e/
 
