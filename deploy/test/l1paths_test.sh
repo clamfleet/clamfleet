@@ -62,6 +62,7 @@ row yes deploy/server.yaml.example
 row yes cmd/clamfleet-agent/main.go
 row yes internal/agent/report.go
 row yes internal/agent/sub/deep.go
+row yes internal/config/config.go
 row yes go.mod
 row yes Makefile
 # The L1 harness, including the files later pull requests add.
@@ -71,6 +72,8 @@ row yes e2e/el9_e2e_test.go
 row yes e2e/distro_e2e_test.go
 row yes e2e/distro_test.go
 row yes e2e/package_e2e_test.go
+row yes e2e/agent_e2e_test.go
+row yes e2e/event_e2e_test.go
 row yes deploy/test/aa-prepare.sh
 row yes deploy/test/el-prepare.sh
 row yes deploy/test/el9-prepare.sh
@@ -85,6 +88,7 @@ row no internal/agent/report_test.go
 row no internal/agent/sub/deep_test.go
 row no internal/agent/testdata/clamd.json
 row no internal/agent/testdata/sub/x.bin
+row no internal/config/config_test.go
 # Not on the list: documentation, the server's code, other tests and other scripts, the lockfile.
 row no docs/testing.md
 row no README.md
@@ -96,6 +100,7 @@ row no deploy/release/sign.sh
 row no cmd/clamfleet-server/main.go
 # A look-alike: the glob for the examples must not match another directory's file.
 row no docs/deploy/agent.yaml.example
+row no docs/deploy/server.yaml.example
 
 # Several paths: only the matching ones are listed, in diff order.
 git reset -q --hard "$root"
@@ -132,6 +137,15 @@ git mv deploy/systemd/clamfleet-agent.service docs/moved.txt
 git commit -q -m move
 out="$("$script" "$before" HEAD)"
 [ "$out" = "L1 required: deploy/systemd/clamfleet-agent.service" ] || fail "a rename out of a watched directory: got '$out'"
+
+# Last match wins, through a globs file of its own: a carve-out followed by a re-inclusion.
+printf 'a/*\n!a/b/*\na/b/c\n' >"$tmp/lastwins.txt"
+for want in "a/b/c:L1 required: a/b/c" "a/b/d:L1 not required" "a/x:L1 required: a/x"; do
+	git reset -q --hard "$root"
+	touch_commit "${want%%:*}"
+	out="$(L1_PATHS_FILE="$tmp/lastwins.txt" "$script" "$root" HEAD)"
+	[ "$out" = "${want#*:}" ] || fail "last match wins, ${want%%:*}: got '$out'"
+done
 
 # A range that is not in the repository must FAIL (exit 2), not look empty.
 zero=0000000000000000000000000000000000000000

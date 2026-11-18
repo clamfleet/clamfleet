@@ -10,7 +10,7 @@
 # script exits 0 for both answers.
 #
 # The paths are those of `git diff --name-only BASE...HEAD`, i.e. against the merge base, as a pull
-# request is reviewed. lists both sides of a rename: moving a file OUT of a watched
+# request is reviewed. `--no-renames` lists both sides of a rename: moving a file OUT of a watched
 # directory changes what ships just as moving one in, and rename detection would show only the new name.
 #
 # A BASE or HEAD that is not in the repository FAILS (exit 2), like hack/ci/dco.sh: in CI a shallow
