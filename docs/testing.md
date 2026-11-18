@@ -103,11 +103,13 @@ release candidate does (docs/releasing.md).
 L1 is the real packages in a VM with the mandatory access control enforcing (`make e2e-apparmor`, `make e2e-el9`;
 CI has no such VM). It is expensive, so a pull request needs one only when it touches what only an enforcing system
 can check: the packaging, the AppArmor and SELinux files, the systemd units, the shipped example configs, the agent
-(`cmd/clamfleet-agent`, `internal/agent` apart from `*_test.go` and `testdata/`), `go.mod` (a toolchain bump can add a
+(`cmd/clamfleet-agent`, `internal/agent` and `internal/config` apart from `*_test.go` and `testdata/`), `go.mod` (a toolchain bump can add a
 start-up file read that the AppArmor profile must list), the `Makefile`, and the L1 harness itself. The globs are in
 **one file**, `deploy/test/l1-paths.txt` (its header gives the format); `hack/ci/l1-required.sh BASE HEAD` applies
 them to the merge-base diff and prints `L1 required: <paths>` or `L1 not required`. The `l1-paths` job puts that line
-in the pull request's job summary, and the maintainer decides at merge: nothing blocks. The script fails, and does not
+in the pull request's job summary, and the maintainer decides at merge: nothing blocks. The script and the globs come from the pull request's own checkout, so a pull request can edit the rule that
+judges it: when the diff touches `hack/ci/l1-required.sh`, `deploy/test/l1-paths.txt` or a workflow, the verdict is
+followed by "the rule itself changed: read it before trusting this verdict". The script fails, and does not
 say "not required", on a range that was not fetched or an empty glob file. `deploy/test/l1paths_test.sh` tests it
 with a row per glob class and exclusion. Every release candidate runs all L1 targets whatever the file says.
 

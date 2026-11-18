@@ -138,6 +138,24 @@ git commit -q -m move
 out="$("$script" "$before" HEAD)"
 [ "$out" = "L1 required: deploy/systemd/clamfleet-agent.service" ] || fail "a rename out of a watched directory: got '$out'"
 
+# Self-modification: a change to the rule, its globs or a workflow adds a warning line, whatever the verdict.
+warn="the rule itself changed: read it before trusting this verdict"
+for path in hack/ci/l1-required.sh deploy/test/l1-paths.txt .github/workflows/ci.yml .github/workflows/other.yml; do
+	git reset -q --hard "$root"
+	touch_commit "$path"
+	out="$(verdict)"
+	[ "$out" = "L1 not required"$'\n'"$warn" ] || fail "$path: wanted the warning, got '$out'"
+done
+git reset -q --hard "$root"
+touch_commit Makefile hack/ci/l1-required.sh
+out="$(verdict)"
+[ "$out" = "L1 required: Makefile"$'\n'"$warn" ] || fail "verdict plus warning: got '$out'"
+# And no warning for a neighbour that is not part of the rule.
+git reset -q --hard "$root"
+touch_commit hack/ci/dco.sh docs/workflows.md
+out="$(verdict)"
+[ "$out" = "L1 not required" ] || fail "a warning for a non-rule file: got '$out'"
+
 # Last match wins, through a globs file of its own: a carve-out followed by a re-inclusion.
 printf 'a/*\n!a/b/*\na/b/c\n' >"$tmp/lastwins.txt"
 for want in "a/b/c:L1 required: a/b/c" "a/b/d:L1 not required" "a/x:L1 required: a/x"; do

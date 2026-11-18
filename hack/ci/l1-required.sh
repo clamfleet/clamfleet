@@ -9,6 +9,10 @@
 # job summary and the maintainer decides at merge (R1 decision 7). The verdict is advisory: the
 # script exits 0 for both answers.
 #
+# The script and the globs come from the checkout, which in a pull request is the PR's own code, so a PR
+# can edit the rule that judges it. When the diff touches this script, the globs file or a workflow, a
+# second line says so: "the rule itself changed: read it before trusting this verdict".
+#
 # The paths are those of `git diff --name-only BASE...HEAD`, i.e. against the merge base, as a pull
 # request is reviewed. `--no-renames` lists both sides of a rename: moving a file OUT of a watched
 # directory changes what ships just as moving one in, and rename detection would show only the new name.
@@ -77,3 +81,13 @@ if [ "${#matched[@]}" -gt 0 ]; then
 else
 	echo "L1 not required"
 fi
+
+# Self-modification: independent of the verdict (these paths need not match any glob).
+while IFS= read -r path || [ -n "$path" ]; do
+	case "$path" in
+	hack/ci/l1-required.sh | deploy/test/l1-paths.txt | .github/workflows/*)
+		echo "the rule itself changed: read it before trusting this verdict"
+		break
+		;;
+	esac
+done <<<"$names"
