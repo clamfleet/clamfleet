@@ -156,6 +156,17 @@ if grep -q 'clamdscan' "$tmp/log"; then
 	exit 1
 fi
 
+# READY_UNIT names another replay unit, and an empty one drops the wait (an image without the unit:
+# the L2 distribution images). Without the empty case such an image would never become "ready".
+drun READY_UNIT=other-replay.service || { echo "FAIL: the Docker reset failed with READY_UNIT set" >&2; cat "$tmp/out" >&2; exit 1; }
+grep -q 'DOCKER: exec clamfleet-ci systemctl is-active --quiet other-replay.service' "$tmp/log" || { echo "FAIL: READY_UNIT is not the unit waited for" >&2; cat "$tmp/log" >&2; exit 1; }
+drun READY_UNIT= FAKE_HISTORY_INACTIVE=1 TIMEOUT=3 || { echo "FAIL: an empty READY_UNIT still waited for a replay unit" >&2; cat "$tmp/out" >&2; exit 1; }
+if grep -q 'systemctl' "$tmp/log"; then
+	echo "FAIL: an empty READY_UNIT still asked systemd about a unit" >&2
+	exit 1
+fi
+grep -q 'clamdscan --no-summary' "$tmp/log" || { echo "FAIL: an empty READY_UNIT skipped the scan too" >&2; exit 1; }
+
 if drun E2E_IMAGE=; then
 	echo "FAIL: the Docker reset ran without E2E_IMAGE" >&2
 	exit 1

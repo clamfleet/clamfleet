@@ -24,6 +24,9 @@
 #      CT (instance; default clamfleet-test for incus, clamfleet-ci for docker),
 #      SNAP (incus only, default clean-clamav), TIMEOUT (seconds, default 180),
 #      READY_FILE (the file the readiness scan reads, default /etc/hostname),
+#      READY_UNIT (docker only: a oneshot unit that must be active before the container counts as ready;
+#      default the freshclam-history replay unit of the Debian 13 image, empty means "clamd scans" only,
+#      for images that do not carry that unit: the distribution images of the L2 matrix),
 #      E2E_JOURNAL_DIR (docker only: a directory that receives the journal of each container
 #      just before it is replaced; unset keeps nothing).
 set -euo pipefail
@@ -37,6 +40,8 @@ TIMEOUT="${TIMEOUT:-180}"
 # (the VM) clamd's profile does not allow it and the scan answers "Access denied", so the
 # AppArmor suite sets READY_FILE to a path the profile allows (/var/lib/clamav/**).
 READY_FILE="${READY_FILE:-/etc/hostname}"
+# `${READY_UNIT-default}`, not `:-`: an explicitly empty READY_UNIT must stay empty.
+READY_UNIT="${READY_UNIT-clamfleet-ci-freshclam-history.service}"
 
 case "$RESET_RUNTIME" in
 incus)
@@ -101,8 +106,9 @@ ready() {
 		ssh "$INCUS_HOST" "sudo incus exec $CT -- clamdscan --no-summary $READY_FILE </dev/null >/dev/null 2>&1"
 	else
 		# The image replays a recorded freshclam run into the journal at boot (deploy/test/ci): tests
-		# read it, so "ready" means that oneshot has finished too, not only that clamd scans.
-		docker exec "$CT" systemctl is-active --quiet clamfleet-ci-freshclam-history.service </dev/null >/dev/null 2>&1 &&
+		# read it, so "ready" means that oneshot has finished too, not only that clamd scans. An image
+		# without the unit sets READY_UNIT empty, and only the scan counts.
+		{ [ -z "$READY_UNIT" ] || docker exec "$CT" systemctl is-active --quiet "$READY_UNIT" </dev/null >/dev/null 2>&1; } &&
 			docker exec "$CT" clamdscan --no-summary "$READY_FILE" </dev/null >/dev/null 2>&1
 	fi
 }
