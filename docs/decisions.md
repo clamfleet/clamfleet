@@ -178,6 +178,8 @@ Decided 2026-11-18. R1 decisions 1 and 4 supersede M6 decisions 11 and 12 and th
 - **R1 decision 7, who needs a level-1 run.** The globs live in one file, `deploy/test/l1-paths.txt`; a non-required CI
   job prints the verdict in the job summary and the maintainer decides at merge. A commit status plus a gate job was
   rejected for now: a gate must be re-run after the status is posted. Every release candidate runs all level-1 targets.
+  The list departs from the options paper's: it adds `internal/config` (the agent's configuration, read at start-up)
+  and the agent and event e2e files `e2e/agent_e2e_test.go` and `e2e/event_e2e_test.go` to the harness.
 - **R1 decision 8, adding a required check.** The new check is added to the `protect` ruleset after the pull request
   that adds the job has run (its run shows the exact check names, which a matrix generates) and before that pull
   request merges. Adding it earlier would mean guessing the names, and a wrong guess blocks every merge. Renaming or

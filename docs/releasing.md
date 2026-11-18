@@ -42,7 +42,7 @@ branch, rename `## Unreleased` to the heading and start a new empty `## Unreleas
 1. `git switch -c release/VERSION develop`; write the CHANGELOG section; open a PR into `main`. Full CI runs,
    `release-dry-run` included. **Every release candidate needs all L1 targets green** (`make e2e-apparmor`,
    `make e2e-el9`, and the targets later added to the matrix, R1 decision 7) on the release branch's commit,
-   whatever `deploy/test/l1-paths.txt` says; the verifier keeps the logs (they name hosts, so they stay out
+   whatever `deploy/test/l1-paths.txt` says; whoever runs them keeps the logs (they name hosts, so they stay out
    of the PR).
 2. Merge it. The push to `main` runs full CI on the merge commit; **wait for it to pass**: the release
    workflow refuses a commit with no successful push run of `ci.yml` on `main` for exactly that SHA.
