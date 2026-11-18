@@ -86,6 +86,7 @@ scripts-test:
 	./deploy/test/workflows_test.sh
 	./deploy/test/dco_test.sh
 	./deploy/test/l1paths_test.sh
+	./deploy/test/l1guard_test.sh
 	./deploy/test/release_test.sh
 	./deploy/test/webtests_test.sh
 
@@ -172,8 +173,11 @@ e2e-docker:
 # milestone 5 acceptance; `make e2e` does not run it because it needs the VM. Without CFA_EXEC and
 # CFA_HOST it FAILS (it never skips). The same suite code runs against the VM: the environment points
 # CFT_EXEC and INCUS_HOST at it, CT/SNAP make deploy/test/reset.sh restore the VM's `clean` snapshot.
+# deploy/test/l1-guard.sh runs first in both L1 targets: it refuses a commit that is on no origin branch
+# (a fork's code) unless L1_APPROVED names it (R1 decision 6, docs/testing.md "Which changes need an L1 run").
 e2e-apparmor:
 	@test -n "$(CFA_EXEC)" -a -n "$(CFA_HOST)" || { echo "e2e-apparmor: set CFA_EXEC and CFA_HOST (environment or local.mk, see local.mk.example and docs/testing.md)" >&2; exit 1; }
+	./deploy/test/l1-guard.sh
 	$(MAKE) packages VERSION=0.6.0-e2e1
 	CFT_EXEC="$(CFA_EXEC)" INCUS_HOST="$(CFA_HOST)" CT=clamfleet-aa SNAP=clean READY_FILE=/var/lib/clamav/freshclam.dat \
 		$(GO) test -tags "e2e e2e_apparmor" -count=1 -timeout 30m -v -run 'TestAppArmor|TestClamdOnlyExecsTheAgent' ./e2e/
@@ -184,6 +188,7 @@ e2e-apparmor:
 # and CFE_HOST it FAILS (it never skips). READY_FILE is a file clamd's domain may read (under /var/lib/clamav).
 e2e-el9:
 	@test -n "$(CFE_EXEC)" -a -n "$(CFE_HOST)" || { echo "e2e-el9: set CFE_EXEC and CFE_HOST (environment or local.mk, see local.mk.example and docs/testing.md)" >&2; exit 1; }
+	./deploy/test/l1-guard.sh
 	$(MAKE) packages VERSION=0.6.0-e2e1
 	CFT_EXEC="$(CFE_EXEC)" INCUS_HOST="$(CFE_HOST)" CT=clamfleet-el9 SNAP=clean READY_FILE=/var/lib/clamav/bytecode.cvd \
 		$(GO) test -tags "e2e e2e_el9" -count=1 -timeout 40m -v -run 'TestEL9|TestSELinux' ./e2e/
