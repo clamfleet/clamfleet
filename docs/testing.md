@@ -45,7 +45,7 @@ argument, key rotation and `key check`). Everything binds loopback only.
 
 ## CI (`.github/workflows/ci.yml`)
 
-Four jobs. Their names are the repository's required status checks, so a rename blocks merges until the ruleset is
+Five jobs. Their names are the repository's required status checks, so a rename blocks merges until the ruleset is
 changed first.
 
 | Job | Runs on | What it proves |
@@ -53,6 +53,7 @@ changed first.
 | `check` | every pull request (drafts too), every push to `develop` and `main`, weekly | `make ci`: vet, staticcheck, `sqlc diff`, the unit and script tests through the test gate, actionlint on the workflows, `go mod tidy -diff`, `go mod verify`, gofmt. About 5 minutes. |
 | `e2e` | ready pull requests and pushes | the e2e suite in a container with a real ClamAV and systemd (below, "The e2e suite in Docker") |
 | `web` | ready pull requests and pushes | the Playwright browser tests of the console (`make e2e-web`), the layer that sees a dead button |
+| `release-dry-run` | ready pull requests and pushes | the release build and signing path with a throwaway key (below, "Release dry run") |
 | `dco` | pull requests | every commit carries a `Signed-off-by` with the author's email (`hack/ci/dco.sh`) |
 
 **Draft pull requests run only `check`.** A draft cannot be merged, and marking it ready for review starts the full run.
@@ -79,8 +80,21 @@ Other `make check` tests added for CI: `deploy/test/headers_test.sh` (every trac
 exception with its reason) and `deploy/test/dco_test.sh` (the sign-off check against a temporary repository, including a range
 that was never fetched, which must fail and not look empty).
 
-Tools are pinned in the Makefile and installed with `make tools` (staticcheck, sqlc); actionlint runs through `go run` at its
-pinned version. None of them is in `go.mod`.
+Tools are pinned in the Makefile and installed with `make tools` (staticcheck, sqlc); actionlint and cyclonedx-gomod run through
+`go run` at their pinned versions. None of them is in `go.mod`.
+
+### Release dry run (`release-dry-run`, `make release-snapshot`)
+
+The release scripts (`deploy/release`, [releasing.md](releasing.md)) are tested twice. `deploy/test/release_test.sh` (part of
+`make check`) runs them against a temporary project with real Go builds, real `dpkg-deb`, `tar` and `gpg`, and **stub**
+`make`, `rpm`, `rpm2cpio`, `rpmsign`, `rpmkeys`, `cyclonedx-gomod` and `gh`, with one injected fault per refusal (a wrong version, a
+dirty tree, an rpm whose payload differs from the tarball, an SBOM whose module set differs from `go list`, a tag signed by an
+unlisted key, a commit whose only green run is its parent's, an `rpmsign` that signs nothing, and so on). It cannot show that the
+real `rpm` tools behave as the stubs pretend, so the CI job `release-dry-run` runs `make release-snapshot` with the real tools
+(rpm, rpm2cpio, cyclonedx-gomod), checks that an unsigned rpm has no signature line, then runs `deploy/release/sign.sh` with a
+**throwaway key** generated in the job and verifies the result against that key's public half. The key lives for the job and is
+never an asset. A snapshot (`0.0.0-rc.1`, dirty tree allowed) is never signed or published. What neither can show, the first
+release candidate does (docs/releasing.md).
 
 ## End-to-end tests (`make e2e`)
 

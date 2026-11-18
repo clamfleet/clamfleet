@@ -92,7 +92,7 @@ Prefer the standard library. Add a dependency only where listed.
 | Logging | `log/slog`, JSON output |
 | LDAP | `github.com/go-ldap/ldap/v3` (M6 decision 16) |
 | OIDC | Standard library only: authorization code flow with PKCE, no JOSE library (M6 decision 17) |
-| Release | `nfpm` (pinned, via `go run`) now, `goreleaser` in 6c |
+| Release | `nfpm` (pinned, via `go run`) builds the packages; `deploy/release/*.sh` make the tarball, checksums and CycloneDX SBOMs and sign the rpms and the checksums with OpenPGP (6c; goreleaser cannot load nfpm files, and its prebuilt builder is Pro-only) |
 
 ## 6. Agent
 
@@ -327,7 +327,7 @@ Every setting can be overridden by an environment variable (`CLAMFLEET_` prefix)
 | 3 | Health evaluator, `state_changes`, fleet page | Stopping clamd turns the host CRIT within one interval. Stopping the agent turns it STALE after 3 intervals. |
 | 4 | Email and webhook alerting | Each transition yields at most one logical alert per target (changes within the cooldown are coalesced into one); a recovery alert is sent; the cooldown is respected; delivery is at least once (receivers deduplicate on the alert id); every attempt and every failure is recorded in `alert_log`. |
 | 5 | Detection events, spool, events page, acknowledgement | An EICAR test file produces an alert within 30 seconds under the conditions of docs/detections.md, on Debian 13 with AppArmor enforcing (`make e2e-apparmor`) and in the ClamAV container. The event survives server downtime via the spool. RHEL 9 and SELinux are verified in milestone 6. |
-| 6 | Split into 6a (packaging, retention, backup, `/metrics`, TLS reload, `clamfleet-agent scan` and its timer), 6b (LDAP and OIDC sign-in) and 6c (CI and releases) | .deb and .rpm install and start cleanly. Old rows are removed per config. Verified on Debian 13 (container and AppArmor VM) and AlmaLinux 9 with SELinux enforcing. |
+| 6 | Split into 6a (packaging, retention, backup, `/metrics`, TLS reload, `clamfleet-agent scan` and its timer), 6b (LDAP and OIDC sign-in) and 6c (CI and releases) | .deb and .rpm install and start cleanly. Old rows are removed per config. Verified on Debian 13 (container and AppArmor VM) and AlmaLinux 9 with SELinux enforcing. 6c is done when CI runs on every ready pull request (build, vet, staticcheck, unit, script and browser tests, and the e2e suite in a ClamAV container) and a signed `v1.0.0-rc.1` is verified on Debian 13 and AlmaLinux 9. |
 
 General requirements for every milestone:
 
@@ -340,8 +340,8 @@ General requirements for every milestone:
 
 - Public repository with `README.md`, `LICENSE`, `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, `SECURITY.md` (private vulnerability reporting) and `CHANGELOG.md`.
 - CI on every pull request (GitHub Actions or equivalent): build, `go vet`, `staticcheck`, unit tests, integration test with a ClamAV container.
-- Releases built by `goreleaser` from signed tags, with checksums and SBOM. Semantic versioning.
-- Issue and pull request templates. Contributions require passing CI and one maintainer review.
+- Releases built by the release scripts (`deploy/release`) from signed tags, with signed checksums, signed rpms and CycloneDX SBOMs. Semantic versioning, narrowed to `X.Y.Z` and `X.Y.Z-rc.N`. The `.deb` files are covered by the signed checksums (nothing on a stock Debian checks a per-file signature).
+- Issue and pull request templates. Contributions require passing CI, one maintainer review (the maintainer's own pull requests need CI only) and a DCO sign-off.
 - No organisation-specific names, hostnames or defaults anywhere in code, configs or docs. Examples use `example.com`/`.example`.
 - Payload schemas (section 7) and config keys are public interfaces. Breaking changes need a major version bump and a migration note.
 - Documentation in `docs/`: install, agent setup per distribution, configuration reference, API reference, alert payload reference, upgrade notes.

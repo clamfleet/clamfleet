@@ -27,6 +27,12 @@
 #      image also bakes in the files next to it (the recorded freshclam history, the replay script and
 #      its unit), and a key that ignored them would serve a stale image after a re-recording.
 #
+#  10. a top-level `defaults: run: shell: bash` in every workflow. GitHub's default shell for `run:` is
+#      `bash -e {0}`, WITHOUT pipefail, so `verify-tag.sh | tee -a "$GITHUB_OUTPUT"` would succeed when the
+#      script refuses (tee is the last command), and a refused release tag would leave `verify` green with
+#      empty outputs. `shell: bash` is `bash -eo pipefail {0}`. (release.yml also has no such pipe and its
+#      later jobs refuse an empty commit; this rule is the belt for every other pipeline in a `run:`.)
+#
 #   9. no `continue-on-error` anywhere, no step-level `if: false`, and a required job never `needs:` a
 #      job whose `if:` is not one of the two allowed conditions: each of these makes a red or skipped
 #      piece of work report success to a required check (a job skipped because its dependency was
@@ -89,7 +95,7 @@ findings() {
 			}
 			delete needs; delete jobifs
 		}
-		FNR == 1 { delete needs; delete jobifs; innee = ""; section = ""; job = ""; instep = 0; seenjobs = 0; topperm = 0 }
+		FNR == 1 { delete needs; delete jobifs; innee = ""; section = ""; job = ""; instep = 0; seenjobs = 0; topperm = 0; indef = 0; defrun = 0; defshell = 0 }
 		{
 			raw = $0
 			code = raw
@@ -103,8 +109,11 @@ findings() {
 				endjob()
 				section = t; sub(/:.*$/, "", section)
 				if (section == "permissions") topperm = 1
+				indef = (section == "defaults"); defrun = 0
 				if (section == "jobs") seenjobs = 1
 			}
+			if (indef && ind == 2) defrun = (t ~ /^run:[ \t]*$/)
+			if (indef && defrun && ind == 4 && t ~ /^shell:[ \t]*bash[ \t]*$/) defshell = 1
 			if (section == "jobs" && ind == 2 && t ~ /^[A-Za-z0-9_-]+:$/) {
 				endjob()
 				job = t; sub(/:$/, "", job); jobperm = 0; jobif = ""
@@ -159,6 +168,7 @@ findings() {
 		END {
 			endjob()
 			endfile()
+			if (seenjobs && !defshell) { printf "%s:1: rule 10: no top-level defaults: run: shell: bash (the default shell has no pipefail)\n", file; found = 1 }
 			if (seenjobs && !topperm) { printf "%s:1: rule 3: no top-level permissions:\n", file; found = 1 }
 			exit 0
 		}' "$f"
@@ -188,6 +198,9 @@ on:
   pull_request:
     types: [opened]
 permissions: {}
+defaults:
+  run:
+    shell: bash
 jobs:
   check:
     runs-on: ubuntu-24.04
@@ -234,6 +247,8 @@ expect "a sha without the version"        1 "0,/@$SHA # v7.0.1/s//@$SHA/"
 expect "a third-party action"             1 "0,/actions\/checkout@/s//someone\/checkout@/"
 expect "pull_request_target"              2 "s/^  pull_request:/  pull_request_target:/"
 expect "workflow_run"                     2 "s/^  pull_request:/  workflow_run:/"
+expect "no default shell"                10 "/^defaults:/,/shell: bash/d"
+expect "a default shell that is not bash" 10 "s/shell: bash/shell: sh/"
 expect "no top-level permissions"         3 "/^permissions: {}/d"
 expect "a job without permissions"        3 "0,/^    permissions:/{/^    permissions:/,/contents: read/d}"
 expect "runs-on latest"                   4 "0,/ubuntu-24.04/s//ubuntu-latest/"
@@ -259,6 +274,9 @@ on:
   push:
     tags: ['v*']
 permissions: {}
+defaults:
+  run:
+    shell: bash
 jobs:
   build:
     runs-on: ubuntu-24.04

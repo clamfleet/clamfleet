@@ -18,6 +18,12 @@ All notable changes are listed here. The format follows Keep a Changelog; versio
   frozen signatures) and `make e2e-image` and `make e2e-docker`. `make tools` and `make ci`; staticcheck, sqlc and actionlint are pinned in
   the Makefile. Every tracked file is checked for its SPDX header. CONTRIBUTING.md, CODE_OF_CONDUCT.md (Contributor Covenant 2.1),
   SECURITY.md, issue forms and a pull request template.
+  **Releases** (`deploy/release`, `.github/workflows/release.yml`, `docs/releasing.md`): a signed tag `vX.Y.Z` or `vX.Y.Z-rc.N` on a
+  commit whose full CI passed on `main` builds the tarball, the `.deb` and `.rpm` files, a CycloneDX SBOM per binary (htmx included in the
+  server's) and `SHA256SUMS`, then a separate job that holds the only secret signs the rpms and the checksums and a draft release is
+  created. `release.sh` checks its own output (versions, revisions, package payloads equal the tarball's, SBOM modules equal
+  `go list`); `make release-snapshot` runs it locally and the CI job `release-dry-run` signs with a throwaway key on every ready pull
+  request. `docs/install.md` explains "Verifying a download". Replaces the goreleaser plan: it cannot load our nfpm files.
 - Milestone 6b, external sign-in (see `docs/auth.md`). **LDAP** (one directory; search, then bind; `ldaps://` or StartTLS, plaintext
   only to loopback; the name escaped into the filter; an empty password refused before any network I/O; the identity is the
   `entryUUID` or `objectGUID`, never the DN; groups from `memberOf` or a search) and **OpenID Connect** (one provider; the

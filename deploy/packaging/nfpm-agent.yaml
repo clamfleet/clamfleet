@@ -7,8 +7,9 @@
 #   NFPM_ARCH   amd64
 # The differences between the families are `packager:` entries and `overrides`: the clamd package and
 # group, the example configuration, the user and tmpfiles files, and the confinement (our AppArmor
-# profile on Debian, the SELinux module on the RHEL family). goreleaser (milestone 6c) reads this file
-# unchanged.
+# profile on Debian, the SELinux module on the RHEL family). The release script (deploy/release/release.sh)
+# builds the packages with `make packages` from this file; the rpms are signed afterwards by
+# deploy/release/sign.sh, never by nfpm.
 #
 # The package never edits another package's files: clamd.conf (VirusEvent) and Debian's AppArmor
 # local include for clamd are the administrator's (the postinstall prints the lines to add).
