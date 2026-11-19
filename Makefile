@@ -89,6 +89,7 @@ scripts-test:
 	./deploy/test/l1guard_test.sh
 	./deploy/test/release_test.sh
 	./deploy/test/webtests_test.sh
+	./deploy/test/ci/signatures_test.sh
 
 # sqlc is a build-time tool only (pinned in CLAUDE.md): the generated code uses database/sql.
 generate:
