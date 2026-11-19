@@ -20,7 +20,6 @@ package e2e
 
 import (
 	"encoding/json"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
@@ -349,9 +348,14 @@ func TestDistroSudoAttribution(t *testing.T) {
 	distroFresh(t)
 	distroServerUp(t)
 	const person, host = "e2eoperator", "sudo-host"
-	// A sudoers drop-in is syntax-checked before use: a bad file would lock sudo out for everyone.
-	sh(t, "useradd -m "+person+"; printf '%s ALL=(clamfleet-server) NOPASSWD: "+pkgServer+"\\n' "+person+" > /etc/sudoers.d/"+person+
-		"; chmod 440 /etc/sudoers.d/"+person+"; visudo -cf /etc/sudoers.d/"+person)
+	// Cleanup is registered right after useradd so a failing step cannot leave the user or the
+	// sudoers file behind on a machine the next scenario reuses.
+	sh(t, "useradd -m "+person)
+	t.Cleanup(func() { sh(t, "rm -f /etc/sudoers.d/"+person+"; userdel -r "+person+" || true") })
+	// The drop-in is written aside, syntax-checked and only then installed: a bad file left in
+	// /etc/sudoers.d would lock sudo out for everyone.
+	sh(t, "f=$(mktemp); trap 'rm -f \"$f\"' EXIT; printf '%s ALL=(clamfleet-server) NOPASSWD: "+pkgServer+"\\n' "+person+" > \"$f\"; "+
+		"visudo -cf \"$f\" && install -m 0440 \"$f\" /etc/sudoers.d/"+person)
 	tok := sh(t, "runuser -u "+person+" -- sudo -u clamfleet-server "+pkgServer+" host add "+host)
 	if !strings.HasPrefix(tok, "cfa_") {
 		t.Fatalf("host add through sudo printed %q, want only the token", tok)
@@ -372,9 +376,6 @@ func TestDistroSudoAttribution(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("no host.add audit row: %+v", h.Audit)
-	}
-	if os.Getenv("E2E_KEEP") == "" {
-		sh(t, "rm -f /etc/sudoers.d/"+person+"; userdel -r "+person+" || true")
 	}
 }
 
