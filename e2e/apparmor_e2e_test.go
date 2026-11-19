@@ -49,71 +49,6 @@ func apparmorRig(t *testing.T) {
 	writeEICAR(t, aaDir, "eicar", 1)
 }
 
-// utcNow is the container's UTC wall clock, for journalctl --since.
-func utcNow(t *testing.T) string { return sh(t, "date -u '+%Y-%m-%d %H:%M:%S'") }
-
-// denied returns the AppArmor DENIED lines of the kernel log since a time.
-func denied(t *testing.T, since string) []string {
-	t.Helper()
-	out := sh(t, "journalctl -k --utc --since '"+since+"' --no-pager -o cat | grep 'apparmor=\"DENIED\"' || true")
-	var lines []string
-	for _, l := range strings.Split(out, "\n") {
-		if strings.TrimSpace(l) != "" {
-			lines = append(lines, l)
-		}
-	}
-	return lines
-}
-
-// ours drops the one denial that is not ours: Debian's stock clamd profile does not allow
-// clamd to read /etc/hostname, and clamd tries on every detection whether or not a
-// VirusEvent is configured (checked on the VM with the line removed). Everything else
-// is a finding, for clamd's profile or for the event profile.
-func ours(lines []string) []string {
-	var out []string
-	for _, l := range lines {
-		if strings.Contains(l, `profile="/usr/sbin/clamd"`) && strings.Contains(l, `name="/etc/hostname"`) {
-			continue
-		}
-		out = append(out, l)
-	}
-	return out
-}
-
-// has reports whether some line contains every fragment.
-func has(lines []string, fragments ...string) bool {
-	for _, l := range lines {
-		ok := true
-		for _, f := range fragments {
-			ok = ok && strings.Contains(l, f)
-		}
-		if ok {
-			return true
-		}
-	}
-	return false
-}
-
-// preconditions asserts AppArmor really confines clamd and knows the profile; without
-// them a pass would mean nothing.
-func preconditions(t *testing.T) {
-	t.Helper()
-	var st struct {
-		Profiles map[string]string `json:"profiles"`
-	}
-	if err := json.Unmarshal([]byte(sh(t, "aa-status --json")), &st); err != nil {
-		t.Fatal(err)
-	}
-	for _, p := range []string{"clamfleet-agent-event", "/usr/sbin/clamd"} {
-		if st.Profiles[p] != "enforce" {
-			t.Fatalf("profile %s is %q in aa-status, want enforce", p, st.Profiles[p])
-		}
-	}
-	if cur := sh(t, "cat /proc/$(systemctl show -p MainPID --value clamav-daemon)/attr/current"); cur != "/usr/sbin/clamd (enforce)" {
-		t.Fatalf("clamd runs as %q, want '/usr/sbin/clamd (enforce)'", cur)
-	}
-}
-
 // setVirusEvent replaces the VirusEvent line and restarts clamd.
 func setVirusEvent(t *testing.T, command string) {
 	t.Helper()
@@ -124,10 +59,10 @@ func setVirusEvent(t *testing.T, command string) {
 // The allowed path: an EICAR scan by the confined clamd reaches the sink, our command
 // leaves nothing in clamd's journal, and the kernel log has no DENIED line for clamd
 // or for the event profile (this covers the open and fsync of events/, the usage
-// lock, the link and the unlink), apart from the stock /etc/hostname one (see ours).
+// lock, the link and the unlink), apart from the release's stock ones (distro_test.go).
 func TestAppArmorEICARAlert(t *testing.T) {
 	apparmorRig(t)
-	preconditions(t)
+	aaPreconditions(t, release(t))
 	since := utcNow(t)
 	t0 := time.Now()
 	code, took, out := scan(t, aaDir+"/eicar-1.com")
@@ -139,7 +74,7 @@ func TestAppArmorEICARAlert(t *testing.T) {
 	if lines := notSpooled(journal(t, "clamav-daemon")); len(lines) != 0 {
 		t.Fatalf("clamd's journal holds lines from our command: %q", lines)
 	}
-	if d := ours(denied(t, since)); len(d) != 0 {
+	if d := macDenials(t, release(t), since); len(d) != 0 {
 		t.Fatalf("AppArmor denied something on the allowed path:\n%s", strings.Join(d, "\n"))
 	}
 	waitSpoolEmpty(t, "events", 10*time.Second)
@@ -151,7 +86,7 @@ func TestAppArmorEICARAlert(t *testing.T) {
 // instead of `Px` it would name /usr/sbin/clamd; unconfined there would be no line.
 func TestAppArmorTransitionFromClamd(t *testing.T) {
 	apparmorRig(t)
-	preconditions(t)
+	aaPreconditions(t, release(t))
 	openUpToken(t)
 	setVirusEvent(t, "/usr/bin/clamfleet-agent event --config /etc/clamfleet/token")
 	since := utcNow(t)
@@ -275,7 +210,7 @@ func TestClamdOnlyExecsTheAgent(t *testing.T) {
 // for a binary that is no longer there.
 func TestAppArmorPackageRemoval(t *testing.T) {
 	apparmorRig(t)
-	preconditions(t)
+	aaPreconditions(t, release(t))
 	sh(t, "DEBIAN_FRONTEND=noninteractive apt-get remove -y clamfleet-agent 2>&1")
 	var st struct {
 		Profiles map[string]string `json:"profiles"`
