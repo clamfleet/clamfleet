@@ -409,7 +409,7 @@ the table plus a machine, not new tests.
   adds to `antivirus_t` read with `sesearch`, which must be the two reviewed ones.
 
 The facts (unit names, groups, config paths, the stock denials the release's own clamd package causes, which example file is
-installed) are the `distros` table in `e2e/distro_test.go`, keyed by `ID VERSION_ID` from `/etc/os-release`. **An unknown
+installed) are the `distros` table in `e2e/distro_facts_test.go`, keyed by `ID VERSION_ID` from `/etc/os-release`. **An unknown
 release fails**; there is no default row. A row states only what was observed on that release.
 
 `E2E_MAC=1` (set by both VM targets): a machine whose MAC is off fails instead of running the MAC steps as no-ops. Without it
