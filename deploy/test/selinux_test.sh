@@ -52,10 +52,12 @@ $block"
 other="$(printf '%s\n' "$body" | grep -v -x -F -e "$rule_dir" -e "$rule_file" -e '(optional clamfleet_antivirus' -e ')' -e '(type clamfleet_spool_t)' -e '(roletype object_r clamfleet_spool_t)' -e '(typeattributeset file_type (clamfleet_spool_t))' | grep -v '^(filecon ' || true)"
 [ -z "$other" ] || fail "an unexpected statement in the module:
 $other"
-# Every filecon labels the spool and nothing else.
-fc="$(printf '%s\n' "$body" | grep '^(filecon' | grep -v -E '"/var/lib/clamfleet/spool/(events\(/\.\*\)\?|usage)"' || true)"
-[ -z "$fc" ] || fail "a filecon outside the event spool: $fc"
-[ "$(printf '%s\n' "$body" | grep -c '^(filecon')" -eq 2 ] || fail "expected exactly two filecon rules"
+# Every filecon labels the spool and nothing else: the two lines are compared literally, so a changed path, file type or
+# context fails here and not only a path outside the spool.
+fc="$(printf '%s\n' "$body" | grep '^(filecon' || true)"
+want_fc='(filecon "/var/lib/clamfleet/spool/events(/.*)?" any (system_u object_r clamfleet_spool_t ((s0) (s0))))
+(filecon "/var/lib/clamfleet/spool/usage" file (system_u object_r clamfleet_spool_t ((s0) (s0))))'
+[ "$fc" = "$want_fc" ] || fail "the filecon lines are not exactly the two reviewed ones: $fc"
 # Permission lists: nothing like execute, execmod, entrypoint, ioctl, mounton, relabel*, or the net classes.
 if printf '%s\n' "$body" | grep -E '^\(allow' | grep -q -E '\b(execute|execute_no_trans|entrypoint|execmod|relabelfrom|relabelto|mounton|ioctl|map|rename|create_files_pattern)\b'; then
 	fail "a permission beyond the reviewed set (execute, relabel, mount, ioctl, map, rename)"
