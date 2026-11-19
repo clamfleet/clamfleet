@@ -85,7 +85,7 @@ func sedConfigRestartServerAndTarget(t *testing.T) {
 // agent waits for its token. The group is clamscan.
 func TestEL9RpmInstallAndStart(t *testing.T) {
 	el9Fresh(t)
-	elPreconditions(t)
+	elPreconditions(t, almalinux9())
 	if got := sh(t, "systemctl is-enabled clamfleet-server || true"); got != "disabled" {
 		t.Fatalf("clamfleet-server is %q after install, want disabled (the RHEL family follows the preset)", got)
 	}
@@ -182,7 +182,7 @@ func TestEL9DryRun(t *testing.T) {
 // proves antivirus_t can read the packaged agent.yaml, which the event command needs.
 func TestSELinuxEICARAlert(t *testing.T) {
 	el9Rig(t)
-	elPreconditions(t)
+	elPreconditions(t, almalinux9())
 	since := epoch(t)
 	t0 := time.Now()
 	code, took, out := scan(t, elDir+"/eicar-1.com")
@@ -333,7 +333,7 @@ func TestEL9RpmUpgradeAndRemove(t *testing.T) {
 			t.Errorf("%s was not restarted by the upgrade (pid %s before, %s after)", unit, before, after)
 		}
 	}
-	elPreconditions(t)
+	elPreconditions(t, almalinux9())
 
 	sh(t, "dnf remove -y clamfleet-agent clamfleet-server 2>&1")
 	if mods := sh(t, "semodule -lfull | grep -w clamfleet || true"); mods != "" {

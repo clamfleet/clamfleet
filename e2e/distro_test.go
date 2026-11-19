@@ -158,15 +158,16 @@ func aaPreconditions(t *testing.T, d distro) {
 	}
 }
 
-// elPreconditions asserts SELinux is Enforcing, clamd runs in antivirus_t, our module is at
-// priority 300 and the spool is labelled; without them a pass would mean nothing.
-func elPreconditions(t *testing.T) {
+// elPreconditions asserts SELinux is Enforcing, clamd runs in the release's domain
+// (d.ClamdDomain: antivirus_t, or unconfined_service_t on EL10), our module is at priority 300
+// and the spool is labelled; without them a pass would mean nothing.
+func elPreconditions(t *testing.T, d distro) {
 	t.Helper()
 	if got := sh(t, "getenforce"); got != "Enforcing" {
 		t.Fatalf("getenforce = %q, want Enforcing", got)
 	}
-	if ps := sh(t, "ps -eZ | grep ' clamd$' || true"); !strings.Contains(ps, ":antivirus_t:") {
-		t.Fatalf("clamd runs as %q, want antivirus_t", ps)
+	if ps := sh(t, "ps -eZ | grep ' clamd$' || true"); !strings.Contains(ps, ":"+d.ClamdDomain+":") {
+		t.Fatalf("clamd runs as %q, want %s", ps, d.ClamdDomain)
 	}
 	if mods := sh(t, "semodule -lfull | grep -w clamfleet || true"); !strings.Contains(mods, "300") {
 		t.Fatalf("semodule -lfull lists %q, want the module clamfleet at priority 300", mods)

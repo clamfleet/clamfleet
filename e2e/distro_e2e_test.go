@@ -68,7 +68,7 @@ func mustMode(t *testing.T, want map[string]string) {
 func macPreconditions(t *testing.T, d distro) {
 	t.Helper()
 	if d.MAC == "selinux" {
-		elPreconditions(t)
+		elPreconditions(t, d)
 		return
 	}
 	aaPreconditions(t, d)
@@ -403,9 +403,16 @@ func TestDistroStaticMAC(t *testing.T) {
 	}
 	const cil = "/usr/share/selinux/packages/clamfleet/clamfleet.cil"
 	// The binary policy the store writes: the highest policy.NN under the configured store.
+	// On antivirus_t the search is scoped to it. Where clamd is not in antivirus_t (EL10: no such
+	// type exists, and sesearch -s on an unknown type fails) the whole policy is compared, so
+	// "the module adds nothing" is asserted against every rule rather than against none.
+	scope := "-s antivirus_t"
+	if d.ClamdDomain != "antivirus_t" {
+		scope = ""
+	}
 	rules := func() []string {
 		return nonEmpty(sh(t, "export PATH=$PATH:/usr/sbin:/sbin; . /etc/selinux/config; "+
-			"pol=$(ls /etc/selinux/$SELINUXTYPE/policy/policy.* | sort -V | tail -n1); sesearch -A -s antivirus_t \"$pol\" | sort"))
+			"pol=$(ls /etc/selinux/$SELINUXTYPE/policy/policy.* | sort -V | tail -n1); sesearch -A "+scope+" \"$pol\" | sort"))
 	}
 	// -n commits to the store without reloading the kernel's policy; restored at the end so the
 	// store and the loaded policy agree again.
@@ -438,14 +445,12 @@ func TestDistroStaticMAC(t *testing.T) {
 	sort.Strings(removed)
 	// The reviewed list (TestSELinuxRuleSet states the same against the live policy): one rule per
 	// class, both on the module's own type and on no stock type (clamd, freshclam and clamonacc share the domain).
-	want := []string{
-		"allow antivirus_t clamfleet_spool_t:dir { add_name getattr open read remove_name search write };",
-		"allow antivirus_t clamfleet_spool_t:file { create getattr link lock open read setattr unlink write };",
-	}
+	// Empty on a release without antivirus_t, where the optional block is inactive (R1 decision 9).
+	want := d.ModuleRules
 	if strings.Join(added, "\n") != strings.Join(want, "\n") {
-		t.Fatalf("the module adds these rules to antivirus_t:\n%s\nwant exactly:\n%s", strings.Join(added, "\n"), strings.Join(want, "\n"))
+		t.Fatalf("the module adds these rules to the policy:\n%s\nwant exactly:\n%s", strings.Join(added, "\n"), strings.Join(want, "\n"))
 	}
 	if len(removed) != 0 {
-		t.Fatalf("the module removes rules from antivirus_t: %v", removed)
+		t.Fatalf("the module removes rules from the policy: %v", removed)
 	}
 }
