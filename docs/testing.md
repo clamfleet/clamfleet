@@ -390,6 +390,46 @@ the event files must exist before the spool is labelled (tmpfiles.d pre-creates 
 If the VM runs out of memory the run fails; the suite never resizes it. Restore after a manual session with
 `ssh <incus-host> sudo incus snapshot restore <vm> clean` and `incus start`.
 
+## The distro suite (`TestDistro*`, build tag `e2e_distro`)
+
+One scenario set for every release we claim and for both package formats. `make e2e-apparmor` (Debian 13) and
+`make e2e-el9` (AlmaLinux 9) run it besides their own suites, through the test gate; a further release is a row in
+the table plus a machine, not new tests.
+
+- `TestDistroInstallAndStart`: both packages install; the server (started on install by a deb, enabled by hand on an rpm);
+  loopback only; groups and modes; the packaged example is the family's; the agent without a token is "condition failed";
+  after `host add` the host reports under the hardened unit.
+- `TestDistroDryRun`: `collect --dry-run` against `sigtool`, `clamd --version` and systemd, with the release's unit names.
+- `TestDistroDetection`: EICAR through the real clamd to the sink; no line in clamd's journal; no denial of the release's MAC.
+- `TestDistroUpgradeAndRemove`: edits and key kept, services restarted, confinement intact after the upgrade, gone after remove.
+- `TestDistroSudoAttribution`: a real `sudo -u clamfleet-server` from a named user; the audit actor is that user. The other
+  scenarios fake it with `env SUDO_USER=`; this one is what would see a sudo that does not pass it on.
+- `TestDistroStaticMAC`: with the release's own tools and without loading anything into a kernel: `apparmor_parser -QK` of our
+  profile and of clamd's stock profile with our local include; on SELinux the CIL stored with `semodule -n` and the rules it
+  adds to `antivirus_t` read with `sesearch`, which must be the two reviewed ones.
+
+The facts (unit names, groups, config paths, the stock denials the release's own clamd package causes, which example file is
+installed) are the `distros` table in `e2e/distro_facts_test.go`, keyed by `ID VERSION_ID` from `/etc/os-release`. **An unknown
+release fails**; there is no default row. A row states only what was observed on that release.
+
+`E2E_MAC=1` (set by both VM targets): a machine whose MAC is off fails instead of running the MAC steps as no-ops. Without it
+the suite runs the MAC steps only where `aa-enabled` or `getenforce` says the MAC is on, which lets the same tests run in a
+container; a missing probe tool fails either way.
+
+Build constraints: the table, `lookupDistro`, the stock-denial filter and `TestDistroFacts` (every row complete: family, MAC,
+units, config, groups, EICAR directory, example file, each stock denial with a fragment and a reason; the lookup refuses an
+unknown release) are in `distro_facts_test.go`, which has no tag, so `make check` runs them without a machine. The helpers that
+need one are in `distro_test.go`, which carries `e2e && (e2e_apparmor || e2e_el9 || e2e_distro)` because the per-release suites
+use them; staticcheck is run with the combined tag set (`make staticcheck`), or the helpers look unused (U1000) under one tag.
+
+Current scope: the scenarios run on the two VMs (`make e2e-apparmor`, `make e2e-el9`). The `e2e-distro` Makefile target, which
+runs them in a release's container (`LEG=` picks the image), arrives with the next pull request (C2), together with the
+Debian 12, Ubuntu 22.04, Rocky 9 and AlmaLinux 10 images; until then `e2e_distro` is only reached through the two VM targets.
+The table has no `ClamdSocket` or `ClamdSockPath` field: nothing reads them yet, and a field no test uses cannot be shown
+correct. Add them with the first scenario that needs one.
+`deploy/test/reset.sh` takes `READY_UNIT` (Docker only: the oneshot unit it waits for before the container counts as ready,
+default `clamfleet-ci-freshclam-history.service`); an image without that unit sets it empty and only the scan counts.
+
 ## Browser fixture (`make web-fixture`)
 
 The console's browser tests (Playwright) need a server they can start on loopback with known logins and

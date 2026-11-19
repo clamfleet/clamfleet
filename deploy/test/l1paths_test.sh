@@ -71,6 +71,7 @@ row yes e2e/el_e2e_test.go
 row yes e2e/el9_e2e_test.go
 row yes e2e/distro_e2e_test.go
 row yes e2e/distro_test.go
+row yes e2e/distro_facts_test.go
 row yes e2e/package_e2e_test.go
 row yes e2e/agent_e2e_test.go
 row yes e2e/event_e2e_test.go

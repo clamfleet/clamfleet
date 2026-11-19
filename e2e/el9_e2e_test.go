@@ -22,7 +22,6 @@ package e2e
 
 import (
 	"encoding/json"
-	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -35,15 +34,6 @@ import (
 )
 
 const elDir = "/var/lib/clamav/e2e"
-
-func rpmFile(t *testing.T, dir, name, version string) string {
-	t.Helper()
-	p := filepath.Join(dir, fmt.Sprintf("%s-%s-1.x86_64.rpm", name, version))
-	if _, err := os.Stat(p); err != nil {
-		t.Fatalf("package %s is missing (run `make packages VERSION=%s`): %v", p, pkgVersionOld, err)
-	}
-	return p
-}
 
 // el9Fresh restores the VM, installs both packages (el9-prepare.sh) and returns once clamd scans.
 func el9Fresh(t *testing.T) {
@@ -88,60 +78,6 @@ func sedConfigRestartServerAndTarget(t *testing.T) {
 	t.Helper()
 	restartServer(t)
 	sh(t, "printf '%s\\n' '"+sinkHook+"' | runuser -u clamfleet-server -- env SUDO_USER="+operator+" "+pkgServer+" alert add-webhook ops --url-stdin --no-state-changes --detection-burst 0")
-}
-
-// avcs returns the AVC denials of the audit log since an epoch second. ausearch's own -ts parsing
-// is not trusted across the VM's clock; the epoch in each record is.
-func avcs(t *testing.T, since string) []string {
-	t.Helper()
-	out := sh(t, `awk -v s=`+since+` '/type=AVC/ { match($0, /audit\(([0-9]+)/, m); if (m[1] >= s) print }' /var/log/audit/audit.log || true`)
-	var lines []string
-	for _, l := range strings.Split(out, "\n") {
-		if strings.TrimSpace(l) != "" {
-			lines = append(lines, l)
-		}
-	}
-	return lines
-}
-
-func epoch(t *testing.T) string { return sh(t, "date +%s") }
-
-// ours returns the denials that concern clamd's domain, minus the harness's own and the one
-// known stock denial. The harness (incus exec, through a CIL module `incus-agent-harness` in the
-// VM) runs in init_t and initrc_t and is denied things unrelated to us; clamd reading
-// /selinux/enforce is a stock denial of the image (an unlabeled stray directory), filtered and not fixed.
-func elOurs(lines []string) []string {
-	var out []string
-	for _, l := range lines {
-		if !strings.Contains(l, "scontext=system_u:system_r:antivirus_t") {
-			continue
-		}
-		// clamd looks at /selinux, an unlabeled directory the image ships (stock, unrelated to us).
-		if strings.Contains(l, "/selinux/enforce") || strings.Contains(l, `name="enforce"`) || (strings.Contains(l, `name="selinux"`) && strings.Contains(l, "tcontext=system_u:object_r:unlabeled_t")) {
-			continue
-		}
-		out = append(out, l)
-	}
-	return out
-}
-
-// preconditions: without them a pass would mean nothing.
-func elPreconditions(t *testing.T) {
-	t.Helper()
-	if got := sh(t, "getenforce"); got != "Enforcing" {
-		t.Fatalf("getenforce = %q, want Enforcing", got)
-	}
-	if ps := sh(t, "ps -eZ | grep ' clamd$' || true"); !strings.Contains(ps, ":antivirus_t:") {
-		t.Fatalf("clamd runs as %q, want antivirus_t", ps)
-	}
-	if mods := sh(t, "semodule -lfull | grep -w clamfleet || true"); !strings.Contains(mods, "300") {
-		t.Fatalf("semodule -lfull lists %q, want the module clamfleet at priority 300", mods)
-	}
-	for _, p := range []string{spoolDir + "/events", spoolDir + "/usage"} {
-		if z := sh(t, "ls -dZ "+p); !strings.Contains(z, ":clamfleet_spool_t:") {
-			t.Fatalf("%s is labelled %q, want clamfleet_spool_t", p, z)
-		}
-	}
 }
 
 // The rpm: installs, follows the preset (the server is NOT enabled), starts when told to,
@@ -257,7 +193,7 @@ func TestSELinuxEICARAlert(t *testing.T) {
 	t.Logf("MEASURED (AlmaLinux 9, SELinux enforcing): scan to alert %v, clamdscan returned in %v", at.Sub(t0).Round(100*time.Millisecond), took.Round(time.Millisecond))
 	// clamd@scan is Type=forking: clamd closes stderr, so a failing event command leaves NO line in
 	// clamd's journal on this family (it does on Debian). The audit log is what shows a denial here.
-	if d := elOurs(avcs(t, since)); len(d) != 0 {
+	if d := macDenials(t, release(t), since); len(d) != 0 {
 		t.Fatalf("SELinux denied something to clamd's domain on the allowed path:\n%s", strings.Join(d, "\n"))
 	}
 	waitSpoolEmpty(t, "events", 10*time.Second)
@@ -279,7 +215,7 @@ func TestSELinuxModuleIsNeeded(t *testing.T) {
 		t.Fatalf("scan: %d %s", code, out)
 	}
 	time.Sleep(5 * time.Second)
-	d := elOurs(avcs(t, since))
+	d := macDenials(t, release(t), since)
 	found := false
 	for _, l := range d {
 		found = found || (strings.Contains(l, "tcontext=system_u:object_r:var_lib_t") && strings.Contains(l, "comm=\"clamfleet-agent\""))
@@ -324,7 +260,7 @@ func TestSELinuxEventCannotWriteElsewhere(t *testing.T) {
 		t.Fatalf("scan: %d %s", code, out)
 	}
 	time.Sleep(5 * time.Second)
-	d := elOurs(avcs(t, since))
+	d := macDenials(t, release(t), since)
 	found := false
 	for _, l := range d {
 		// The real spool is allowed by the module, so a denial of the event command on a var_lib_t
