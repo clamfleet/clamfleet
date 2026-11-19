@@ -152,6 +152,11 @@ func TestAppArmorEventProfileDenies(t *testing.T) {
 	// directory that holds a real events/ with the right owner and mode, so the event
 	// command's own checks (real directories, owner, sticky) pass and only the profile
 	// can refuse. Nothing appears there.
+	// The agent service owns spool/reports and quarantines entries it does not recognise: its
+	// ReportPass moves the staged spool/reports/events directory away, which raced with the
+	// install and the event run below as an intermittent `lstat ... no such file`. It must not
+	// run while the other spools are staged; apparmorRig starts it again for the next test.
+	sh(t, "systemctl stop clamfleet-agent")
 	for _, other := range []string{"reports", "quarantine"} {
 		dir := spoolDir + "/" + other
 		// 0755 so the kernel's permission check lets clamd's user in: only the profile can refuse.
