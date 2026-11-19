@@ -152,11 +152,28 @@ replace the secret; republish the key. Old signatures stay valid for users who r
 Publish the stored revocation certificate. A new key has a **new fingerprint**, announced on every
 independent channel; every supported release is re-signed, with an advisory.
 
+## The distribution containers
+
+Level 2 of R1 decision 1 (`l2` in CI, `docs/testing.md`, "The distribution containers") is four images that follow
+their distributions. What the maintainer does with them:
+
+- **Digests move only by pull request.** Dependabot proposes the base images and the shared ClamAV image monthly, one
+  pull request per directory (`deploy/test/ci`, `deb`, `rpm`). The ClamAV digest is in all three Dockerfiles and
+  `deploy/test/ci/signatures_test.sh` fails until they agree: merge the three together. Read a new digest from the registry
+  API, never by hand, and record it in the commit.
+- **A release leaves the matrix** when its support ends (R1 decision 4: Ubuntu 22.04 on 2027-05-31, Debian 12 on
+  2028-06-30): remove its leg, its facts row and its required check, the ruleset first. A release enters it with a leg
+  in the workflow, a stage in the Dockerfile, a facts row and the added check names (R1 decision 8).
+- **The ClamAV floor is 1.4.** A build that resolves an older clamd fails on purpose; it is the release's claim, not a
+  tooling detail. Ubuntu 22.04 depends on `jammy-updates` for it.
+- **A red leg is a finding.** Distribution updates can turn one red; fix it in its own pull request, never by re-running.
+  A leg that cannot be fixed before a release is listed as "untested" in the release notes (R1 decision 5).
+
 ## Repository settings (the maintainer, once the repository is public)
 
 Rulesets and environment reviewers do not exist on the free plan while a repository is private, so these
 are set after the switch. The required checks are the job names `check`, `e2e`, `web`, `dco` and
-`release-dry-run`. **Renaming or removing one blocks every merge until the ruleset is changed first**: change
+`release-dry-run`, and the four checks of the matrix job `l2` (`l2 (debian-12)`, `l2 (ubuntu-22.04)`, `l2 (rocky-9)`, `l2 (almalinux-10)`). **Renaming or removing one blocks every merge until the ruleset is changed first**: change
 the ruleset, then the workflow.
 
 ```sh
@@ -171,7 +188,9 @@ gh api -X POST repos/clamfleet/clamfleet/rulesets --input - <<'JSON'
       "required_status_checks": [
         { "context": "check", "integration_id": 15368 }, { "context": "e2e", "integration_id": 15368 },
         { "context": "web", "integration_id": 15368 }, { "context": "dco", "integration_id": 15368 },
-        { "context": "release-dry-run", "integration_id": 15368 } ] } },
+        { "context": "release-dry-run", "integration_id": 15368 },
+        { "context": "l2 (debian-12)", "integration_id": 15368 }, { "context": "l2 (ubuntu-22.04)", "integration_id": 15368 },
+        { "context": "l2 (rocky-9)", "integration_id": 15368 }, { "context": "l2 (almalinux-10)", "integration_id": 15368 } ] } },
     { "type": "non_fast_forward" },
     { "type": "deletion" }
   ]
