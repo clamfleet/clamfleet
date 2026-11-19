@@ -248,7 +248,10 @@ expect "agent rpm without antivirus: exit 0" test "$rc" -eq 0
 expect "agent rpm without antivirus: exactly one notice naming selinux-policy-targeted-extra" bash -c "test \$(grep -c 'NOTICE: the SELinux module' '$T/out') -eq 1 && grep 'NOTICE: the SELinux module' '$T/out' | grep -q selinux-policy-targeted-extra"
 expect "agent rpm without antivirus: the module is still loaded at 300" grep -qx "clamfleet 300" "$T/modules"
 expect "agent rpm without antivirus: semodule -l is asked after the module load" bash -c "test \$(grep -n '^semodule -X 300 -i' '$T/calls.log' | cut -d: -f1) -lt \$(grep -n '^semodule -l' '$T/calls.log' | cut -d: -f1)"
-expect "agent rpm without antivirus: nothing else edited (no semodule -r/-d/-e, no other module)" bash -c "test \$(grep -cE '^semodule .*( -[rde] |-B)' '$T/calls.log') -eq 0 && test \$(wc -l <'$T/modules') -eq 1"
+# Exact, not a flag regex: a regex on "-r"/"-d"/"-e" misses forms like `semodule -d antivirus`.
+# The only semodule calls allowed are the priority-300 install and then the read-only list.
+expect "agent rpm without antivirus: the only semodule calls are the install at 300 and -l" bash -c "grep '^semodule' '$T/calls.log' | sed -e 's# -i .*clamfleet.cil\$# -i CIL#' | paste -sd'|' | grep -qx 'semodule -X 300 -i CIL|semodule -l'"
+expect "agent rpm without antivirus: no other module appeared" test "$(wc -l <"$T/modules")" -eq 1
 cleanup
 
 # The notice must never fail the install: a semodule -l that errors prints nothing and exits 0.
