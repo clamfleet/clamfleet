@@ -64,13 +64,13 @@ release-snapshot:
 vet:
 	$(GO) vet ./...
 	$(GO) vet -tags e2e ./...
-	$(GO) vet -tags "e2e e2e_apparmor e2e_el9" ./...
+	$(GO) vet -tags "e2e e2e_apparmor e2e_el9 e2e_distro" ./...
 	$(GO) vet -tags e2e_idp ./...
 
 staticcheck:
 	staticcheck ./...
 	staticcheck -tags e2e ./...
-	staticcheck -tags "e2e e2e_apparmor e2e_el9" ./...
+	staticcheck -tags "e2e e2e_apparmor e2e_el9 e2e_distro" ./...
 	staticcheck -tags e2e_idp ./...
 
 test:
@@ -184,16 +184,16 @@ e2e-docker:
 # pattern may hold a double quote or a `$` (written `$$` for make) but never a single quote (a syntax error).
 # The gate then fails when a test the pattern selects did not run, which a bare -run reports as a pass.
 # -v is gone: the gate prints the same output from the -json events. bash and pipefail as in test-ci.
-AA_RUN := TestAppArmor|TestClamdOnlyExecsTheAgent
-EL9_RUN := TestEL9|TestSELinux
+AA_RUN := TestAppArmor|TestClamdOnlyExecsTheAgent|TestDistro
+EL9_RUN := TestEL9|TestSELinux|TestDistro
 
 e2e-apparmor:
 	@test -n "$(CFA_EXEC)" -a -n "$(CFA_HOST)" || { echo "e2e-apparmor: set CFA_EXEC and CFA_HOST (environment or local.mk, see local.mk.example and docs/testing.md)" >&2; exit 1; }
 	./deploy/test/l1-guard.sh
 	$(MAKE) packages VERSION=0.6.0-e2e1
 	$(GO) build -o $(BIN)/testgate ./hack/testgate
-	E2E_RUN_RE='$(AA_RUN)' CFT_EXEC="$(CFA_EXEC)" INCUS_HOST="$(CFA_HOST)" CT=clamfleet-aa SNAP=clean READY_FILE=/var/lib/clamav/freshclam.dat \
-		bash -o pipefail -c '$(GO) test -tags "e2e e2e_apparmor" -count=1 -timeout 30m -json -run "$$E2E_RUN_RE" ./e2e/ | $(BIN)/testgate -expect-pkg ./e2e -tags "e2e e2e_apparmor" -expect-run "$$E2E_RUN_RE"'
+	E2E_MAC=1 E2E_RUN_RE='$(AA_RUN)' CFT_EXEC="$(CFA_EXEC)" INCUS_HOST="$(CFA_HOST)" CT=clamfleet-aa SNAP=clean READY_FILE=/var/lib/clamav/freshclam.dat \
+		bash -o pipefail -c '$(GO) test -tags "e2e e2e_apparmor e2e_distro" -count=1 -timeout 30m -json -run "$$E2E_RUN_RE" ./e2e/ | $(BIN)/testgate -expect-pkg ./e2e -tags "e2e e2e_apparmor e2e_distro" -expect-run "$$E2E_RUN_RE"'
 
 # RHEL 9 and SELinux Enforcing, in the throwaway AlmaLinux 9 VM (docs/testing.md "The AlmaLinux 9 VM"):
 # the .rpm files are installed with dnf and the detection path must work through the SELinux module the
@@ -204,8 +204,8 @@ e2e-el9:
 	./deploy/test/l1-guard.sh
 	$(MAKE) packages VERSION=0.6.0-e2e1
 	$(GO) build -o $(BIN)/testgate ./hack/testgate
-	E2E_RUN_RE='$(EL9_RUN)' CFT_EXEC="$(CFE_EXEC)" INCUS_HOST="$(CFE_HOST)" CT=clamfleet-el9 SNAP=clean READY_FILE=/var/lib/clamav/bytecode.cvd \
-		bash -o pipefail -c '$(GO) test -tags "e2e e2e_el9" -count=1 -timeout 40m -json -run "$$E2E_RUN_RE" ./e2e/ | $(BIN)/testgate -expect-pkg ./e2e -tags "e2e e2e_el9" -expect-run "$$E2E_RUN_RE"'
+	E2E_MAC=1 E2E_RUN_RE='$(EL9_RUN)' CFT_EXEC="$(CFE_EXEC)" INCUS_HOST="$(CFE_HOST)" CT=clamfleet-el9 SNAP=clean READY_FILE=/var/lib/clamav/bytecode.cvd \
+		bash -o pipefail -c '$(GO) test -tags "e2e e2e_el9 e2e_distro" -count=1 -timeout 40m -json -run "$$E2E_RUN_RE" ./e2e/ | $(BIN)/testgate -expect-pkg ./e2e -tags "e2e e2e_el9 e2e_distro" -expect-run "$$E2E_RUN_RE"'
 
 # OpenLDAP and Keycloak in the throwaway clamfleet-idp container (docs/testing.md "The IdP container"): the real
 # server signs users in against both. Part of the milestone 6b acceptance; `make e2e` does not run it. Without
