@@ -254,6 +254,13 @@ expect "agent rpm without antivirus: the only semodule calls are the install at 
 expect "agent rpm without antivirus: no other module appeared" test "$(wc -l <"$T/modules")" -eq 1
 cleanup
 
+# `antivirus_local` is not `antivirus`: the anchor after the name must not accept a longer module name.
+new_env
+echo clamscan >"$T/users"; echo "antivirus_local 400" >"$T/modules"
+run agent-postinstall 1
+expect "agent rpm with only antivirus_local loaded: the notice is printed" bash -c "test \$(grep -c 'NOTICE: the SELinux module' '$T/out') -eq 1"
+cleanup
+
 # The notice must never fail the install: a semodule -l that errors prints nothing and exits 0.
 new_env
 echo clamscan >"$T/users"
