@@ -1,7 +1,7 @@
 ; SPDX-License-Identifier: AGPL-3.0-only
 ; SPDX-FileCopyrightText: The ClamFleet Authors
 ;
-; SELinux module for the ClamFleet agent on the RHEL 9 family.
+; SELinux module for the ClamFleet agent on the RHEL 9 and 10 family.
 ; Install and remove it at priority 300 ONLY: `semodule -X 300 -i clamfleet.cil` and
 ; `semodule -X 300 -r clamfleet`. A plain `semodule -r` removes at the default priority
 ; and would leave this module loaded.
@@ -45,9 +45,21 @@
 (filecon "/var/lib/clamfleet/spool/events(/.*)?" any (system_u object_r clamfleet_spool_t ((s0) (s0))))
 (filecon "/var/lib/clamfleet/spool/usage" file (system_u object_r clamfleet_spool_t ((s0) (s0))))
 
-; Directory: look up and stat the entries, open and fsync the directory, create and remove
-; the temporary file and the final hard link. `read` is needed to open the directory for fsync.
-(allow antivirus_t clamfleet_spool_t (dir (search getattr open read write add_name remove_name)))
-; Files: create the temp file, write it, chmod it (setattr), hard-link it to its final name,
-; remove the temp name, and read, write and flock the shared accounting file (lock).
-(allow antivirus_t clamfleet_spool_t (file (create open read write getattr setattr lock link unlink)))
+; The two rules sit in an optional block because antivirus_t is not always in the policy. EL10 moved
+; the antivirus module out of the base targeted policy into selinux-policy-targeted-extra (CRB), so on a
+; stock EL10 the type does not exist, CIL cannot resolve the allow statements, and a module without the
+; block is rejected whole (R1 decision 9). CIL disables an optional block whose names do not resolve and
+; evaluates it again on every policy rebuild: the rules switch on by themselves when the extra package is
+; installed and off when it is removed (or on EL9 after `semodule -d antivirus`). Without the block that
+; removal would make every later policy rebuild fail. The type, roletype, file_type and filecon stay
+; OUTSIDE the block on purpose: they name only our own type and `file_type`, which both releases have,
+; and the label must exist whether or not clamd is confined. deploy/test/selinux_test.sh accepts exactly
+; one optional block holding exactly these two rules.
+(optional clamfleet_antivirus
+	; Directory: look up and stat the entries, open and fsync the directory, create and remove
+	; the temporary file and the final hard link. `read` is needed to open the directory for fsync.
+	(allow antivirus_t clamfleet_spool_t (dir (search getattr open read write add_name remove_name)))
+	; Files: create the temp file, write it, chmod it (setattr), hard-link it to its final name,
+	; remove the temp name, and read, write and flock the shared accounting file (lock).
+	(allow antivirus_t clamfleet_spool_t (file (create open read write getattr setattr lock link unlink)))
+)

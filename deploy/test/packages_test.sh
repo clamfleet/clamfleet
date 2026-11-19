@@ -232,6 +232,50 @@ expect "agent rpm install: the module is loaded at priority 300" grep -qx "clamf
 expect "agent rpm install: the readability check uses clamscan" has_call "^runuser -u clamscan"
 cleanup
 
+# EL9 and EL10 with the extra package: `antivirus` is loaded, so no notice.
+new_env
+echo clamscan >"$T/users"; echo "antivirus 100" >"$T/modules"
+run agent-postinstall 1
+expect "agent rpm with antivirus loaded: exit 0" test "$rc" -eq 0
+expect "agent rpm with antivirus loaded: no notice" bash -c "! grep -q 'NOTICE: the SELinux module' '$T/out'"
+cleanup
+
+# Stock EL10: no `antivirus`. One notice, after the module load, naming the package; install still succeeds.
+new_env
+echo clamscan >"$T/users"
+run agent-postinstall 1
+expect "agent rpm without antivirus: exit 0" test "$rc" -eq 0
+expect "agent rpm without antivirus: exactly one notice naming selinux-policy-targeted-extra" bash -c "test \$(grep -c 'NOTICE: the SELinux module' '$T/out') -eq 1 && grep 'NOTICE: the SELinux module' '$T/out' | grep -q selinux-policy-targeted-extra"
+expect "agent rpm without antivirus: the module is still loaded at 300" grep -qx "clamfleet 300" "$T/modules"
+expect "agent rpm without antivirus: semodule -l is asked after the module load" bash -c "test \$(grep -n '^semodule -X 300 -i' '$T/calls.log' | cut -d: -f1) -lt \$(grep -n '^semodule -l' '$T/calls.log' | cut -d: -f1)"
+# Exact, not a flag regex: a regex on "-r"/"-d"/"-e" misses forms like `semodule -d antivirus`.
+# The only semodule calls allowed are the priority-300 install and then the read-only list.
+expect "agent rpm without antivirus: the only semodule calls are the install at 300 and -l" bash -c "grep '^semodule' '$T/calls.log' | sed -e 's# -i .*clamfleet.cil\$# -i CIL#' | paste -sd'|' | grep -qx 'semodule -X 300 -i CIL|semodule -l'"
+expect "agent rpm without antivirus: no other module appeared" test "$(wc -l <"$T/modules")" -eq 1
+cleanup
+
+# `antivirus_local` is not `antivirus`: the anchor after the name must not accept a longer module name.
+new_env
+echo clamscan >"$T/users"; echo "antivirus_local 400" >"$T/modules"
+run agent-postinstall 1
+expect "agent rpm with only antivirus_local loaded: the notice is printed" bash -c "test \$(grep -c 'NOTICE: the SELinux module' '$T/out') -eq 1"
+cleanup
+
+# The notice must never fail the install: a semodule -l that errors prints nothing and exits 0.
+new_env
+echo clamscan >"$T/users"
+mv "$T/bin/semodule" "$T/bin/semodule.real"
+cat >"$T/bin/semodule" <<'STUB'
+#!/bin/sh
+echo "semodule $*" >>"$T/calls.log"
+for a in "$@"; do [ "$a" = -l ] && exit 1; done
+exit 0
+STUB
+chmod +x "$T/bin/semodule"
+run agent-postinstall 1
+expect "agent rpm with a failing semodule -l: exit 0, no notice" bash -c "test $rc -eq 0 && ! grep -q 'NOTICE: the SELinux module' '$T/out'"
+cleanup
+
 # SELinux disabled: no semodule
 new_env
 echo clamscan >"$T/users"; echo no >"$T/selinux.state"

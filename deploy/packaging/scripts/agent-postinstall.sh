@@ -57,6 +57,13 @@ else
 	if command -v selinuxenabled >/dev/null 2>&1 && selinuxenabled; then
 		semodule -X 300 -i "$SELINUX_MODULE"
 		restorecon -R "$STATE_DIR"
+		# EL10's base policy has no antivirus module (it is in selinux-policy-targeted-extra, CRB):
+		# the module above loaded, but its rules are inactive and clamd runs unconfined (R1
+		# decisions 9 and 10). Say so once. A notice only: it must never fail the install, so a
+		# `semodule -l` that fails prints nothing (we cannot tell), and nothing here edits policy.
+		if mods="$(semodule -l 2>/dev/null)" && ! printf '%s\n' "$mods" | grep -Eq '^antivirus([[:space:]]|$)'; then
+			echo "clamfleet-agent: NOTICE: the SELinux module 'antivirus' is not installed, so SELinux does not confine clamd on this host (the spool label still works). To confine it, install selinux-policy-targeted-extra (CRB), run restorecon on clamd's files and restart clamd; the rules of the clamfleet module then switch on by themselves." >&2
+		fi
 	fi
 fi
 

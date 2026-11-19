@@ -117,7 +117,7 @@ How to read it:
   because the page lists every host name.
 - **M6 decision 9, install and removal.** Debian services are enabled and started; the RHEL family follows system
   presets. The first server install creates the secret key file. A purge never deletes the database or the key file.
-- **M6 decision 10, SELinux.** A small module: one label for the detection spool and permission for clamd's domain to
+- **M6 decision 10, SELinux.** (Amended by R1 decision 9.) A small module: one label for the detection spool and permission for clamd's domain to
   write there, and nothing else. It is installed at priority 300 only.
 - **M6 decision 11, test machines.** (Superseded by R1 decision 1 for the machines: the Rocky Linux 10 VM and the
   Ubuntu runner job join them.) Throwaway machines: a Debian 13 VM with AppArmor, an AlmaLinux 9 VM with SELinux
@@ -150,8 +150,8 @@ How to read it:
 
 ## Release 1.0: distribution support
 
-Decided 2026-11-18. R1 decisions 1 and 4 supersede M6 decisions 11 and 12 and the specification's section 15, question 5
-(`docs/HANDOVER.md`).
+Decided 2026-11-18, except decisions 9 and 10 (2026-11-19). R1 decisions 1 and 4 supersede M6 decisions 11 and 12 and the
+specification's section 15, question 5 (`docs/HANDOVER.md`); R1 decision 9 amends M6 decision 10.
 
 - **R1 decision 1, the test matrix.** Three Incus VMs run the full level-1 scenarios with the mandatory access control
   enforcing: Debian 13 (AppArmor), AlmaLinux 9 (SELinux) and Rocky Linux 10 (SELinux). Ubuntu 24.04 and 26.04 get the
@@ -184,3 +184,20 @@ Decided 2026-11-18. R1 decisions 1 and 4 supersede M6 decisions 11 and 12 and th
   that adds the job has run (its run shows the exact check names, which a matrix generates) and before that pull
   request merges. Adding it earlier would mean guessing the names, and a wrong guess blocks every merge. Renaming or
   removing a required check still means the ruleset first, then the workflow.
+- **R1 decision 9, SELinux on EL10 (amends M6 decision 10).** Decided 2026-11-19. The two `allow` rules of the module sit in one CIL
+  `(optional clamfleet_antivirus ...)` block; the type, `roletype`, `file_type` and the two `filecon` lines stay outside.
+  Why: EL10 moved the `antivirus` policy module out of the base targeted policy into `selinux-policy-targeted-extra`
+  (CRB; RHEL-73505), so on a stock EL10 `antivirus_t` does not exist and a module that names it unconditionally is rejected
+  whole by `semodule`. CIL disables an optional block whose names do not resolve and re-evaluates it at every policy
+  rebuild, so the rules switch on when the extra package is installed and off when it is removed. This also removes a
+  latent EL9 bug: with the unconditional module, `semodule -d antivirus` (or removing the extra package on EL10) made every
+  later policy rebuild fail. The rule set is unchanged where `antivirus_t` exists (`TestSELinuxRuleSet`);
+  `deploy/test/selinux_test.sh` accepts exactly one optional block holding exactly the two reviewed rules. The
+  postinstall prints one notice, and never fails, when `semodule -l` lists no `antivirus`.
+- **R1 decision 10, EL10 supported, clamd unconfined there, documented (A + C).** Decided 2026-11-19. Rocky Linux 10 and
+  AlmaLinux 10 are supported in their stock state, where clamd runs as `unconfined_service_t` and SELinux contains neither
+  clamd nor the event command (the DAC boundary of M5 decision 3 remains). The docs say so from rc.2, with the EL10 tests, and name
+  `selinux-policy-targeted-extra` from CRB, then `restorecon` on clamd's paths and a restart, as the way to confine clamd;
+  the rules of R1 decision 9 then switch on by themselves. Rejected: a separate EL10 module chosen at install time (it
+  would silently lose every detection if the extra package is installed later), and a package dependency on the extra
+  package (about 60 policy modules for other services, and it needs CRB).
