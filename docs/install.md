@@ -28,10 +28,16 @@ repository at `refs/tags/vX.Y.Z`), for example
 `curl -fsSLO https://raw.githubusercontent.com/clamfleet/clamfleet/refs/tags/vX.Y.Z/deploy/release/clamfleet-release.asc`.
 Then compare its fingerprints with the list above. The README and `SECURITY.md` carry the same list, but they are copies
 in this same repository: they help only if you got the key file some other way, and a replaced repository replaces them
-together. The independent copies, on the maintainer's website and on keys.openpgp.org, **will list** the fingerprint
-(neither does yet); compare with those as soon as they do. A replaced key file would otherwise vouch for itself.
+together. The independent copies are on keys.openpgp.org, which lists the key (verified for hi@madalin.me; fetch it by
+fingerprint or by email, see below), and on the maintainer's website, which **will list** the fingerprint (it does
+not yet). Compare with keys.openpgp.org now and with the website once it does. A replaced key file would otherwise
+vouch for itself.
 
 ```sh
+# The independent copy: both commands must give the same fingerprints as the list above.
+curl -fsS https://keys.openpgp.org/vks/v1/by-fingerprint/EEF3BD8A0FDA41C0C4518B4436E3A39F1BE26893 | gpg --show-keys --with-subkey-fingerprints
+curl -fsS https://keys.openpgp.org/vks/v1/by-email/hi%40madalin.me | gpg --show-keys --with-subkey-fingerprints
+
 gpg --show-keys --with-subkey-fingerprints clamfleet-release.asc   # compare BEFORE importing: the "pub" fingerprint and the "sub" one
 gpg --import clamfleet-release.asc
 gpg --verify SHA256SUMS.asc SHA256SUMS   # must say "Good signature"; its "Primary key fingerprint" line must be the primary above
