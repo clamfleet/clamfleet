@@ -173,6 +173,7 @@ expect "agent deb first install: the AppArmor profile is loaded" has_call "appar
 expect "agent deb first install: enabled and started" bash -c "has_call() { grep -qE -- \"\$1\" '$T/calls.log'; }; has_call '^systemctl enable clamfleet-agent.service' && has_call '^systemctl start clamfleet-agent.service'"
 expect "agent deb first install: no SELinux call" test "$(count_calls '^semodule')" -eq 0
 expect "agent deb first install: the notice names the VirusEvent line" grep -q "VirusEvent /usr/bin/clamfleet-agent event" "$T/out"
+expect "agent deb first install: the notice names EnableVersionCommand and EnableStatsCommand" bash -c "grep -q EnableVersionCommand '$T/out' && grep -q EnableStatsCommand '$T/out'"
 expect "agent deb first install: the AppArmor notice" grep -q "usr.sbin.clamd.local" "$T/out"
 expect "agent deb first install: the scan timer is NOT enabled" bash -c "! grep -q 'clamfleet-scan.timer' '$T/enabled'"
 cleanup
