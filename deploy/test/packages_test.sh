@@ -182,6 +182,8 @@ expect "agent deb first install: the notice does not send the administrator to /
 # Rule: the agent package puts nothing but README and LICENSE under /usr/share/doc (dpkg excludes it on
 # minimized Ubuntu images). Examples and the include live in /usr/share/clamfleet-agent.
 expect "agent package: only README and LICENSE under /usr/share/doc" bash -c "! grep -E 'dst: /usr/share/doc/' '$here/../packaging/nfpm-agent.yaml' | grep -vE '/(README.md|LICENSE)\$'"
+expect "server package: only README and LICENSE under /usr/share/doc" bash -c "! grep -E 'dst: /usr/share/doc/' '$here/../packaging/nfpm-server.yaml' | grep -vE '/(README.md|LICENSE)\$'"
+expect "server package: the example is packaged under /usr/share/clamfleet-server" bash -c "grep -qE 'dst: /usr/share/clamfleet-server/server.yaml.example\$' '$here/../packaging/nfpm-server.yaml'"
 expect "agent package: the include and the examples are packaged under /usr/share/clamfleet-agent" bash -c "n=\$(grep -cE 'dst: /usr/share/clamfleet-agent/(usr.sbin.clamd.local|agent.yaml.example|agent.rhel9.yaml.example)\$' '$here/../packaging/nfpm-agent.yaml'); test \$n -eq 3"
 expect "agent deb first install: the scan timer is NOT enabled" bash -c "! grep -q 'clamfleet-scan.timer' '$T/enabled'"
 cleanup
@@ -453,6 +455,7 @@ expect "server deb first install: the key is generated" has_call "^clamfleet-ser
 expect "server deb first install: the key file is given to the server group, mode 0640" bash -c "grep -q '^chgrp clamfleet-server .*server-secret.key' '$T/calls.log' && grep -q '^chmod 0640 .*server-secret.key' '$T/calls.log'"
 expect "server deb first install: the configuration is given to the server group" has_call "^chgrp clamfleet-server .*server.yaml"
 expect "server deb first install: enabled and started" bash -c "grep -q '^systemctl enable clamfleet-server.service' '$T/calls.log' && grep -q '^systemctl start clamfleet-server.service' '$T/calls.log'"
+expect "server deb first install: the notice does not send the administrator to a /usr/share/doc example" bash -c "! grep -q 'doc/clamfleet-server/server.yaml' '$T/out'"
 expect "server deb first install: the backup timer is NOT enabled" bash -c "! grep -q backup '$T/enabled'"
 cleanup
 

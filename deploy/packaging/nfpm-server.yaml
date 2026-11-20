@@ -55,8 +55,11 @@ contents:
   - src: README.md
     dst: /usr/share/doc/clamfleet-server/README.md
     file_info: {mode: 0644, owner: root, group: root}
+  # Not documentation: the example configuration lives outside /usr/share/doc because minimized Ubuntu
+  # images (minimal, cloud, LXD) ship dpkg's /etc/dpkg/dpkg.cfg.d/excludes, which makes dpkg skip that
+  # directory silently. Only README and LICENSE stay there; deploy/test/packages_test.sh fails on anything else.
   - src: deploy/server.yaml.example
-    dst: /usr/share/doc/clamfleet-server/server.yaml.example
+    dst: /usr/share/clamfleet-server/server.yaml.example
     file_info: {mode: 0644, owner: root, group: root}
   - src: LICENSE
     dst: /usr/share/doc/clamfleet-server/LICENSE

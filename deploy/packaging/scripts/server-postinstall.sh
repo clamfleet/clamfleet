@@ -68,7 +68,7 @@ fi
 
 if [ "$first" = 1 ]; then
 	cat >&2 <<NOTICE
-clamfleet-server: installed. Next steps (docs: /usr/share/doc/clamfleet-server/):
+clamfleet-server: installed. Next steps (README and licence: /usr/share/doc/clamfleet-server/, example configuration: /usr/share/clamfleet-server/):
   1. Review $ETC_DIR/server.yaml. The default listens on 127.0.0.1:8443 in plaintext: put a reverse
      proxy with TLS in front, or set tls.cert and tls.key.
   2. Admin commands run as the server user: sudo -u clamfleet-server clamfleet-server host add NAME
