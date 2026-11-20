@@ -213,3 +213,9 @@ specification's section 15, question 5 (`docs/HANDOVER.md`); R1 decision 9 amend
   wording (a proto field to name the command was rejected as a schema bump), so a transient VERSION or STATS failure warns
   too; the agent's text names the setting. Rejected: choosing behaviour by package
   version or distribution (it breaks on the next repackaging), and the agent editing `clamd.conf` (it belongs to the clamd package).
+- **R1 decision 12, the DCO cut-off is permanent.** Decided 2026-11-21. The sign-off rule (M6c decision 13) came with `hack/ci/dco.sh`,
+  after 192 commits of milestone work that carry none, and the first pull request into `main` (the release) spans all of them. `dco.sh`
+  exempts every commit that is an ancestor of, or equal to, one pinned commit, `b072a15` (the newest unsigned commit before the rule;
+  every other unsigned commit is its ancestor); each later commit is checked as before. The pin must be in the repository or the script
+  fails with status 2, as for a shallow clone. Rejected: rewriting `develop` with `git rebase --signoff` (it would add a certification the
+  authors did not make at the time and change every SHA), and an admin bypass of the required check.

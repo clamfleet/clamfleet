@@ -5,14 +5,27 @@
 # dco_test.sh - hack/ci/dco.sh against a temporary repository (`make check` runs it). Each way the
 # check can be wrong has a case: a missing sign-off, a sign-off by someone else, a range that was
 # never fetched (must fail, not pass as empty), the exempt commits (Dependabot, merges), and a
-# sign-off that is only text in the middle of the message.
+# sign-off that is only text in the middle of the message, and the cut-off (R1 decision 12): an unsigned
+# commit at or before the pinned one passes, one after it fails, a pin missing from the repository exits 2.
+# The real script pins a SHA of this project's history, which a temporary repository does not have, so the
+# cases run a copy with the constant replaced (an environment override would be a second way to switch the
+# exemption off or move it in CI, which a pull request must not have); the real pin is checked for its shape.
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-dco="$here/../../hack/ci/dco.sh"
+real="$here/../../hack/ci/dco.sh"
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 fail() { echo "dco_test: FAIL: $*" >&2; exit 1; }
+
+# with_cutoff SHA: points `dco` at a copy of the script pinned to SHA.
+with_cutoff() {
+	sed "s/^DCO_CUTOFF=.*/DCO_CUTOFF=$1/" "$real" >"$tmp/dco.sh"
+	chmod +x "$tmp/dco.sh"
+	grep -q "^DCO_CUTOFF=$1\$" "$tmp/dco.sh" || fail "the pin was not replaced in the copy"
+	dco="$tmp/dco.sh"
+}
+grep -Eq '^DCO_CUTOFF=[0-9a-f]{40}$' "$real" || fail "hack/ci/dco.sh has no 40-hex DCO_CUTOFF line"
 
 cd "$tmp"
 git init -q -b main .
@@ -29,6 +42,7 @@ n=0
 ok=$'\n\nSigned-off-by: Ann Dev <ann@example.com>'
 commit "Ann Dev" ann@example.com "root"
 root="$(git rev-parse HEAD)"
+with_cutoff "$root"
 
 # expect_ok / expect_fail NAME BASE HEAD [status]
 expect_ok() { "$dco" "$2" "$3" >"$tmp/out" 2>&1 || fail "$1: refused:
@@ -90,4 +104,26 @@ expect_ok "a merge commit with no sign-off" "$dep" HEAD
 # A human pretending nothing: a commit by a non-bot with no sign-off is still refused after a bot's.
 commit "Cy" cy@example.com "feat: unsigned"
 expect_fail "an unsigned human commit after a bot's" "$dep" HEAD
+# The cut-off. History: a root, old1 and old2 (unsigned; old2 is the pin), new1 (unsigned), then a signed one.
+git checkout -q --orphan hist
+commit "Ann Dev" ann@example.com "old: unsigned one"
+old1="$(git rev-parse HEAD)"
+commit "Ann Dev" ann@example.com "old: unsigned two"
+old2="$(git rev-parse HEAD)"
+with_cutoff "$old2"
+expect_ok "an unsigned commit strictly before the cut-off" "$root" "$old1"
+expect_ok "the pinned commit itself" "$old1" "$old2"
+commit "Ann Dev" ann@example.com "new: unsigned"
+new1="$(git rev-parse HEAD)"
+expect_fail "an unsigned commit after the cut-off" "$old2" "$new1"
+grep -q 'new: unsigned' "$tmp/out" || fail "the refusal does not name the commit after the cut-off"
+commit "Ann Dev" ann@example.com "new: signed$ok"
+expect_fail "a range that holds both old unsigned and new unsigned commits" "$old1" HEAD
+grep -q 'old: unsigned' "$tmp/out" && fail "an old commit was named, it is exempt"
+# The same range with the pin moved past the new commit passes: the exemption is the pin, nothing else.
+with_cutoff "$new1"
+expect_ok "the pin moved past the unsigned commit" "$old1" HEAD
+# A pin that is not in the repository fails as a shallow clone does.
+with_cutoff "$zero"
+expect_fail "a missing pin" "$old1" HEAD 2
 echo "dco_test: ok"

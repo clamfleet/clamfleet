@@ -14,6 +14,11 @@
 # a statement by the contributor and the maintainer reviews every change; this check is a reminder
 # and a record, not authentication.
 #
+# Cut-off (R1 decision 12): the project adopted the sign-off rule only when this script was added, so 192
+# commits before it, all milestone work, carry none, and a pull request into `main` (the first release) spans
+# all of them. A commit that is an ancestor of, or equal to, DCO_CUTOFF is exempt; every later commit is
+# checked. The pin is permanent: history is not rewritten to add sign-offs nobody gave at the time.
+#
 # A BASE or HEAD that is not in the repository FAILS. In CI the range comes from the pull request
 # event, and a checkout that did not fetch it (a shallow clone) would otherwise make the range look
 # empty and the check pass. The workflow checks out with fetch-depth: 0 for the same reason.
@@ -28,7 +33,13 @@ if [ "$#" -ne 2 ]; then
 fi
 base="$1"
 head="$2"
-for sha in "$base" "$head"; do
+# The last commit without a sign-off before the rule existed (b072a15, "test(server): wait for the TLS
+# server to be listening before replacing its files"), found as the newest of the unsigned commits of
+# the history at the time; every unsigned commit of it is an ancestor of this one.
+DCO_CUTOFF=b072a15dbc120f5a53a06db31b0e9c8d68bc0b32
+# The pin is checked like BASE and HEAD: a checkout that lacks it (shallow clone) must fail, not leave
+# every old commit looking non-exempt or, worse, the exemption silently absent.
+for sha in "$base" "$head" "$DCO_CUTOFF"; do
 	# ^{commit}: a name that is not a commit (or a missing object) fails; the SHA must resolve here.
 	if ! git cat-file -e "${sha}^{commit}" 2>/dev/null; then
 		echo "dco: $sha is not a commit in this repository (shallow checkout? the workflow needs fetch-depth: 0)" >&2
@@ -40,6 +51,8 @@ bad=0
 n=0
 while IFS= read -r c; do
 	[ -n "$c" ] || continue
+	# Exempt: at or before the cut-off (R1 decision 12). --is-ancestor is true for equal commits too.
+	if git merge-base --is-ancestor "$c" "$DCO_CUTOFF"; then continue; fi
 	n=$((n + 1))
 	author="$(git log -1 --format=%ae "$c" | tr '[:upper:]' '[:lower:]')"
 	case "$author" in
