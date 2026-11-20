@@ -366,7 +366,6 @@ func TestDistroSudoAttribution(t *testing.T) {
 	// /etc/sudoers.d would lock sudo out for everyone.
 	sh(t, "f=$(mktemp); trap 'rm -f \"$f\"' EXIT; printf '%s ALL=(clamfleet-server) NOPASSWD: "+pkgServer+"\\n' "+person+" > \"$f\"; "+
 		"visudo -cf \"$f\" && install -m 0440 \"$f\" /etc/sudoers.d/"+person)
-	t.Log("DIAG " + sh(t, "{ cat /proc/uptime; for n in 1 2 3 4; do /usr/sbin/unix_chkpwd e2eoperator chkexpiry </dev/null; echo n$n-root-rc=$?; runuser -u e2eoperator -- /usr/sbin/unix_chkpwd e2eoperator chkexpiry </dev/null; echo n$n-user-rc=$?; runuser -u e2eoperator -- sudo -n -u clamfleet-server true; echo n$n-sudo-rc=$?; sleep 2; done; journalctl -b --no-pager -o short-precise 2>&1 | grep -E 'unix_chkpwd|sudo|audit' | tail; } 2>&1 || true"))
 	tok := sh(t, "runuser -u "+person+" -- sudo -u clamfleet-server "+pkgServer+" host add "+host)
 	if !strings.HasPrefix(tok, "cfa_") {
 		t.Fatalf("host add through sudo printed %q, want only the token", tok)
