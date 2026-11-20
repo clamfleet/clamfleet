@@ -9,6 +9,8 @@ All notable changes are listed here. The format follows Keep a Changelog; versio
 
 ## Unreleased
 
+- Nothing yet.
+
 ## [1.0.0-rc.1] - 2026-11-20
 
 First release candidate. **Claimed platforms: Debian 13 and Enterprise Linux 9 (AlmaLinux 9, SELinux enforcing); no other
