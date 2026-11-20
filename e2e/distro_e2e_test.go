@@ -449,7 +449,13 @@ func TestDistroStaticMAC(t *testing.T) {
 	// The reviewed list (TestSELinuxRuleSet states the same against the live policy): one rule per
 	// class, both on the module's own type and on no stock type (clamd, freshclam and clamonacc share the domain).
 	// Empty on a release without antivirus_t, where the optional block is inactive (R1 decision 9).
-	want := d.ModuleRules
+	want := append([]string(nil), d.ModuleRules...)
+	if scope == "" {
+		// A whole-policy search also shows the rule the new type brings with it (moduleTypeRule). The
+		// comparison stays exact: this one rule and nothing else.
+		want = append(want, moduleTypeRule)
+	}
+	sort.Strings(want)
 	if strings.Join(added, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("the module adds these rules to the policy:\n%s\nwant exactly:\n%s", strings.Join(added, "\n"), strings.Join(want, "\n"))
 	}
