@@ -366,7 +366,7 @@ func TestDistroSudoAttribution(t *testing.T) {
 	// /etc/sudoers.d would lock sudo out for everyone.
 	sh(t, "f=$(mktemp); trap 'rm -f \"$f\"' EXIT; printf '%s ALL=(clamfleet-server) NOPASSWD: "+pkgServer+"\\n' "+person+" > \"$f\"; "+
 		"visudo -cf \"$f\" && install -m 0440 \"$f\" /etc/sudoers.d/"+person)
-	t.Log("DIAG " + sh(t, "{ LD_DEBUG=bindings /usr/sbin/unix_chkpwd root chkexpiry </dev/null 2>&1 | grep -oE 'symbol .[a-z_A-Z0-9]+' | grep -vE 'str|mem|__' | tr '\\n' ' '; echo; LD_DEBUG=files /usr/sbin/unix_chkpwd root chkexpiry </dev/null 2>&1 | grep -E 'file=.*(nss|pam|audit|selinux)' | grep -v trying; getenforce; cat /sys/fs/selinux/enforce; grep -c selinux /proc/self/mountinfo; chmod 0640 /etc/shadow; /usr/sbin/unix_chkpwd root chkexpiry </dev/null; echo mode640-rc=$?; chmod 0000 /etc/shadow; env -i /usr/sbin/unix_chkpwd root chkexpiry </dev/null; echo envi-rc=$?; } 2>&1 || true"))
+	t.Log("DIAG " + sh(t, "{ stat -c '%n %a %u:%g %i' /etc/shadow; findmnt -no FSTYPE,OPTIONS /; env | cut -d= -f1 | tr '\\n' ' '; echo; env -i /usr/sbin/unix_chkpwd root chkexpiry </dev/null; echo A-envi-rc=$?; /usr/sbin/unix_chkpwd root chkexpiry </dev/null; echo B-env-rc=$?; cp -p /etc/shadow /etc/shadow.x && mv /etc/shadow.x /etc/shadow; stat -c '%n %a %i' /etc/shadow; /usr/sbin/unix_chkpwd root chkexpiry </dev/null; echo C-after-rewrite-rc=$?; chmod 0640 /etc/shadow; chmod 0000 /etc/shadow; /usr/sbin/unix_chkpwd root chkexpiry </dev/null; echo D-after-chmod-rc=$?; } 2>&1 || true"))
 	tok := sh(t, "runuser -u "+person+" -- sudo -u clamfleet-server "+pkgServer+" host add "+host)
 	if !strings.HasPrefix(tok, "cfa_") {
 		t.Fatalf("host add through sudo printed %q, want only the token", tok)
