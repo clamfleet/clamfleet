@@ -18,6 +18,11 @@ A release holds the tarball, the four packages, two SBOMs, `SHA256SUMS` and its 
 (`clamfleet-agent_1.0.0-rc.1_amd64.deb`, `clamfleet-agent-1.0.0-rc.1-1.x86_64.rpm`, and so on; the package's own version is `1.0.0~rc.1`, but file names carry no `~`; see
 [releasing.md](releasing.md) for the list). The signing key is `deploy/release/clamfleet-release.asc` in this repository.
 
+The fingerprints, as published in the README and `SECURITY.md` (both keys expire 2028-11-19; UID `ClamFleet Release <hi@madalin.me>`):
+
+- Primary (certify only): `EEF3 BD8A 0FDA 41C0 C451 8B44 36E3 A39F 1BE2 6893`
+- Signing subkey: `9ADD 4EBC D2FA 7C59 7280 D078 5605 86D7 BCFD 57AF`
+
 **Every download.** Look at the key's fingerprints and **compare them with the ones published somewhere other than this
 repository** (the README and `SECURITY.md` show it; so do the maintainer's website and keys.openpgp.org): a
 replaced key file would otherwise vouch for itself.

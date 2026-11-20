@@ -73,6 +73,12 @@ Packages for Debian 13 and the RHEL 9 family (tested on AlmaLinux 9 with SELinux
 [docs/configuration.md](docs/configuration.md) every key. The packages never edit clamd's configuration: the install
 notice prints the `VirusEvent` line (and, on Debian, the two AppArmor lines) to add.
 
+**Release key** (`ClamFleet Release <hi@madalin.me>`, file `deploy/release/clamfleet-release.asc`, both keys expire 2028-11-19).
+Compare these fingerprints with `gpg --show-keys --with-subkey-fingerprints` before you trust the file:
+
+- Primary (certify only): `EEF3 BD8A 0FDA 41C0 C451 8B44 36E3 A39F 1BE2 6893`
+- Signing subkey: `9ADD 4EBC D2FA 7C59 7280 D078 5605 86D7 BCFD 57AF`
+
 ## Requirements
 
 - **Go 1.27.4.** `go.mod` declares `go 1.26.0` and `toolchain go1.27.4`. With the default
