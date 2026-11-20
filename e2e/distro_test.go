@@ -37,15 +37,17 @@ func release(t *testing.T) distro {
 }
 
 // macEnforced reports whether this machine's own mandatory access control confines clamd:
-// AppArmor enabled (deb family) or SELinux Enforcing (rpm family). The L2 containers share the
-// host's kernel, which has neither, and the scenarios then skip only the MAC steps. The VM
-// targets set E2E_MAC=1: there a machine where it is off is a broken VM, and the answer
+// AppArmor enabled (deb family) or SELinux Enforcing (rpm family). The scenarios run the MAC
+// steps only where it says yes.
+// The VM targets set E2E_MAC=1: there a machine where it is off is a broken VM, and the answer
 // "no" must fail instead of letting the scenario pass without any confinement. A missing
 // tool fails too: "tool absent" must never read as "MAC off".
-// The L2 container targets set E2E_MAC=0: a container reports the RUNNER's kernel, and the
-// runner is an Ubuntu VM with AppArmor on, where aa-enabled can answer yes inside a privileged
-// container that clamd is in no way confined by. 0 means "this level has no MAC", asserted by
-// the caller, not probed; the tool must still be installed.
+// The L2 container targets set E2E_MAC=0, which returns false without probing (the tool must
+// still be installed). A container shares the RUNNER's kernel, and the runner is an Ubuntu VM
+// with AppArmor on, so a probe inside a privileged container can answer yes about a kernel
+// that confines clamd in no way: the container's clamd runs under the runner's profiles, not
+// under the release's own. 0 means "this level has no MAC of the release under test", which the
+// Makefile (`e2e-distro`) sets, not something the suite checks.
 func macEnforced(t *testing.T, d distro) bool {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)

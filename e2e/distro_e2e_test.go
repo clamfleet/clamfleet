@@ -8,8 +8,9 @@
 // confinement files. Nothing here names a release: the facts come from `release(t)` (the table
 // in distro_test.go), and an unknown release fails. The same code runs on a machine with its
 // MAC enforcing (an Incus VM: `make e2e-apparmor`, `make e2e-el9`) and on one without (a CI
-// container); the MAC steps run where `macEnforced` says so, and the VM targets set E2E_MAC=1
-// so that a VM which lost its MAC fails instead of passing without it.
+// container); the MAC steps run where `macEnforced` says so. The VM targets set E2E_MAC=1, so
+// that a VM which lost its MAC fails instead of passing without it; the container targets set
+// E2E_MAC=0, so that the runner's own AppArmor is never taken for the release's confinement.
 //
 // Per-release suites keep what only one release can say (the AppArmor denial scenarios,
 // the SELinux module scenarios); this file keeps what must hold everywhere.
@@ -427,10 +428,14 @@ func TestDistroSudoAttribution(t *testing.T) {
 // SELinux the shipped CIL compiled into the stored policy (`semodule -n`, no reload) and the rules
 // it adds to clamd's domain read from that policy, which must be exactly the two reviewed ones.
 //
-// This is the only check that sees a profile or module the release's tools refuse in a container,
-// where the package's postinstall skips loading because MAC is off: a package that fails to install
-// on a stock host of an older release (AppArmor 3.0.x on Debian 12 or Ubuntu 22.04) would pass
-// everything else. A missing tool fails: it is never a reason to skip.
+// This is the only check that sees a profile or module the release's tools refuse in a container:
+// the confinement scenarios do not run at L2 (E2E_MAC=0), so a package that fails to parse on a
+// stock host of an older release (AppArmor 3.0.x on Debian 12 or Ubuntu 22.04) would pass
+// everything else. Whether the postinstall also loads the profile into the runner's kernel depends
+// on aa-enabled, which in a privileged container reads the runner's kernel, not the release's;
+// that load is incidental and nothing here relies on it. NOTE: the CI log does not record the
+// postinstall's decision, so this is an inference, not an observation. A missing tool fails: it is
+// never a reason to skip.
 func TestDistroStaticMAC(t *testing.T) {
 	d := distroFresh(t)
 	if d.MAC == "apparmor" {
