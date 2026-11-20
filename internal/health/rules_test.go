@@ -361,3 +361,36 @@ func TestVirusEventMissing(t *testing.T) {
 		t.Fatal("the rule is on by default")
 	}
 }
+
+// clamd up with an error text (a VERSION or STATS command failed, e.g. disabled
+// in clamd.conf) is a WARN with its own code and the agent's text; clamd up and
+// clean raises nothing; clamd down stays CRIT clamd_down.
+func TestClamdCommandFailed(t *testing.T) {
+	msg := "version: clamd's VERSION command is disabled: set EnableVersionCommand yes in clamd.conf and restart clamd"
+	r := healthy()
+	r.Clamd.Error = &msg
+	res := Evaluate(input(r), DefaultThresholds())
+	if res.State != StateWarn || !reflect.DeepEqual(rules(res), []string{RuleClamdCommandFailed}) {
+		t.Fatalf("disabled command: %+v", res)
+	}
+	if got := res.Reasons[0].Msg; !strings.Contains(got, "EnableVersionCommand") || !strings.HasPrefix(got, "clamd answers but a command failed: ") {
+		t.Fatalf("reason = %q", got)
+	}
+
+	empty := ""
+	for _, e := range []*string{nil, &empty} {
+		r := healthy()
+		r.Clamd.Error = e
+		if res := Evaluate(input(r), DefaultThresholds()); res.State != StateOK || len(res.Reasons) != 0 {
+			t.Fatalf("up without error: %+v", res)
+		}
+	}
+
+	r = healthy()
+	r.Clamd.Up = false
+	r.Clamd.Error = &msg
+	res = Evaluate(input(r), DefaultThresholds())
+	if res.State != StateCrit || !reflect.DeepEqual(rules(res), []string{RuleClamdDown}) {
+		t.Fatalf("down: %+v", res)
+	}
+}

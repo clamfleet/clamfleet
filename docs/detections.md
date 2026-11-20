@@ -331,6 +331,7 @@ File paths are personal data: they can name a person's files. They live in the h
 | Symptom | Likely cause |
 |---|---|
 | `virusevent_missing` on a host | no `VirusEvent` line in `clamd.conf` (clamd not restarted?). `other` never raises it. |
+| `clamd_command_failed` (WARN) on a host | clamd answers but VERSION or STATS failed; usually `EnableVersionCommand` or `EnableStatsCommand` is off in `clamd.conf` (Ubuntu 22.04's package): the reason text names the setting. Enable it and restart clamd. A one-off timeout can raise it too and clears on the next good report. |
 | a detection never arrives | see "Check it" above: clamd's journal first, then the agent's, then the kernel log for AppArmor |
 | `spool full` in clamd's journal | detections alone fill `spool.max_mb` (the server is unreachable for a long time, or the cap is small): fix the server, raise `max_mb`, or accept that new ones are refused |
 | items stay in `spool/events` | the server is down or rejecting (see the agent's journal for the class); they wait, oldest first after the fresh ones |
