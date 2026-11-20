@@ -44,7 +44,13 @@ ENV DEBIAN_FRONTEND=noninteractive \
 # assertions, curl for /healthz, sudo and visudo for the sudoers scenario, apparmor for
 # apparmor_parser and aa-enabled (the static profile parse), diffutils for cmp. ca-certificates
 # is not needed: there is no network and the tests bring their own CA.
-RUN printf '#!/bin/sh\nexit 101\n' > /usr/sbin/policy-rc.d \
+#
+# The Ubuntu base image ships /etc/dpkg/dpkg.cfg.d/excludes (path-exclude for /usr/share/doc, man pages
+# and locales) to stay small. dpkg then silently skips our packaged files under /usr/share/doc
+# (agent.yaml.example, the AppArmor local include), which a real Ubuntu host has, and the install
+# scenarios fail on a missing file. The file goes before anything is installed; Debian's image has none.
+RUN rm -f /etc/dpkg/dpkg.cfg.d/excludes \
+ && printf '#!/bin/sh\nexit 101\n' > /usr/sbin/policy-rc.d \
  && chmod 0755 /usr/sbin/policy-rc.d \
  && apt-get update \
  && apt-get install -y --no-install-recommends \
