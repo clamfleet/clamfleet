@@ -172,7 +172,12 @@ func TestDistroDryRun(t *testing.T) {
 		t.Errorf("os.id = %q, os-release says %q", r.OS.ID, want)
 	}
 	if !r.Clamd.Up || r.Clamd.Error != nil {
-		t.Errorf("clamd = %+v", r.Clamd)
+		// The Error field is a pointer: print its text, a bare %+v shows only an address.
+		errText := "<nil>"
+		if r.Clamd.Error != nil {
+			errText = *r.Clamd.Error
+		}
+		t.Errorf("clamd = %+v, error %q", r.Clamd, errText)
 	}
 	if want, _, _ := strings.Cut(strings.TrimPrefix(sh(t, "clamd --version"), "ClamAV "), "/"); r.Clamd.Version == nil || *r.Clamd.Version != want {
 		t.Errorf("clamd.version = %v, clamd --version says %q", r.Clamd.Version, want)
