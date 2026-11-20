@@ -394,3 +394,18 @@ func TestClamdCommandFailed(t *testing.T) {
 		t.Fatalf("down: %+v", res)
 	}
 }
+
+// The rule codes are a public vocabulary: they reach alert receivers as reason_codes and the
+// console. The tests elsewhere use the constants, so renaming a constant's VALUE would stay green;
+// this pins the strings.
+func TestReasonCodeStringsArePinned(t *testing.T) {
+	for got, want := range map[string]string{
+		RuleClamdDown:          "clamd_down",
+		RuleClamdCommandFailed: "clamd_command_failed",
+		RuleVirusEventMissing:  "virusevent_missing",
+	} {
+		if got != want {
+			t.Errorf("reason code %q, want %q", got, want)
+		}
+	}
+}
