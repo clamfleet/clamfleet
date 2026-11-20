@@ -35,7 +35,9 @@ every extra label is another case to get right. The tag is the version with a `v
 
 Each release needs a section in `CHANGELOG.md` whose heading is exactly `## [VERSION] - YYYY-MM-DD` and whose
 body is not empty. Its body becomes the release notes. A tag with no such section is refused. On the release
-branch, rename `## Unreleased` to the heading and start a new empty `## Unreleased` above it.
+branch, rename `## Unreleased` to the heading and start a new `## Unreleased` above it holding one placeholder line
+(`- Nothing yet.`): `make release-snapshot`, and so the `release-dry-run` job, takes its notes from `Unreleased` and
+refuses an empty one. The placeholder is replaced by the next change on `develop`.
 
 ## Making a release (git flow)
 
