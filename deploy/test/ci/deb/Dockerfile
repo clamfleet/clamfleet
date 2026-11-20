@@ -61,13 +61,18 @@ RUN set -eu; \
     [ "${1:-0}" -gt 1 ] || { [ "${1:-0}" -eq 1 ] && [ "${2:-0}" -ge 4 ]; } \
  || { echo "clamd is older than 1.4 (got: $(clamd --version))" >&2; exit 1; }
 
+# clamd is enabled explicitly: Debian's package enables it itself, but Ubuntu 22.04's backport of
+# ClamAV 1.5 does not (its postinst only calls update-rc.d, no deb-systemd-helper), so the unit sat
+# unloaded and nothing ever started it. The rpm image does the same for clamd@scan. Enabling is
+# idempotent where the package already did it; the socket comes along through Also= in the unit.
 # Never `freshclam` here (see the header). Only the database files are copied, with the owner the
 # package gives its own, from a bind mount so no layer carries the rest of the image.
 RUN --mount=type=bind,from=signatures,source=/var/lib/clamav,target=/sig \
     set -eu; \
     for f in /sig/*.cvd /sig/*.cld; do [ -e "$f" ] || continue; install -o clamav -g clamav -m 0644 "$f" /var/lib/clamav/; done; \
     ls /var/lib/clamav/main.c[vl]d /var/lib/clamav/daily.c[vl]d /var/lib/clamav/bytecode.c[vl]d >/dev/null \
- && systemctl disable clamav-freshclam.service
+ && systemctl disable clamav-freshclam.service \
+ && systemctl enable clamav-daemon.service
 
 STOPSIGNAL SIGRTMIN+3
 CMD ["/sbin/init"]
