@@ -30,6 +30,13 @@ import (
 	"github.com/clamfleet/clamfleet/internal/proto"
 )
 
+// moduleTypeRule is the one rule that declaring our file type adds on its own, which the module's CIL
+// never writes: the stock policy's attribute rules apply to every type with the file_type attribute,
+// and sesearch shows them expanded to the new type. It appears only in a whole-policy search (on
+// antivirus_t the search is scoped to the domain's own rules, which this is not). Seen on
+// AlmaLinux 10, where clamd is not in antivirus_t and the whole policy is compared (R1 decision 10).
+const moduleTypeRule = "allow clamfleet_spool_t clamfleet_spool_t:filesystem associate;"
+
 // distroFresh resets the machine, installs both packages of the release's format and returns
 // once clamd scans. The release is read right after the reset (see below): an unknown one fails before any package is installed.
 func distroFresh(t *testing.T) distro {
