@@ -83,14 +83,18 @@ contents:
   - src: README.md
     dst: /usr/share/doc/clamfleet-agent/README.md
     file_info: {mode: 0644, owner: root, group: root}
+  # The example configurations and the AppArmor include are not documentation: the install instructions
+  # and the tests read them. They live outside /usr/share/doc because minimized Ubuntu images (minimal,
+  # cloud, LXD) ship dpkg's /etc/dpkg/dpkg.cfg.d/excludes, which makes dpkg skip /usr/share/doc silently.
+  # Only README and LICENSE stay there; deploy/test/packages_test.sh fails on anything else.
   - src: deploy/agent.yaml.example
-    dst: /usr/share/doc/clamfleet-agent/agent.yaml.example
+    dst: /usr/share/clamfleet-agent/agent.yaml.example
     file_info: {mode: 0644, owner: root, group: root}
   - src: deploy/agent.rhel9.yaml.example
-    dst: /usr/share/doc/clamfleet-agent/agent.rhel9.yaml.example
+    dst: /usr/share/clamfleet-agent/agent.rhel9.yaml.example
     file_info: {mode: 0644, owner: root, group: root}
   - src: deploy/apparmor/usr.sbin.clamd.local
-    dst: /usr/share/doc/clamfleet-agent/usr.sbin.clamd.local
+    dst: /usr/share/clamfleet-agent/usr.sbin.clamd.local
     file_info: {mode: 0644, owner: root, group: root}
   - src: LICENSE
     dst: /usr/share/doc/clamfleet-agent/LICENSE

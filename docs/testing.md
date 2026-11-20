@@ -452,9 +452,17 @@ maintainer's machine does not have: CI is where they run.
   the scenarios install the two ClamFleet packages with dnf and their dependencies are already there.
 - **What level 2 proves and what it cannot:** installation, units, groups, modes, the packaged example, detection through the
   real clamd, upgrade and remove, `sudo` attribution, and the static checks (`apparmor_parser` of the profiles, the CIL and its
-  `sesearch` diff). A container has no MAC of its own, so **confinement is level 1**, on the VMs, and the level-2 rows of the
+  `sesearch` diff). A container shares the runner's kernel, so the release's own MAC (its AppArmor
+  profiles, its SELinux policy) is not what confines clamd there; `make e2e-distro` sets `E2E_MAC=0` so the runner's AppArmor
+  is never read as the release's. **Confinement is level 1**, on the VMs, and the level-2 rows of the
   facts table carry **no stock denials**: none can be observed in a container, and none is invented. A release that needs them
   gets them from a level-1 run.
+- **Ubuntu 24.04 and later Docker hosts, rpm legs:** Ubuntu ships an AppArmor profile for `/usr/sbin/unix_chkpwd`, and the
+  kernel is shared, so it applies inside the container too. It denies `dac_read_search` and `dac_override`, which the
+  setuid helper of the EL images needs to read `/etc/shadow` (mode 000): `sudo` then fails with "PAM account management
+  error". A real EL host has no such profile. Unload it before the run, as CI does for the job (the runner is discarded
+  afterwards; on your own machine reload it with `apparmor_parser -r /etc/apparmor.d/unix-chkpwd` when done):
+  `sudo apparmor_parser -R /etc/apparmor.d/unix-chkpwd`. The Debian legs do not notice it.
 - **Journals:** as for `e2e` (`dist/e2e-journals`); CI uploads `l2-journals-<leg>` for 7 days when a leg fails.
 - **Distribution drift** is as for the `e2e` image: packages come from the live archives and the cache is weekly, so a
   distribution update can turn one leg red. Fix it in its own pull request; a red leg is not re-run until green.

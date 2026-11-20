@@ -59,11 +59,13 @@ RUN set -eu; \
 # Never `freshclam` here (see the header). EPEL owns /var/lib/clamav as clamupdate, not clamav, and
 # its clamav-data package ships stub databases: they go first so a stub .cvd cannot sit beside a
 # .cld of the same name. Only the database files are copied, from a bind mount so no layer carries
-# the rest of the image.
+# the rest of the image. The detached .cvd.sign files go along, as in the deb image: ClamAV 1.5 refuses a
+# .cvd without its .sign ("Unable to verify CVD with detached signature file", clamd exits 1), and
+# EPEL may move to 1.5; the 1.4 it ships today ignores them.
 RUN --mount=type=bind,from=signatures,source=/var/lib/clamav,target=/sig \
     set -eu; \
-    rm -f /var/lib/clamav/*.cvd /var/lib/clamav/*.cld; \
-    for f in /sig/*.cvd /sig/*.cld; do [ -e "$f" ] || continue; install -o clamupdate -g clamupdate -m 0644 "$f" /var/lib/clamav/; done; \
+    rm -f /var/lib/clamav/*.cvd /var/lib/clamav/*.cld /var/lib/clamav/*.sign; \
+    for f in /sig/*.cvd /sig/*.cld /sig/*.sign; do [ -e "$f" ] || continue; install -o clamupdate -g clamupdate -m 0644 "$f" /var/lib/clamav/; done; \
     ls /var/lib/clamav/main.c[vl]d /var/lib/clamav/daily.c[vl]d /var/lib/clamav/bytecode.c[vl]d >/dev/null
 
 # clamd's socket: the stock scan.conf has LocalSocket commented out and the package never edits it

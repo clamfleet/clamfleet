@@ -12,7 +12,7 @@
 #      fails the transition scenarios. The package's own service is then disabled and stopped,
 #      because the suite runs its own transient agent unit with a short interval and two agents
 #      would fight for the spool lock;
-#   2. the two lines of the installed /usr/share/doc/clamfleet-agent/usr.sbin.clamd.local are
+#   2. the two lines of the installed /usr/share/clamfleet-agent/usr.sbin.clamd.local are
 #      appended to /etc/apparmor.d/local/usr.sbin.clamd (once), as the install notice says: the
 #      package never edits that file;
 #   3. `VirusEvent /usr/bin/clamfleet-agent event` in /etc/clamav/clamd.conf, then
@@ -49,7 +49,7 @@ systemctl disable clamfleet-agent.service
 if systemctl is-active --quiet clamfleet-agent.service; then echo "aa-prepare: the packaged clamfleet-agent.service is still running" >&2; exit 1; fi
 touch /etc/apparmor.d/local/usr.sbin.clamd
 if ! grep -q 'Px -> clamfleet-agent-event' /etc/apparmor.d/local/usr.sbin.clamd; then
-	cat /usr/share/doc/clamfleet-agent/usr.sbin.clamd.local >> /etc/apparmor.d/local/usr.sbin.clamd
+	cat /usr/share/clamfleet-agent/usr.sbin.clamd.local >> /etc/apparmor.d/local/usr.sbin.clamd
 fi
 grep -q '^VirusEvent ' /etc/clamav/clamd.conf || echo 'VirusEvent /usr/bin/clamfleet-agent event' >> /etc/clamav/clamd.conf
 DEBIAN_FRONTEND=noninteractive dpkg-reconfigure -f noninteractive clamav-daemon >/dev/null 2>&1 || true

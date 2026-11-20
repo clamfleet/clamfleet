@@ -46,11 +46,12 @@ ENV DEBIAN_FRONTEND=noninteractive \
 # is not needed: there is no network and the tests bring their own CA.
 #
 # The Ubuntu base image ships /etc/dpkg/dpkg.cfg.d/excludes (path-exclude for /usr/share/doc, man pages
-# and locales) to stay small. dpkg then silently skips our packaged files under /usr/share/doc
-# (agent.yaml.example, the AppArmor local include), which a real Ubuntu host has, and the install
-# scenarios fail on a missing file. The file goes before anything is installed; Debian's image has none.
-RUN rm -f /etc/dpkg/dpkg.cfg.d/excludes \
- && printf '#!/bin/sh\nexit 101\n' > /usr/sbin/policy-rc.d \
+# and locales), as Ubuntu's minimal, cloud and LXD images do. It is deliberately kept: the Ubuntu leg
+# then tests a minimized host, where dpkg silently skips anything a package puts under /usr/share/doc.
+# The agent package keeps nothing it needs there (examples and the AppArmor include are under
+# /usr/share/clamfleet-agent); a leg that fails on a missing file means a regression of that rule.
+# Debian's image has no such file.
+RUN printf '#!/bin/sh\nexit 101\n' > /usr/sbin/policy-rc.d \
  && chmod 0755 /usr/sbin/policy-rc.d \
  && apt-get update \
  && apt-get install -y --no-install-recommends \

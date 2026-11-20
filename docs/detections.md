@@ -201,8 +201,9 @@ Debian's clamd profile (`/etc/apparmor.d/usr.sbin.clamd`) has no exec rule and n
 `/var/lib/clamfleet`, so with AppArmor enforcing `VirusEvent` cannot start `/bin/sh`. Two files fix that and
 keep the blast radius small (both are in `deploy/apparmor/`). The **.deb installs and loads the profile**
 (`clamfleet-agent-event`, a conffile, unloaded again on `remove`); the local include belongs to the administrator and
-the package never edits it, so you add its two lines yourself (the package ships them as
-`/usr/share/doc/clamfleet-agent/usr.sbin.clamd.local`):
+the package never edits it, so you add its two lines yourself (the install notice prints them, and the package
+ships them as `/usr/share/clamfleet-agent/usr.sbin.clamd.local`, outside `/usr/share/doc`, which minimized Ubuntu
+images do not install):
 
 - **`usr.sbin.clamd.local`**: append to `/etc/apparmor.d/local/usr.sbin.clamd`. It allows the shell clamd uses
   (`/usr/bin/dash mrix`, inheriting clamd's profile) and one transition,

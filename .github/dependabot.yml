@@ -12,6 +12,10 @@
 #     rather than a `directories:` list, which this file does not rely on. The ClamAV pin is in
 #     all three: deploy/test/ci/signatures_test.sh fails until the three agree, so merge the
 #     three bumps together.
+#     The four base images of the l2 legs are each pinned to the release the leg is named for (Debian
+#     12, Ubuntu 22.04, Rocky 9, AlmaLinux 10): a new major is a different leg, added on purpose with
+#     its own facts row, never by a bot (it proposed Rocky 9 to 10). So semver-major updates are
+#     ignored for them; digest and patch updates still come.
 #   - Go modules: SECURITY updates only (open-pull-requests-limit: 0 turns the routine version
 #     updates off and leaves the security ones on). Spec section 5 makes routine dependency updates a
 #     deliberate act of the maintainer, not a bot's monthly pull request.
@@ -37,12 +41,22 @@ updates:
     directory: /deploy/test/ci/deb
     schedule:
       interval: monthly
+    ignore:
+      - dependency-name: debian
+        update-types: ["version-update:semver-major"]
+      - dependency-name: ubuntu
+        update-types: ["version-update:semver-major"]
     commit-message:
       prefix: "test(e2e)"
   - package-ecosystem: docker
     directory: /deploy/test/ci/rpm
     schedule:
       interval: monthly
+    ignore:
+      - dependency-name: rockylinux/rockylinux
+        update-types: ["version-update:semver-major"]
+      - dependency-name: almalinux
+        update-types: ["version-update:semver-major"]
     commit-message:
       prefix: "test(e2e)"
   - package-ecosystem: gomod

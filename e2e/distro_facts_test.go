@@ -54,7 +54,7 @@ type distro struct {
 	ClamdGroup    string   // the group of the spool (clamd's group, what the agent shares)
 	AgentGroups   []string // the groups the clamfleet user must be in
 	EICARDir      string   // where EICAR files live: a place clamd's MAC policy lets it read
-	Example       string   // the file under /usr/share/doc/clamfleet-agent the package installs as agent.yaml
+	Example       string   // the file under /usr/share/clamfleet-agent the package installs as agent.yaml
 	// ClamdDomain is the SELinux domain clamd runs in on a stock install of the release; empty on
 	// an AppArmor release. EL10 ships no `antivirus` module in its base policy, so clamd is
 	// unconfined_service_t there (R1 decision 10).
@@ -145,6 +145,9 @@ var distros = map[string]distro{
 	"rocky 9":      elRow("antivirus_t", moduleRulesEL),
 	// EL10's base policy has no antivirus module (it is in selinux-policy-targeted-extra, CRB), so
 	// clamd is unconfined_service_t on a stock install and the module's optional rules are inactive.
+	// ClamdDomain unconfined_service_t is implied at L2 by the whole-policy check in
+	// TestDistroStaticMAC (the module adds no rule anywhere, which only holds if clamd is not in
+	// antivirus_t), but not observed there: it is observed at L1 by the EL10 suite (to come).
 	"almalinux 10": elRow("unconfined_service_t", nil),
 	"almalinux 9":  almalinux9(),
 }
