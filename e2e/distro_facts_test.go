@@ -64,6 +64,11 @@ type distro struct {
 	// adds nothing (R1 decision 9), which TestDistroStaticMAC asserts against the whole policy.
 	ModuleRules  []string
 	StockDenials []stockDenial
+	// StockDisabledCommands names the clamd commands ("VERSION", "STATS") that the release's packaged
+	// clamd.conf turns off (EnableVersionCommand false, EnableStatsCommand false), so clamd answers
+	// COMMAND UNAVAILABLE on a stock install. TestDistroDryRun expects the agent to report exactly
+	// that (R1 decision 11); empty means both commands work as packaged.
+	StockDisabledCommands []string
 }
 
 // moduleRulesEL are the two reviewed rules of the module's optional block (deploy/packaging
@@ -71,6 +76,12 @@ type distro struct {
 var moduleRulesEL = []string{
 	"allow antivirus_t clamfleet_spool_t:dir { add_name getattr open read remove_name search write };",
 	"allow antivirus_t clamfleet_spool_t:file { create getattr link lock open read setattr unlink write };",
+}
+
+// withDisabledCommands returns d with StockDisabledCommands set.
+func withDisabledCommands(d distro, cmds ...string) distro {
+	d.StockDisabledCommands = cmds
+	return d
 }
 
 // elRow builds the EPEL layout shared by every EL release; only the domain and the rules differ.
@@ -128,8 +139,9 @@ var distros = map[string]distro{
 		}},
 	},
 	// Level-2 rows (header): no MAC can be observed in a container, so no StockDenials are recorded.
-	"debian 12":    debRow(),
-	"ubuntu 22.04": debRow(),
+	"debian 12": debRow(),
+	// Ubuntu 22.04's backport of ClamAV 1.5 packages EnableVersionCommand and EnableStatsCommand as false.
+	"ubuntu 22.04": withDisabledCommands(debRow(), "VERSION", "STATS"),
 	"rocky 9":      elRow("antivirus_t", moduleRulesEL),
 	// EL10's base policy has no antivirus module (it is in selinux-policy-targeted-extra, CRB), so
 	// clamd is unconfined_service_t on a stock install and the module's optional rules are inactive.
@@ -212,6 +224,16 @@ func TestDistroFacts(t *testing.T) {
 			case d.MAC == "selinux" && d.ClamdDomain != "antivirus_t" && len(d.ModuleRules) != 0:
 				t.Error("ModuleRules on a domain other than antivirus_t: the module's optional block is inactive there")
 			}
+			seen := map[string]bool{}
+			for _, c := range d.StockDisabledCommands {
+				if c != "VERSION" && c != "STATS" {
+					t.Errorf("StockDisabledCommands holds %q, want VERSION or STATS", c)
+				}
+				if seen[c] {
+					t.Errorf("StockDisabledCommands lists %q twice", c)
+				}
+				seen[c] = true
+			}
 			if len(d.AgentGroups) == 0 {
 				t.Error("AgentGroups is empty: the group assertion would be vacuous")
 			}
@@ -234,6 +256,14 @@ func TestDistroFacts(t *testing.T) {
 				}
 			}
 		})
+	}
+
+	// The stock-disabled commands are what TestDistroDryRun keys on: Ubuntu 22.04 has both, Debian 12 none.
+	if u, err := lookupDistro("ubuntu", "22.04"); err != nil || len(u.StockDisabledCommands) != 2 {
+		t.Errorf("ubuntu 22.04 resolved to %+v, %v", u, err)
+	}
+	if u, err := lookupDistro("debian", "12"); err != nil || len(u.StockDisabledCommands) != 0 {
+		t.Errorf("debian 12 resolved to %+v, %v", u, err)
 	}
 
 	for _, c := range [][2]string{{"debian", "99"}, {"", ""}} {

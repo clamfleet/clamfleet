@@ -171,16 +171,43 @@ func TestDistroDryRun(t *testing.T) {
 	if want := sh(t, ". /etc/os-release; echo \"$ID\""); r.OS.ID != want {
 		t.Errorf("os.id = %q, os-release says %q", r.OS.ID, want)
 	}
-	if !r.Clamd.Up || r.Clamd.Error != nil {
-		// The Error field is a pointer: print its text, a bare %+v shows only an address.
-		errText := "<nil>"
-		if r.Clamd.Error != nil {
-			errText = *r.Clamd.Error
-		}
+	errText := "<nil>" // Error is a pointer: print its text, a bare %+v shows only an address.
+	if r.Clamd.Error != nil {
+		errText = *r.Clamd.Error
+	}
+	if !r.Clamd.Up {
 		t.Errorf("clamd = %+v, error %q", r.Clamd, errText)
 	}
-	if want, _, _ := strings.Cut(strings.TrimPrefix(sh(t, "clamd --version"), "ClamAV "), "/"); r.Clamd.Version == nil || *r.Clamd.Version != want {
+	// The conf is as packaged. A release whose package turns VERSION or STATS off (the table says
+	// which) must report that command as unavailable, with the setting to change, and a null field;
+	// every other release must report no error at all. R1 decision 11.
+	stockOff := map[string]bool{}
+	for _, c := range d.StockDisabledCommands {
+		stockOff[c] = true
+	}
+	if len(stockOff) == 0 {
+		if r.Clamd.Error != nil {
+			t.Errorf("clamd.error = %q, want null", errText)
+		}
+	} else {
+		for cmd, opt := range map[string]string{"VERSION": "EnableVersionCommand", "STATS": "EnableStatsCommand"} {
+			if stockOff[cmd] && !strings.Contains(errText, opt) {
+				t.Errorf("clamd.error = %q, want it to name %s", errText, opt)
+			}
+			if !stockOff[cmd] && strings.Contains(errText, opt) {
+				t.Errorf("clamd.error = %q names %s, but %s works on this release", errText, opt, cmd)
+			}
+		}
+	}
+	if stockOff["VERSION"] {
+		if r.Clamd.Version != nil {
+			t.Errorf("clamd.version = %q, want null with VERSION disabled", *r.Clamd.Version)
+		}
+	} else if want, _, _ := strings.Cut(strings.TrimPrefix(sh(t, "clamd --version"), "ClamAV "), "/"); r.Clamd.Version == nil || *r.Clamd.Version != want {
 		t.Errorf("clamd.version = %v, clamd --version says %q", r.Clamd.Version, want)
+	}
+	if stockOff["STATS"] && r.Clamd.Queue != nil {
+		t.Errorf("clamd.queue = %d, want null with STATS disabled", *r.Clamd.Queue)
 	}
 	for name, db := range map[string]*proto.SigDB{"daily": r.Sigs.Daily, "main": r.Sigs.Main, "bytecode": r.Sigs.Bytecode} {
 		if db == nil {
