@@ -62,8 +62,10 @@ const (
 	// Bounds of the agent-supplied interval (see Interval).
 	minAgentInterval = 10 * time.Second
 	maxAgentInterval = 24 * time.Hour
-	// maxClamdErrorInReason keeps agent text in a reason short.
-	maxClamdErrorInReason = 200
+	// maxClamdErrorInReason keeps agent text in a reason short. 256, not 200: the agent's text
+	// with BOTH VERSION and STATS disabled is 208 bytes (two messages joined by "; ") and 200
+	// cut it mid-word, losing "restart clamd" (R1 decision 11).
+	maxClamdErrorInReason = 256
 )
 
 // Thresholds are the tunable numbers of the rules (server config `health:`).

@@ -409,3 +409,19 @@ func TestReasonCodeStringsArePinned(t *testing.T) {
 		}
 	}
 }
+
+// The agent's text with both commands disabled (internal/agent disabledCommandError, joined by
+// "; ") must reach the reason whole: a cap below its length clipped it mid-word.
+func TestClamdCommandFailedReasonKeepsBothDisabledTextWhole(t *testing.T) {
+	msg := "version: clamd's VERSION command is disabled: set EnableVersionCommand yes in clamd.conf and restart clamd; " +
+		"stats: clamd's STATS command is disabled: set EnableStatsCommand yes in clamd.conf and restart clamd"
+	if len(msg) <= 200 {
+		t.Fatalf("the fixture is %d bytes: it no longer exercises the old cap", len(msg))
+	}
+	r := healthy()
+	r.Clamd.Error = &msg
+	res := Evaluate(input(r), DefaultThresholds())
+	if len(res.Reasons) != 1 || !strings.HasSuffix(res.Reasons[0].Msg, "set EnableStatsCommand yes in clamd.conf and restart clamd") {
+		t.Fatalf("reason clipped: %+v", res.Reasons)
+	}
+}
