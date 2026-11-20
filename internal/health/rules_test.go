@@ -361,3 +361,67 @@ func TestVirusEventMissing(t *testing.T) {
 		t.Fatal("the rule is on by default")
 	}
 }
+
+// clamd up with an error text (a VERSION or STATS command failed, e.g. disabled
+// in clamd.conf) is a WARN with its own code and the agent's text; clamd up and
+// clean raises nothing; clamd down stays CRIT clamd_down.
+func TestClamdCommandFailed(t *testing.T) {
+	msg := "version: clamd's VERSION command is disabled: set EnableVersionCommand yes in clamd.conf and restart clamd"
+	r := healthy()
+	r.Clamd.Error = &msg
+	res := Evaluate(input(r), DefaultThresholds())
+	if res.State != StateWarn || !reflect.DeepEqual(rules(res), []string{RuleClamdCommandFailed}) {
+		t.Fatalf("disabled command: %+v", res)
+	}
+	if got := res.Reasons[0].Msg; !strings.Contains(got, "EnableVersionCommand") || !strings.HasPrefix(got, "clamd answers but a command failed: ") {
+		t.Fatalf("reason = %q", got)
+	}
+
+	empty := ""
+	for _, e := range []*string{nil, &empty} {
+		r := healthy()
+		r.Clamd.Error = e
+		if res := Evaluate(input(r), DefaultThresholds()); res.State != StateOK || len(res.Reasons) != 0 {
+			t.Fatalf("up without error: %+v", res)
+		}
+	}
+
+	r = healthy()
+	r.Clamd.Up = false
+	r.Clamd.Error = &msg
+	res = Evaluate(input(r), DefaultThresholds())
+	if res.State != StateCrit || !reflect.DeepEqual(rules(res), []string{RuleClamdDown}) {
+		t.Fatalf("down: %+v", res)
+	}
+}
+
+// The rule codes are a public vocabulary: they reach alert receivers as reason_codes and the
+// console. The tests elsewhere use the constants, so renaming a constant's VALUE would stay green;
+// this pins the strings.
+func TestReasonCodeStringsArePinned(t *testing.T) {
+	for got, want := range map[string]string{
+		RuleClamdDown:          "clamd_down",
+		RuleClamdCommandFailed: "clamd_command_failed",
+		RuleVirusEventMissing:  "virusevent_missing",
+	} {
+		if got != want {
+			t.Errorf("reason code %q, want %q", got, want)
+		}
+	}
+}
+
+// The agent's text with both commands disabled (internal/agent disabledCommandError, joined by
+// "; ") must reach the reason whole: a cap below its length clipped it mid-word.
+func TestClamdCommandFailedReasonKeepsBothDisabledTextWhole(t *testing.T) {
+	msg := "version: clamd's VERSION command is disabled: set EnableVersionCommand yes in clamd.conf and restart clamd; " +
+		"stats: clamd's STATS command is disabled: set EnableStatsCommand yes in clamd.conf and restart clamd"
+	if len(msg) <= 200 {
+		t.Fatalf("the fixture is %d bytes: it no longer exercises the old cap", len(msg))
+	}
+	r := healthy()
+	r.Clamd.Error = &msg
+	res := Evaluate(input(r), DefaultThresholds())
+	if len(res.Reasons) != 1 || !strings.HasSuffix(res.Reasons[0].Msg, "set EnableStatsCommand yes in clamd.conf and restart clamd") {
+		t.Fatalf("reason clipped: %+v", res.Reasons)
+	}
+}

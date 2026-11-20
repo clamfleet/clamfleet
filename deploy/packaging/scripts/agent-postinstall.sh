@@ -102,7 +102,8 @@ clamfleet-agent: installed. Next steps (docs: /usr/share/doc/clamfleet-agent/):
      $ETC_DIR/token (root:clamfleet, mode 0640), then: systemctl start clamfleet-agent
   3. Detections: add this line to clamd's configuration (this package never edits it):
        VirusEvent /usr/bin/clamfleet-agent event
-     and restart clamd.
+     and restart clamd. Also make sure clamd.conf does not turn off EnableVersionCommand or
+     EnableStatsCommand (set to false or no; Ubuntu 22.04's package does): the report then has no version or queue.
 NOTICE
 	if [ "$fmt" = deb ]; then
 		cat >&2 <<NOTICE

@@ -53,14 +53,19 @@ const (
 	// RuleVirusEventMissing: clamd.conf has no VirusEvent line, so detections
 	// on this host never reach ClamFleet (milestone 5, decision 6).
 	RuleVirusEventMissing = "virusevent_missing"
+	// RuleClamdCommandFailed: clamd answers PING but its VERSION or STATS
+	// failed, typically because clamd.conf turns the command off (R1 decision 11).
+	RuleClamdCommandFailed = "clamd_command_failed"
 )
 
 const (
 	// Bounds of the agent-supplied interval (see Interval).
 	minAgentInterval = 10 * time.Second
 	maxAgentInterval = 24 * time.Hour
-	// maxClamdErrorInReason keeps agent text in a reason short.
-	maxClamdErrorInReason = 200
+	// maxClamdErrorInReason keeps agent text in a reason short. 256, not 200: the agent's text
+	// with BOTH VERSION and STATS disabled is 208 bytes (two messages joined by "; ") and 200
+	// cut it mid-word, losing "restart clamd" (R1 decision 11).
+	maxClamdErrorInReason = 256
 )
 
 // Thresholds are the tunable numbers of the rules (server config `health:`).
@@ -216,6 +221,15 @@ func Evaluate(in Input, th Thresholds) Result {
 		} else {
 			add(RuleClamdDown, StateCrit, "clamd is not answering")
 		}
+	} else if r.Clamd.Error != nil && *r.Clamd.Error != "" {
+		// Rule: clamd answered PING (so it is not down, and CRIT would be wrong) but
+		// the agent reports an error: a VERSION or STATS command failed, usually
+		// because clamd.conf has EnableVersionCommand or EnableStatsCommand off
+		// (Ubuntu 22.04's package). WARN, since protection is unaffected. The signal is
+		// "up with an error", never the error's wording, so no proto field is needed;
+		// the cost is that a transient VERSION/STATS failure also warns. The agent's
+		// text, which names the setting, is shown as the reason.
+		add(RuleClamdCommandFailed, StateWarn, "clamd answers but a command failed: %s", truncate(*r.Clamd.Error, maxClamdErrorInReason))
 	}
 
 	// Rule: only an answer of "none" fires. null (clamd.conf unreadable, or an

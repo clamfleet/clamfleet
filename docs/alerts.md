@@ -222,7 +222,7 @@ and golden files pin it. Keys are always present for their kind; an unknown valu
 | `from` | string or null | The state this target was last told about the host; for the first alert to this target about this host, the change's own previous state, `null` on the host's first evaluation. |
 | `to` | string | The host's state this alert reports: `OK`, `WARN`, `CRIT` or `STALE`. |
 | `reason` | array of strings | Human texts of the reasons behind `to`. |
-| `reason_codes` | array of strings | Stable rule codes of those reasons (`clamd_down`, `daily_old`, `freshclam_inactive`, `daily_behind`, `scan_missed`, `stale`, ...): key your logic on these, not on `reason`. |
+| `reason_codes` | array of strings | Stable rule codes of those reasons (`clamd_down`, `clamd_command_failed`, `daily_old`, `freshclam_inactive`, `daily_behind`, `scan_missed`, `stale`, ...): key your logic on these, not on `reason`. New codes appear in later releases (`clamd_command_failed` is one): a receiver must handle a code it does not know. |
 | `resolved` | boolean | `to` is below the target's minimum severity: the problem is over **for this target**. |
 | `changes` | number | State changes this alert covers (more than 1 when the cooldown coalesced several). |
 

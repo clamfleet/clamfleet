@@ -79,6 +79,51 @@ func TestCollectClamdVersionAndStatsFailKeepUp(t *testing.T) {
 	}
 }
 
+// A clamd with EnableVersionCommand or EnableStatsCommand off answers
+// "COMMAND UNAVAILABLE" (Ubuntu 22.04's ClamAV 1.5 package ships both off). The
+// agent must stay Up, leave the field null and name the option to change.
+func TestCollectClamdDisabledCommands(t *testing.T) {
+	unavailable := func(c net.Conn) { _, _ = c.Write([]byte("COMMAND UNAVAILABLE\x00")) }
+	cases := []struct {
+		name, cmd, want string
+		other           string // the other command stays healthy
+	}{
+		{"version", "zVERSION\x00", "clamd's VERSION command is disabled: set EnableVersionCommand yes in clamd.conf", "zSTATS\x00"},
+		{"stats", "zSTATS\x00", "clamd's STATS command is disabled: set EnableStatsCommand yes in clamd.conf", "zVERSION\x00"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			tbl := recordedSession(t)
+			tbl[tc.cmd] = unavailable
+			f := startFakeClamd(t, tbl)
+			got := collectClamd(context.Background(), f.Path, testTimeout)
+			if !got.Up || got.Error == nil || !strings.Contains(*got.Error, tc.want) {
+				t.Fatalf("got %+v", got)
+			}
+			if strings.Contains(*got.Error, "unexpected reply") {
+				t.Fatalf("generic error leaked: %q", *got.Error)
+			}
+			if tc.name == "version" && (got.Version != nil || got.Queue == nil) {
+				t.Fatalf("version off must leave the queue: %+v", got)
+			}
+			if tc.name == "stats" && (got.Queue != nil || got.Version == nil) {
+				t.Fatalf("stats off must leave the version: %+v", got)
+			}
+		})
+	}
+}
+
+func TestCollectClamdBothCommandsDisabled(t *testing.T) {
+	unavailable := func(c net.Conn) { _, _ = c.Write([]byte("COMMAND UNAVAILABLE\x00")) }
+	tbl := recordedSession(t)
+	tbl["zVERSION\x00"], tbl["zSTATS\x00"] = unavailable, unavailable
+	f := startFakeClamd(t, tbl)
+	got := collectClamd(context.Background(), f.Path, testTimeout)
+	if !got.Up || got.Error == nil || !strings.Contains(*got.Error, "EnableVersionCommand") || !strings.Contains(*got.Error, "EnableStatsCommand") {
+		t.Fatalf("got %+v", got)
+	}
+}
+
 func TestCollectClamdClosesWithoutReply(t *testing.T) {
 	f := startFakeClamd(t, map[string]reply{"zPING\x00": func(c net.Conn) {}})
 	got := collectClamd(context.Background(), f.Path, testTimeout)
