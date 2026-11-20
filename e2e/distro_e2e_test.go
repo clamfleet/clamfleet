@@ -366,7 +366,7 @@ func TestDistroSudoAttribution(t *testing.T) {
 	// /etc/sudoers.d would lock sudo out for everyone.
 	sh(t, "f=$(mktemp); trap 'rm -f \"$f\"' EXIT; printf '%s ALL=(clamfleet-server) NOPASSWD: "+pkgServer+"\\n' "+person+" > \"$f\"; "+
 		"visudo -cf \"$f\" && install -m 0440 \"$f\" /etc/sudoers.d/"+person)
-	t.Log("DIAG " + sh(t, "{ rpm -q pam sudo; command -v strace ltrace gdb perl python3; cat /proc/sys/kernel/yama/ptrace_scope; ls -ldZ /etc /etc/shadow /etc/passwd /var/lib/sss 2>&1; id e2eoperator; runuser -u e2eoperator -- getent shadow e2eoperator; echo ruser-getent-rc=$?; printf x | /usr/sbin/unix_chkpwd e2eoperator nullok </dev/null; echo nullok-rc=$?; (printf x | /usr/sbin/unix_chkpwd e2eoperator nullok; echo piped-rc=$?); if command -v strace; then strace -f -o /tmp/st.txt /usr/sbin/unix_chkpwd e2eoperator chkexpiry </dev/null; grep -E 'open|socket|connect|shadow|passwd|ENOENT|EACCES' /tmp/st.txt | tail -40; fi; } 2>&1 || true"))
+	t.Log("DIAG " + sh(t, "{ for u in root nobody clamfleet-server e2eoperator; do /usr/sbin/unix_chkpwd $u chkexpiry </dev/null; echo $u-rc=$?; done; python3 -c 'import ctypes;l=ctypes.CDLL(None);l.getspnam.restype=ctypes.c_void_p;l.getpwnam.restype=ctypes.c_void_p;print(\"spnam\",l.getspnam(b\"e2eoperator\"),\"pwnam\",l.getpwnam(b\"e2eoperator\"),ctypes.get_errno())'; LD_DEBUG=libs /usr/sbin/unix_chkpwd e2eoperator chkexpiry </dev/null 2>&1 | grep -E 'calling init|nss' ; ldd /usr/sbin/unix_chkpwd; ls -l /usr/lib64/libnss_*; id; sed -n 1,5p /proc/self/status; } 2>&1 || true"))
 	tok := sh(t, "runuser -u "+person+" -- sudo -u clamfleet-server "+pkgServer+" host add "+host)
 	if !strings.HasPrefix(tok, "cfa_") {
 		t.Fatalf("host add through sudo printed %q, want only the token", tok)
