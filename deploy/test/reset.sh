@@ -116,6 +116,17 @@ deadline=$(( start + TIMEOUT ))
 until ready; do
 	if [ "$(date +%s)" -ge "$deadline" ]; then
 		echo "reset: clamd never became ready" >&2
+		# A Docker leg that never gets ready used to leave nothing to read: the container is replaced by
+		# the next reset and its journal is not always readable. Say what it looked like, best effort
+		# (the unit names differ per distribution, so list by pattern). stderr only; the exit stays 1.
+		if [ "$RESET_RUNTIME" = docker ]; then
+			{
+				docker ps -a --filter "name=^$CT\$" --format 'container: {{.Status}}'
+				docker logs --tail 20 "$CT"
+				docker exec "$CT" sh -c 'systemctl --no-pager is-system-running; systemctl --no-pager --failed; systemctl --no-pager list-units --all "clam*"; ps -eo pid,args | grep -i [c]lam'
+				docker exec "$CT" sh -c 'for u in $(systemctl list-units --all --plain --no-legend "clam*" | cut -d" " -f1); do journalctl --no-pager -n 15 -u "$u"; done'
+			} </dev/null >&2 2>&1 || true
+		fi
 		exit 1
 	fi
 	sleep 2
