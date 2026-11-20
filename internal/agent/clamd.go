@@ -141,6 +141,22 @@ func describeSocketErr(err error, socket string) string {
 	return err.Error()
 }
 
+// clamdUnavailable is clamd's reply to a command switched off in clamd.conf.
+const clamdUnavailable = "COMMAND UNAVAILABLE"
+
+// disabledCommandError is the operator-facing text for a command clamd refused
+// because its Enable<X>Command option is off. Why: some distribution packages
+// (Ubuntu 22.04's ClamAV 1.5) write "EnableVersionCommand false" and
+// "EnableStatsCommand false" into clamd.conf although upstream defaults both to
+// yes; the generic "unexpected reply" left the administrator guessing. We
+// recognise the reply itself and never the package version (R1 decision 11:
+// docs/decisions.md, "clamd's disabled commands"). The text is only the content
+// of proto.Clamd.Error: no payload field is added or changed.
+func disabledCommandError(cmd, option string) string {
+	return fmt.Sprintf("%s: clamd's %s command is disabled: set %s yes in clamd.conf and restart clamd",
+		strings.ToLower(cmd), cmd, option)
+}
+
 // parseVersion extracts the clamd version from a VERSION reply such as
 // "ClamAV 1.4.3/28181/Thu Nov 12 06:27:14 2026" (assumption A6, confirmed):
 // the text before the first "/", without the "ClamAV " prefix, matching the
@@ -197,6 +213,8 @@ func collectClamd(ctx context.Context, socket string, timeout time.Duration) pro
 	var errs []string
 	if reply, err := clamdCommand(ctx, socket, "VERSION", timeout); err != nil {
 		errs = append(errs, "version: "+describeSocketErr(err, socket))
+	} else if reply == clamdUnavailable {
+		errs = append(errs, disabledCommandError("VERSION", "EnableVersionCommand"))
 	} else if v, ok := parseVersion(reply); !ok {
 		errs = append(errs, fmt.Sprintf("version: unexpected reply %q", truncate(reply, 64)))
 	} else {
@@ -204,6 +222,8 @@ func collectClamd(ctx context.Context, socket string, timeout time.Duration) pro
 	}
 	if reply, err := clamdCommand(ctx, socket, "STATS", timeout); err != nil {
 		errs = append(errs, "stats: "+describeSocketErr(err, socket))
+	} else if reply == clamdUnavailable {
+		errs = append(errs, disabledCommandError("STATS", "EnableStatsCommand"))
 	} else if q, ok := parseQueue(reply); !ok {
 		errs = append(errs, "stats: no QUEUE line in reply")
 	} else {

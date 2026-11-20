@@ -201,3 +201,11 @@ specification's section 15, question 5 (`docs/HANDOVER.md`); R1 decision 9 amend
   the rules of R1 decision 9 then switch on by themselves. Rejected: a separate EL10 module chosen at install time (it
   would silently lose every detection if the extra package is installed later), and a package dependency on the extra
   package (about 60 policy modules for other services, and it needs CRB).
+- **R1 decision 11, clamd's disabled commands are named, not sniffed.** Decided 2026-11-20. Ubuntu 22.04's ClamAV 1.5
+  package writes `EnableVersionCommand false` and `EnableStatsCommand false` into `clamd.conf` (upstream defaults both to
+  yes), and clamd then answers VERSION and STATS with `COMMAND UNAVAILABLE`; Debian will probably do the same on 1.5. The agent
+  recognises that reply and sets `clamd.error` to "version: clamd's VERSION command is disabled: set EnableVersionCommand
+  yes in clamd.conf and restart clamd" (and the same for STATS and `EnableStatsCommand`). `up` stays true and the field
+  stays null. Only the text of an existing string field changes: no payload field, schema or alert payload moves. The
+  postinstall notice and `docs/install.md` tell the administrator to enable both. Rejected: choosing behaviour by package
+  version or distribution (it breaks on the next repackaging), and the agent editing `clamd.conf` (it belongs to the clamd package).
