@@ -34,10 +34,13 @@ import (
 // once clamd scans. The release is read first: an unknown one must fail before anything else.
 func distroFresh(t *testing.T) distro {
 	t.Helper()
-	d := release(t)
+	// Reset first, then read the release: on a Docker leg the reset is what creates the machine, so
+	// asking /etc/os-release before it fails with "No such container". On a VM the order makes no
+	// difference (the snapshot is the same release).
 	if err := script("reset.sh"); err != nil {
 		t.Fatal(err)
 	}
+	d := release(t)
 	dist := filepath.Join(repoRoot, "dist")
 	d.installPkgs(t, false, d.pkgFile(t, dist, "clamfleet-server", debOld), d.pkgFile(t, dist, "clamfleet-agent", debOld))
 	waitClamd(t)
