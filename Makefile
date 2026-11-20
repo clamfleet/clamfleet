@@ -10,7 +10,7 @@ BIN := bin
 VERSION ?= 0.0.0-dev
 LDFLAGS := -s -w -X github.com/clamfleet/clamfleet/internal/version.Version=$(VERSION)
 
-.PHONY: tools ci release release-snapshot lint-workflows mod-check test-ci build vet staticcheck test scripts-test sqlc-check generate check packages e2e e2e-image e2e-docker record-freshclam-history e2e-apparmor e2e-el9 e2e-idp e2e-web fixtures webfixture web-fixture
+.PHONY: tools ci release release-snapshot lint-workflows mod-check test-ci build vet staticcheck test scripts-test sqlc-check generate check packages e2e e2e-image e2e-docker e2e-l2-image e2e-distro record-freshclam-history e2e-apparmor e2e-el9 e2e-idp e2e-web fixtures webfixture web-fixture
 
 # Build-time tools and their pins. The same versions are in CLAUDE.md and docs/testing.md: change all
 # together. They are installed with `go install`, never added to go.mod (the Go `tool` directive would
@@ -89,6 +89,7 @@ scripts-test:
 	./deploy/test/l1guard_test.sh
 	./deploy/test/release_test.sh
 	./deploy/test/webtests_test.sh
+	./deploy/test/ci/signatures_test.sh
 
 # sqlc is a build-time tool only (pinned in CLAUDE.md): the generated code uses database/sql.
 generate:
@@ -170,6 +171,33 @@ e2e-docker:
 	trap 'CT=$(E2E_CT) E2E_JOURNAL_DIR=$(E2E_JOURNAL_DIR) ./deploy/test/save-journal.sh; docker rm -f $(E2E_CT) >/dev/null 2>&1' EXIT; \
 	CFT_EXEC="docker exec -i $(E2E_CT)" RESET_RUNTIME=docker CT=$(E2E_CT) E2E_IMAGE=$(E2E_IMAGE) READY_FILE=/etc/hostname E2E_JOURNAL_DIR=$(E2E_JOURNAL_DIR) \
 		bash -o pipefail -c '$(GO) test -tags e2e -count=1 -timeout 40m -json ./e2e/ | $(BIN)/testgate -expect-pkg ./e2e -tags e2e'
+
+# Level 2: the TestDistro* scenarios in a systemd container of another release (R1 decision 1; docs/testing.md,
+# "The distribution containers"). LEG is debian-12, ubuntu-22.04, rocky-9 or almalinux-10; the family of the leg
+# picks the Dockerfile (deploy/test/ci/deb or rpm), which takes LEG as a build argument. Like e2e-docker the
+# container has no network and the image is never pushed. E2E_MAC=0 tells the suite this level has no MAC
+# (macEnforced; the runner's own AppArmor must not be read as the container's), and READY_UNIT is empty because
+# these images do not replay a freshclam history. The pattern is one variable, used for `go test -run` and for
+# the gate's -expect-run, as for the VM targets below.
+L2_LEG := $(LEG)
+L2_FAMILY := $(if $(filter debian-% ubuntu-%,$(L2_LEG)),deb,$(if $(filter rocky-% almalinux-%,$(L2_LEG)),rpm))
+L2_IMAGE := clamfleet-e2e-l2:$(L2_LEG)
+L2_CT := clamfleet-l2-$(L2_LEG)
+L2_RUN := ^TestDistro
+
+e2e-l2-image:
+	@test -n "$(L2_FAMILY)" || { echo "e2e-l2-image: set LEG to debian-12, ubuntu-22.04, rocky-9 or almalinux-10 (got '$(LEG)')" >&2; exit 1; }
+	docker build -t $(L2_IMAGE) --build-arg LEG=$(L2_LEG) -f deploy/test/ci/$(L2_FAMILY)/Dockerfile deploy/test/ci/$(L2_FAMILY)
+
+e2e-distro:
+	@test -n "$(L2_FAMILY)" || { echo "e2e-distro: set LEG to debian-12, ubuntu-22.04, rocky-9 or almalinux-10 (got '$(LEG)')" >&2; exit 1; }
+	@command -v docker >/dev/null || { echo "e2e-distro: docker is not installed (docs/testing.md, \"The distribution containers\")" >&2; exit 1; }
+	$(MAKE) packages VERSION=0.6.0-e2e1
+	$(GO) build -o $(BIN)/testgate ./hack/testgate
+	mkdir -p $(E2E_JOURNAL_DIR)
+	trap 'CT=$(L2_CT) E2E_JOURNAL_DIR=$(E2E_JOURNAL_DIR) ./deploy/test/save-journal.sh; docker rm -f $(L2_CT) >/dev/null 2>&1' EXIT; \
+	E2E_MAC=0 E2E_RUN_RE='$(L2_RUN)' CFT_EXEC="docker exec -i $(L2_CT)" RESET_RUNTIME=docker CT=$(L2_CT) E2E_IMAGE=$(L2_IMAGE) READY_UNIT= READY_FILE=/etc/hostname E2E_JOURNAL_DIR=$(E2E_JOURNAL_DIR) \
+		bash -o pipefail -c '$(GO) test -tags "e2e e2e_distro" -count=1 -timeout 40m -json -run "$$E2E_RUN_RE" ./e2e/ | $(BIN)/testgate -expect-pkg ./e2e -tags "e2e e2e_distro" -expect-run "$$E2E_RUN_RE"'
 
 # AppArmor enforcing, in the throwaway Debian 13 VM (docs/testing.md "The AppArmor VM"). Part of the
 # milestone 5 acceptance; `make e2e` does not run it because it needs the VM. Without CFA_EXEC and

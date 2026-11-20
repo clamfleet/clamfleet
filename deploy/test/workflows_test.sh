@@ -54,8 +54,8 @@ repo="$(cd "$here/../.." && pwd)"
 # expensive jobs on a draft is safe; dco only has a meaning on a pull request.
 DRAFT="github.event_name != 'pull_request' || !github.event.pull_request.draft"
 PRONLY="github.event_name == 'pull_request'"
-REQUIRED="check e2e web dco release-dry-run"
-ALLOWED="e2e=$DRAFT;web=$DRAFT;release-dry-run=$DRAFT;dco=$PRONLY"
+REQUIRED="check e2e l2 web dco release-dry-run"
+ALLOWED="e2e=$DRAFT;l2=$DRAFT;web=$DRAFT;release-dry-run=$DRAFT;dco=$PRONLY"
 
 # findings FILE...: prints one "file:line: rule N: message" per violation.
 findings() {

@@ -45,7 +45,7 @@ argument, key rotation and `key check`). Everything binds loopback only.
 
 ## CI (`.github/workflows/ci.yml`)
 
-Five required jobs and one advisory one. The names of the five are the repository's required status checks, so a
+Six required jobs and one advisory one. The names of the six (`l2` is four checks, one per leg) are the repository's required status checks, so a
 rename blocks merges until the ruleset is changed first; a new required check is added to the ruleset after its pull
 request has run and before it merges (docs/releasing.md, "Adding a required check").
 
@@ -53,6 +53,7 @@ request has run and before it merges (docs/releasing.md, "Adding a required chec
 |---|---|---|
 | `check` | every pull request (drafts too), every push to `develop` and `main`, weekly | `make ci`: vet, staticcheck, `sqlc diff`, the unit and script tests through the test gate, actionlint on the workflows, `go mod tidy -diff`, `go mod verify`, gofmt. About 5 minutes. |
 | `e2e` | ready pull requests and pushes | the e2e suite in a container with a real ClamAV and systemd (below, "The e2e suite in Docker") |
+| `l2 (<leg>)` | ready pull requests and pushes | four legs, `debian-12`, `ubuntu-22.04`, `rocky-9` and `almalinux-10`: the distro suite in a systemd container of that release (below, "The distribution containers") |
 | `web` | ready pull requests and pushes | the Playwright browser tests of the console (`make e2e-web`), the layer that sees a dead button |
 | `release-dry-run` | ready pull requests and pushes | the release build and signing path with a throwaway key (below, "Release dry run") |
 | `dco` | pull requests | every commit carries a `Signed-off-by` with the author's email (`hack/ci/dco.sh`) |
@@ -406,15 +407,18 @@ the table plus a machine, not new tests.
   scenarios fake it with `env SUDO_USER=`; this one is what would see a sudo that does not pass it on.
 - `TestDistroStaticMAC`: with the release's own tools and without loading anything into a kernel: `apparmor_parser -QK` of our
   profile and of clamd's stock profile with our local include; on SELinux the CIL stored with `semodule -n` and the rules it
-  adds to `antivirus_t` read with `sesearch`, which must be the two reviewed ones.
+  adds to the release's clamd domain read with `sesearch`, which must be the row's `ModuleRules` (the two reviewed ones on
+  `antivirus_t`). On AlmaLinux 10 clamd is `unconfined_service_t` (no `antivirus` module in the base policy, R1 decision 10), the
+  row's rules are empty and the whole policy is compared: the module must add nothing.
 
 The facts (unit names, groups, config paths, the stock denials the release's own clamd package causes, which example file is
 installed) are the `distros` table in `e2e/distro_facts_test.go`, keyed by `ID VERSION_ID` from `/etc/os-release`. **An unknown
 release fails**; there is no default row. A row states only what was observed on that release.
 
-`E2E_MAC=1` (set by both VM targets): a machine whose MAC is off fails instead of running the MAC steps as no-ops. Without it
-the suite runs the MAC steps only where `aa-enabled` or `getenforce` says the MAC is on, which lets the same tests run in a
-container; a missing probe tool fails either way.
+`E2E_MAC=1` (set by both VM targets): a machine whose MAC is off fails instead of running the MAC steps as no-ops.
+`E2E_MAC=0` (set by `make e2e-distro`): this level has no MAC, and the probe is not run, because a container reports the
+runner's kernel and the runner has AppArmor on. Unset, the suite runs the MAC steps only where `aa-enabled` or `getenforce`
+says the MAC is on; a missing probe tool fails in every case.
 
 Build constraints: the table, `lookupDistro`, the stock-denial filter and `TestDistroFacts` (every row complete: family, MAC,
 units, config, groups, EICAR directory, example file, each stock denial with a fragment and a reason; the lookup refuses an
@@ -422,13 +426,38 @@ unknown release) are in `distro_facts_test.go`, which has no tag, so `make check
 need one are in `distro_test.go`, which carries `e2e && (e2e_apparmor || e2e_el9 || e2e_distro)` because the per-release suites
 use them; staticcheck is run with the combined tag set (`make staticcheck`), or the helpers look unused (U1000) under one tag.
 
-Current scope: the scenarios run on the two VMs (`make e2e-apparmor`, `make e2e-el9`). The `e2e-distro` Makefile target, which
-runs them in a release's container (`LEG=` picks the image), arrives with the next pull request (C2), together with the
-Debian 12, Ubuntu 22.04, Rocky 9 and AlmaLinux 10 images; until then `e2e_distro` is only reached through the two VM targets.
+Current scope: the scenarios run on the two VMs (`make e2e-apparmor`, `make e2e-el9`) and in the four containers of level 2
+(`make e2e-distro LEG=...`, below).
 The table has no `ClamdSocket` or `ClamdSockPath` field: nothing reads them yet, and a field no test uses cannot be shown
 correct. Add them with the first scenario that needs one.
 `deploy/test/reset.sh` takes `READY_UNIT` (Docker only: the oneshot unit it waits for before the container counts as ready,
 default `clamfleet-ci-freshclam-history.service`); an image without that unit sets it empty and only the scan counts.
+
+## The distribution containers (`make e2e-l2-image`, `make e2e-distro`)
+
+Level 2 of R1 decision 1: the distro suite in a systemd container of Debian 12, Ubuntu 22.04, Rocky Linux 9 and
+AlmaLinux 10, on every ready pull request (CI's `l2` job, one check per leg). Debian 13 stays the `e2e` job.
+`make e2e-l2-image LEG=<leg>` builds `clamfleet-e2e-l2:<leg>` and `make e2e-distro LEG=<leg>` runs `^TestDistro` in it,
+through the test gate with `-expect-run`, so a skipped test or a narrowed pattern fails the run. They need Docker, which the
+maintainer's machine does not have: CI is where they run.
+
+- **Two Dockerfiles, four legs:** `deploy/test/ci/deb` (Debian 12, Ubuntu 22.04) and `deploy/test/ci/rpm` (Rocky 9,
+  AlmaLinux 10) take `LEG` as a build argument. Bases are pinned by digest, read from the registry (Dependabot has an entry per
+  directory). The Debian family installs ClamAV from the archive; Ubuntu 22.04's release pocket has 0.103.5, so its image takes
+  1.5.x from `jammy-updates` and the RHEL family takes 1.4.x from EPEL. Every image **fails to build when clamd is older than 1.4**.
+- **Frozen signatures, one pin:** all three Dockerfiles copy the databases from the same ClamAV image digest;
+  `deploy/test/ci/signatures_test.sh` (in `make scripts-test`) fails when they differ. On the rpm images EPEL's stub databases are
+  removed first and the files are owned by `clamupdate`.
+- **No network at test time,** as for `e2e-docker`: the rpm images disable every dnf repository at the end of the build, because
+  the scenarios install the two ClamFleet packages with dnf and their dependencies are already there.
+- **What level 2 proves and what it cannot:** installation, units, groups, modes, the packaged example, detection through the
+  real clamd, upgrade and remove, `sudo` attribution, and the static checks (`apparmor_parser` of the profiles, the CIL and its
+  `sesearch` diff). A container has no MAC of its own, so **confinement is level 1**, on the VMs, and the level-2 rows of the
+  facts table carry **no stock denials**: none can be observed in a container, and none is invented. A release that needs them
+  gets them from a level-1 run.
+- **Journals:** as for `e2e` (`dist/e2e-journals`); CI uploads `l2-journals-<leg>` for 7 days when a leg fails.
+- **Distribution drift** is as for the `e2e` image: packages come from the live archives and the cache is weekly, so a
+  distribution update can turn one leg red. Fix it in its own pull request; a red leg is not re-run until green.
 
 ## Browser fixture (`make web-fixture`)
 

@@ -8,6 +8,10 @@
 #   - Docker, monthly: the two base images of deploy/test/ci/Dockerfile are pinned by digest (the
 #     ClamAV image's tags carry no date and are rebuilt daily, so only the digest is a pin). A
 #     digest that moves is a different set of frozen signatures; it goes through CI like any change.
+#     The level-2 Dockerfiles (deploy/test/ci/deb and rpm) have an entry each, one per directory
+#     rather than a `directories:` list, which this file does not rely on. The ClamAV pin is in
+#     all three: deploy/test/ci/signatures_test.sh fails until the three agree, so merge the
+#     three bumps together.
 #   - Go modules: SECURITY updates only (open-pull-requests-limit: 0 turns the routine version
 #     updates off and leaves the security ones on). Spec section 5 makes routine dependency updates a
 #     deliberate act of the maintainer, not a bot's monthly pull request.
@@ -25,6 +29,18 @@ updates:
       prefix: "ci"
   - package-ecosystem: docker
     directory: /deploy/test/ci
+    schedule:
+      interval: monthly
+    commit-message:
+      prefix: "test(e2e)"
+  - package-ecosystem: docker
+    directory: /deploy/test/ci/deb
+    schedule:
+      interval: monthly
+    commit-message:
+      prefix: "test(e2e)"
+  - package-ecosystem: docker
+    directory: /deploy/test/ci/rpm
     schedule:
       interval: monthly
     commit-message:

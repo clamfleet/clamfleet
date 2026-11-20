@@ -42,6 +42,10 @@ func release(t *testing.T) distro {
 // targets set E2E_MAC=1: there a machine where it is off is a broken VM, and the answer
 // "no" must fail instead of letting the scenario pass without any confinement. A missing
 // tool fails too: "tool absent" must never read as "MAC off".
+// The L2 container targets set E2E_MAC=0: a container reports the RUNNER's kernel, and the
+// runner is an Ubuntu VM with AppArmor on, where aa-enabled can answer yes inside a privileged
+// container that clamd is in no way confined by. 0 means "this level has no MAC", asserted by
+// the caller, not probed; the tool must still be installed.
 func macEnforced(t *testing.T, d distro) bool {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
@@ -52,6 +56,9 @@ func macEnforced(t *testing.T, d distro) bool {
 	}
 	if _, _, code := ct(ctx, []byte("PATH=$PATH:/usr/sbin:/sbin command -v "+tool+" >/dev/null\n"), "bash", "-s"); code != 0 {
 		t.Fatalf("%s is not installed: the MAC state of this release cannot be read", tool)
+	}
+	if os.Getenv("E2E_MAC") == "0" {
+		return false
 	}
 	out, _, _ := ct(ctx, []byte("PATH=$PATH:/usr/sbin:/sbin\n"+probe+"\n"), "bash", "-s")
 	on := strings.TrimSpace(out) == "on"
@@ -158,15 +165,16 @@ func aaPreconditions(t *testing.T, d distro) {
 	}
 }
 
-// elPreconditions asserts SELinux is Enforcing, clamd runs in antivirus_t, our module is at
-// priority 300 and the spool is labelled; without them a pass would mean nothing.
-func elPreconditions(t *testing.T) {
+// elPreconditions asserts SELinux is Enforcing, clamd runs in the release's domain
+// (d.ClamdDomain: antivirus_t, or unconfined_service_t on EL10), our module is at priority 300
+// and the spool is labelled; without them a pass would mean nothing.
+func elPreconditions(t *testing.T, d distro) {
 	t.Helper()
 	if got := sh(t, "getenforce"); got != "Enforcing" {
 		t.Fatalf("getenforce = %q, want Enforcing", got)
 	}
-	if ps := sh(t, "ps -eZ | grep ' clamd$' || true"); !strings.Contains(ps, ":antivirus_t:") {
-		t.Fatalf("clamd runs as %q, want antivirus_t", ps)
+	if ps := sh(t, "ps -eZ | grep ' clamd$' || true"); !strings.Contains(ps, ":"+d.ClamdDomain+":") {
+		t.Fatalf("clamd runs as %q, want %s", ps, d.ClamdDomain)
 	}
 	if mods := sh(t, "semodule -lfull | grep -w clamfleet || true"); !strings.Contains(mods, "300") {
 		t.Fatalf("semodule -lfull lists %q, want the module clamfleet at priority 300", mods)

@@ -30,14 +30,24 @@ import (
 	"github.com/clamfleet/clamfleet/internal/proto"
 )
 
+// moduleTypeRule is the one rule that declaring our file type adds on its own, which the module's CIL
+// never writes: the stock policy's attribute rules apply to every type with the file_type attribute,
+// and sesearch shows them expanded to the new type. It appears only in a whole-policy search (on
+// antivirus_t the search is scoped to the domain's own rules, which this is not). Seen on
+// AlmaLinux 10, where clamd is not in antivirus_t and the whole policy is compared (R1 decision 10).
+const moduleTypeRule = "allow clamfleet_spool_t clamfleet_spool_t:filesystem associate;"
+
 // distroFresh resets the machine, installs both packages of the release's format and returns
-// once clamd scans. The release is read first: an unknown one must fail before anything else.
+// once clamd scans. The release is read right after the reset (see below): an unknown one fails before any package is installed.
 func distroFresh(t *testing.T) distro {
 	t.Helper()
-	d := release(t)
+	// Reset first, then read the release: on a Docker leg the reset is what creates the machine, so
+	// asking /etc/os-release before it fails with "No such container". On a VM the order makes no
+	// difference (the snapshot is the same release).
 	if err := script("reset.sh"); err != nil {
 		t.Fatal(err)
 	}
+	d := release(t)
 	dist := filepath.Join(repoRoot, "dist")
 	d.installPkgs(t, false, d.pkgFile(t, dist, "clamfleet-server", debOld), d.pkgFile(t, dist, "clamfleet-agent", debOld))
 	waitClamd(t)
@@ -68,7 +78,7 @@ func mustMode(t *testing.T, want map[string]string) {
 func macPreconditions(t *testing.T, d distro) {
 	t.Helper()
 	if d.MAC == "selinux" {
-		elPreconditions(t)
+		elPreconditions(t, d)
 		return
 	}
 	aaPreconditions(t, d)
@@ -162,7 +172,12 @@ func TestDistroDryRun(t *testing.T) {
 		t.Errorf("os.id = %q, os-release says %q", r.OS.ID, want)
 	}
 	if !r.Clamd.Up || r.Clamd.Error != nil {
-		t.Errorf("clamd = %+v", r.Clamd)
+		// The Error field is a pointer: print its text, a bare %+v shows only an address.
+		errText := "<nil>"
+		if r.Clamd.Error != nil {
+			errText = *r.Clamd.Error
+		}
+		t.Errorf("clamd = %+v, error %q", r.Clamd, errText)
 	}
 	if want, _, _ := strings.Cut(strings.TrimPrefix(sh(t, "clamd --version"), "ClamAV "), "/"); r.Clamd.Version == nil || *r.Clamd.Version != want {
 		t.Errorf("clamd.version = %v, clamd --version says %q", r.Clamd.Version, want)
@@ -403,9 +418,16 @@ func TestDistroStaticMAC(t *testing.T) {
 	}
 	const cil = "/usr/share/selinux/packages/clamfleet/clamfleet.cil"
 	// The binary policy the store writes: the highest policy.NN under the configured store.
+	// On antivirus_t the search is scoped to it. Where clamd is not in antivirus_t (EL10: no such
+	// type exists, and sesearch -s on an unknown type fails) the whole policy is compared, so
+	// "the module adds nothing" is asserted against every rule rather than against none.
+	scope := "-s antivirus_t"
+	if d.ClamdDomain != "antivirus_t" {
+		scope = ""
+	}
 	rules := func() []string {
 		return nonEmpty(sh(t, "export PATH=$PATH:/usr/sbin:/sbin; . /etc/selinux/config; "+
-			"pol=$(ls /etc/selinux/$SELINUXTYPE/policy/policy.* | sort -V | tail -n1); sesearch -A -s antivirus_t \"$pol\" | sort"))
+			"pol=$(ls /etc/selinux/$SELINUXTYPE/policy/policy.* | sort -V | tail -n1); sesearch -A "+scope+" \"$pol\" | sort"))
 	}
 	// -n commits to the store without reloading the kernel's policy; restored at the end so the
 	// store and the loaded policy agree again.
@@ -438,14 +460,18 @@ func TestDistroStaticMAC(t *testing.T) {
 	sort.Strings(removed)
 	// The reviewed list (TestSELinuxRuleSet states the same against the live policy): one rule per
 	// class, both on the module's own type and on no stock type (clamd, freshclam and clamonacc share the domain).
-	want := []string{
-		"allow antivirus_t clamfleet_spool_t:dir { add_name getattr open read remove_name search write };",
-		"allow antivirus_t clamfleet_spool_t:file { create getattr link lock open read setattr unlink write };",
+	// Empty on a release without antivirus_t, where the optional block is inactive (R1 decision 9).
+	want := append([]string(nil), d.ModuleRules...)
+	if scope == "" {
+		// A whole-policy search also shows the rule the new type brings with it (moduleTypeRule). The
+		// comparison stays exact: this one rule and nothing else.
+		want = append(want, moduleTypeRule)
 	}
+	sort.Strings(want)
 	if strings.Join(added, "\n") != strings.Join(want, "\n") {
-		t.Fatalf("the module adds these rules to antivirus_t:\n%s\nwant exactly:\n%s", strings.Join(added, "\n"), strings.Join(want, "\n"))
+		t.Fatalf("the module adds these rules to the policy:\n%s\nwant exactly:\n%s", strings.Join(added, "\n"), strings.Join(want, "\n"))
 	}
 	if len(removed) != 0 {
-		t.Fatalf("the module removes rules from antivirus_t: %v", removed)
+		t.Fatalf("the module removes rules from the policy: %v", removed)
 	}
 }

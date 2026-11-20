@@ -20,7 +20,12 @@
 //
 // A row is added only together with the run that observed its facts (the stock denials in
 // particular are read from a real run with our VirusEvent removed, never guessed): a
-// release without that evidence stays out of the table and fails loudly.
+// release without that evidence stays out of the table and fails loudly. The exception is a
+// level-2 row (a systemd container on a runner: debian 12, ubuntu 22.04, rocky 9, almalinux
+// 10). A container has no MAC of its own, so no denial can be observed there and none is
+// invented: those rows carry no StockDenials, and say so in a comment. Their MAC fields
+// describe what the release ships and what the static tests (TestDistroStaticMAC) check
+// against the policy files.
 package e2e
 
 import (
@@ -50,7 +55,57 @@ type distro struct {
 	AgentGroups   []string // the groups the clamfleet user must be in
 	EICARDir      string   // where EICAR files live: a place clamd's MAC policy lets it read
 	Example       string   // the file under /usr/share/doc/clamfleet-agent the package installs as agent.yaml
-	StockDenials  []stockDenial
+	// ClamdDomain is the SELinux domain clamd runs in on a stock install of the release; empty on
+	// an AppArmor release. EL10 ships no `antivirus` module in its base policy, so clamd is
+	// unconfined_service_t there (R1 decision 10).
+	ClamdDomain string
+	// ModuleRules are the rules our SELinux module adds to ClamdDomain, as sesearch prints them.
+	// Empty when the domain is not antivirus_t: the module's optional block stays inactive and it
+	// adds nothing (R1 decision 9), which TestDistroStaticMAC asserts against the whole policy.
+	ModuleRules  []string
+	StockDenials []stockDenial
+}
+
+// moduleRulesEL are the two reviewed rules of the module's optional block (deploy/packaging
+// selinux CIL; TestSELinuxRuleSet states the same against the live policy).
+var moduleRulesEL = []string{
+	"allow antivirus_t clamfleet_spool_t:dir { add_name getattr open read remove_name search write };",
+	"allow antivirus_t clamfleet_spool_t:file { create getattr link lock open read setattr unlink write };",
+}
+
+// elRow builds the EPEL layout shared by every EL release; only the domain and the rules differ.
+func elRow(domain string, rules []string) distro {
+	return distro{
+		Family:        "rpm",
+		MAC:           "selinux",
+		ClamdUnit:     "clamd@scan.service",
+		FreshclamUnit: "clamav-freshclam.service",
+		ClamdConf:     "/etc/clamd.d/scan.conf",
+		ClamdGroup:    "clamscan",
+		// virusgroup: EPEL's /run/clamd.scan is clamscan:virusgroup 0710, so the agent needs that group to reach clamd's socket.
+		AgentGroups: []string{"clamscan", "virusgroup", "systemd-journal"},
+		// The harness's own domain cannot hand clamd a path under /srv; antivirus_db_t is readable by clamd.
+		EICARDir:    "/var/lib/clamav/e2e",
+		Example:     "agent.rhel9.yaml.example",
+		ClamdDomain: domain,
+		ModuleRules: rules,
+	}
+}
+
+// debRow builds the layout shared by the Debian family releases of the level-2 matrix.
+func debRow() distro {
+	return distro{
+		Family:        "deb",
+		MAC:           "apparmor",
+		ClamdUnit:     "clamav-daemon.service",
+		FreshclamUnit: "clamav-freshclam.service",
+		ClamdConf:     "/etc/clamav/clamd.conf",
+		ClamdGroup:    "clamav",
+		AgentGroups:   []string{"clamav", "systemd-journal"},
+		// The stock clamd profile allows /tmp/**.
+		EICARDir: "/tmp/e2e",
+		Example:  "agent.yaml.example",
+	}
 }
 
 // distros is keyed by os-release `ID VERSION_ID`, the VERSION_ID being the major number for the
@@ -72,24 +127,25 @@ var distros = map[string]distro{
 			Why: "Debian's stock clamd profile does not allow reading /etc/hostname, and clamd tries on every detection whether or not a VirusEvent is configured (seen on the VM with the VirusEvent line removed)",
 		}},
 	},
-	"almalinux 9": {
-		Family:        "rpm",
-		MAC:           "selinux",
-		ClamdUnit:     "clamd@scan.service",
-		FreshclamUnit: "clamav-freshclam.service",
-		ClamdConf:     "/etc/clamd.d/scan.conf",
-		ClamdGroup:    "clamscan",
-		// virusgroup: EPEL's /run/clamd.scan is clamscan:virusgroup 0710, so the agent needs that group to reach clamd's socket.
-		AgentGroups: []string{"clamscan", "virusgroup", "systemd-journal"},
-		// The harness's own domain cannot hand clamd a path under /srv; antivirus_db_t is readable by clamd.
-		EICARDir: "/var/lib/clamav/e2e",
-		Example:  "agent.rhel9.yaml.example",
-		StockDenials: []stockDenial{
-			{All: []string{"/selinux/enforce"}, Why: "clamd looks at /selinux, an unlabeled directory the image ships (stock, unrelated to us)"},
-			{All: []string{`name="enforce"`}, Why: "the same /selinux/enforce lookup, logged by name"},
-			{All: []string{`name="selinux"`, "tcontext=system_u:object_r:unlabeled_t"}, Why: "the same unlabeled /selinux directory, logged by name"},
-		},
-	},
+	// Level-2 rows (header): no MAC can be observed in a container, so no StockDenials are recorded.
+	"debian 12":    debRow(),
+	"ubuntu 22.04": debRow(),
+	"rocky 9":      elRow("antivirus_t", moduleRulesEL),
+	// EL10's base policy has no antivirus module (it is in selinux-policy-targeted-extra, CRB), so
+	// clamd is unconfined_service_t on a stock install and the module's optional rules are inactive.
+	"almalinux 10": elRow("unconfined_service_t", nil),
+	"almalinux 9":  almalinux9(),
+}
+
+// almalinux9 is the level-1 row, observed on the VM with SELinux enforcing.
+func almalinux9() distro {
+	d := elRow("antivirus_t", moduleRulesEL)
+	d.StockDenials = []stockDenial{
+		{All: []string{"/selinux/enforce"}, Why: "clamd looks at /selinux, an unlabeled directory the image ships (stock, unrelated to us)"},
+		{All: []string{`name="enforce"`}, Why: "the same /selinux/enforce lookup, logged by name"},
+		{All: []string{`name="selinux"`, "tcontext=system_u:object_r:unlabeled_t"}, Why: "the same unlabeled /selinux directory, logged by name"},
+	}
+	return d
 }
 
 // lookupDistro returns the facts of a release or an error naming the key it looked for. The
@@ -146,6 +202,16 @@ func TestDistroFacts(t *testing.T) {
 					t.Errorf("%s is empty", name)
 				}
 			}
+			switch {
+			case d.MAC == "apparmor" && (d.ClamdDomain != "" || len(d.ModuleRules) != 0):
+				t.Error("an AppArmor row must not carry a SELinux domain or rules")
+			case d.MAC == "selinux" && strings.TrimSpace(d.ClamdDomain) == "":
+				t.Error("ClamdDomain is empty: the SELinux preconditions would check nothing")
+			case d.ClamdDomain == "antivirus_t" && len(d.ModuleRules) == 0:
+				t.Error("antivirus_t without ModuleRules: the static rule check would be vacuous")
+			case d.MAC == "selinux" && d.ClamdDomain != "antivirus_t" && len(d.ModuleRules) != 0:
+				t.Error("ModuleRules on a domain other than antivirus_t: the module's optional block is inactive there")
+			}
 			if len(d.AgentGroups) == 0 {
 				t.Error("AgentGroups is empty: the group assertion would be vacuous")
 			}
@@ -180,8 +246,16 @@ func TestDistroFacts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if d.Family != "rpm" || d.MAC != "selinux" {
+	if d.Family != "rpm" || d.MAC != "selinux" || d.ClamdDomain != "antivirus_t" {
 		t.Errorf("almalinux 9.8 resolved to %+v", d)
+	}
+	// EL10 is a different row: clamd is unconfined there (R1 decision 10).
+	d, err = lookupDistro("almalinux", "10.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.ClamdDomain != "unconfined_service_t" || len(d.ModuleRules) != 0 {
+		t.Errorf("almalinux 10.1 resolved to %+v", d)
 	}
 }
 
