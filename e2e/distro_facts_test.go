@@ -145,6 +145,9 @@ var distros = map[string]distro{
 	"rocky 9":      elRow("antivirus_t", moduleRulesEL),
 	// EL10's base policy has no antivirus module (it is in selinux-policy-targeted-extra, CRB), so
 	// clamd is unconfined_service_t on a stock install and the module's optional rules are inactive.
+	// ClamdDomain unconfined_service_t is implied at L2 by the whole-policy check in
+	// TestDistroStaticMAC (the module adds no rule anywhere, which only holds if clamd is not in
+	// antivirus_t), but not observed there: it is observed at L1 by the EL10 suite (to come).
 	"almalinux 10": elRow("unconfined_service_t", nil),
 	"almalinux 9":  almalinux9(),
 }
