@@ -48,11 +48,14 @@ when it qualifies.
 ## Verifying what you download
 
 Releases are built from signed tags. The checksums and the `.rpm` packages are signed with the
-project's release key; [docs/install.md](docs/install.md) will describe how to verify a download once
-the first release exists.
+project's release key (`deploy/release/clamfleet-release.asc`);
+[docs/install.md](docs/install.md#verifying-a-download) describes how to verify a download.
 
-**Release key fingerprint:** published with the first release.
+**Release key** (`ClamFleet Release <hi@madalin.me>`, RSA-4096, both keys expire 2028-11-19):
 
-The fingerprint will be listed here and in the README, and also on an independent channel (the
-maintainer's website and keys.openpgp.org), so that a change to this repository alone cannot
-replace it unnoticed.
+- Primary (certify only): `EEF3 BD8A 0FDA 41C0 C451 8B44 36E3 A39F 1BE2 6893`
+- Signing subkey: `9ADD 4EBC D2FA 7C59 7280 D078 5605 86D7 BCFD 57AF`
+
+The README repeats this list, but it is a copy in the same repository. The independent channels, the
+maintainer's website and keys.openpgp.org, **will list** the fingerprint (neither does yet), so that a
+change to this repository alone cannot replace it unnoticed. Compare the key file with those once they do.
