@@ -154,6 +154,16 @@ jobs:
           docker save -o "$RUNNER_TEMP/clamfleet-l2-image.tar" "clamfleet-e2e-l2:$LEG"
       - if: steps.image.outputs.cache-hit == 'true'
         run: docker load -i "$RUNNER_TEMP/clamfleet-l2-image.tar"
+      # The runner's kernel is shared with the containers, and Ubuntu ships an AppArmor profile for
+      # /usr/sbin/unix_chkpwd that is matched by path inside them too. It denies dac_read_search and
+      # dac_override, which the setuid-root helper of the EL images needs to read /etc/shadow (mode
+      # 000), so sudo failed there with "PAM account management error". Debian's helper reads the file
+      # through the shadow group and never notices. A real EL host has no such profile; the runner's
+      # is removed for this job only (the runner is discarded afterwards).
+      - run: |
+          if [ -e /etc/apparmor.d/unix-chkpwd ]; then
+            sudo apparmor_parser -R /etc/apparmor.d/unix-chkpwd
+          fi
       - run: make e2e-distro LEG="$LEG"
       # The journals hold synthetic data only (EICAR paths and per-run tokens).
       - if: failure()
