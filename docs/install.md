@@ -101,8 +101,8 @@ dnf install ./clamfleet-agent-X.Y.Z-1.x86_64.rpm             # needs clamd (EPEL
    Also check that `clamd.conf` does not turn off `EnableVersionCommand` or `EnableStatsCommand` (upstream defaults
    both to yes; Ubuntu 22.04's ClamAV 1.5 package writes `false` for both). With either off clamd answers `COMMAND
    UNAVAILABLE`, and the report has no version or no queue and `clamd.error` says which option to set.
-4. **Debian with AppArmor** (the default): add the two lines of
-   `/usr/share/doc/clamfleet-agent/usr.sbin.clamd.local` to `/etc/apparmor.d/local/usr.sbin.clamd` and run
+4. **Debian with AppArmor** (the default): add the two lines the install notice
+   prints (also in `/usr/share/clamfleet-agent/usr.sbin.clamd.local`) to `/etc/apparmor.d/local/usr.sbin.clamd` and run
    `apparmor_parser -r /etc/apparmor.d/usr.sbin.clamd`. Without them clamd cannot even start the shell for
    `VirusEvent`. The package loads our profile `clamfleet-agent-event` itself.
 5. **RHEL family with SELinux:** nothing to do. The module `clamfleet` (priority 300) is loaded by the package and

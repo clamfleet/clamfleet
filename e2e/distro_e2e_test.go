@@ -121,7 +121,7 @@ func TestDistroInstallAndStart(t *testing.T) {
 	})
 	// The package installs the family's example as the configuration: a file that drifted to the
 	// other family's example would name the wrong units and paths.
-	if got := sh(t, "cmp /etc/clamfleet/agent.yaml /usr/share/doc/clamfleet-agent/"+d.Example+" && echo same"); got != "same" {
+	if got := sh(t, "cmp /etc/clamfleet/agent.yaml /usr/share/clamfleet-agent/"+d.Example+" && echo same"); got != "same" {
 		t.Fatalf("agent.yaml is not the packaged %s", d.Example)
 	}
 
@@ -240,7 +240,7 @@ func wireClamd(t *testing.T, d distro, mac bool) {
 	t.Helper()
 	if mac && d.MAC == "apparmor" {
 		sh(t, "touch /etc/apparmor.d/local/usr.sbin.clamd; "+
-			"grep -q 'Px -> clamfleet-agent-event' /etc/apparmor.d/local/usr.sbin.clamd || cat /usr/share/doc/clamfleet-agent/usr.sbin.clamd.local >> /etc/apparmor.d/local/usr.sbin.clamd; "+
+			"grep -q 'Px -> clamfleet-agent-event' /etc/apparmor.d/local/usr.sbin.clamd || cat /usr/share/clamfleet-agent/usr.sbin.clamd.local >> /etc/apparmor.d/local/usr.sbin.clamd; "+
 			"apparmor_parser -r /etc/apparmor.d/usr.sbin.clamd; "+
 			// AppArmor's DENIED lines go through printk, which drops more than 10 messages in 5 s: without
 			// this a denial the scenario looks for can be lost (as in aa-prepare.sh). Runtime only.
@@ -438,7 +438,7 @@ func TestDistroStaticMAC(t *testing.T) {
 		// -b makes the copy the base for #include, so clamd's `#include <local/usr.sbin.clamd>` reads ours.
 		sh(t, "export PATH=$PATH:/usr/sbin:/sbin; "+
 			"t=$(mktemp -d); trap 'rm -rf \"$t\"' EXIT; cp -a /etc/apparmor.d \"$t/aa\"; mkdir -p \"$t/aa/local\"; "+
-			"touch \"$t/aa/local/usr.sbin.clamd\"; cat /usr/share/doc/clamfleet-agent/usr.sbin.clamd.local >> \"$t/aa/local/usr.sbin.clamd\"; "+
+			"touch \"$t/aa/local/usr.sbin.clamd\"; cat /usr/share/clamfleet-agent/usr.sbin.clamd.local >> \"$t/aa/local/usr.sbin.clamd\"; "+
 			"apparmor_parser -QK -b \"$t/aa\" \"$t/aa/clamfleet-agent-event\"; "+
 			"apparmor_parser -QK -b \"$t/aa\" \"$t/aa/usr.sbin.clamd\"")
 		return

@@ -174,7 +174,15 @@ expect "agent deb first install: enabled and started" bash -c "has_call() { grep
 expect "agent deb first install: no SELinux call" test "$(count_calls '^semodule')" -eq 0
 expect "agent deb first install: the notice names the VirusEvent line" grep -q "VirusEvent /usr/bin/clamfleet-agent event" "$T/out"
 expect "agent deb first install: the notice names EnableVersionCommand and EnableStatsCommand" bash -c "grep -q EnableVersionCommand '$T/out' && grep -q EnableStatsCommand '$T/out'"
-expect "agent deb first install: the AppArmor notice" grep -q "usr.sbin.clamd.local" "$T/out"
+# The notice prints the two AppArmor lines itself: a minimized Ubuntu image drops /usr/share/doc, so a
+# pointer to a file there leaves the administrator with nothing. The lines are compared with the shipped
+# include, so the notice cannot drift from it.
+expect "agent deb first install: the notice prints every rule of the AppArmor include" bash -c "n=0; while IFS= read -r l; do n=\$((n+1)); grep -qxF -- \"       \$l\" '$T/out' || exit 1; done < <(grep -v '^#' '$here/../apparmor/usr.sbin.clamd.local' | grep -v '^\$'); test \$n -eq 2"
+expect "agent deb first install: the notice does not send the administrator to /usr/share/doc" bash -c "! grep -q 'usr/share/doc/clamfleet-agent/usr.sbin' '$T/out'"
+# Rule: the agent package puts nothing but README and LICENSE under /usr/share/doc (dpkg excludes it on
+# minimized Ubuntu images). Examples and the include live in /usr/share/clamfleet-agent.
+expect "agent package: only README and LICENSE under /usr/share/doc" bash -c "! grep -E 'dst: /usr/share/doc/' '$here/../packaging/nfpm-agent.yaml' | grep -vE '/(README.md|LICENSE)\$'"
+expect "agent package: the include and the examples are packaged under /usr/share/clamfleet-agent" bash -c "n=\$(grep -cE 'dst: /usr/share/clamfleet-agent/(usr.sbin.clamd.local|agent.yaml.example|agent.rhel9.yaml.example)\$' '$here/../packaging/nfpm-agent.yaml'); test \$n -eq 3"
 expect "agent deb first install: the scan timer is NOT enabled" bash -c "! grep -q 'clamfleet-scan.timer' '$T/enabled'"
 cleanup
 

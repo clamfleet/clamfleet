@@ -54,7 +54,7 @@ type distro struct {
 	ClamdGroup    string   // the group of the spool (clamd's group, what the agent shares)
 	AgentGroups   []string // the groups the clamfleet user must be in
 	EICARDir      string   // where EICAR files live: a place clamd's MAC policy lets it read
-	Example       string   // the file under /usr/share/doc/clamfleet-agent the package installs as agent.yaml
+	Example       string   // the file under /usr/share/clamfleet-agent the package installs as agent.yaml
 	// ClamdDomain is the SELinux domain clamd runs in on a stock install of the release; empty on
 	// an AppArmor release. EL10 ships no `antivirus` module in its base policy, so clamd is
 	// unconfined_service_t there (R1 decision 10).

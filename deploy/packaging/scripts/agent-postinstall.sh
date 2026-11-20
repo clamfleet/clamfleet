@@ -96,7 +96,7 @@ done
 
 if [ "$first" = 1 ]; then
 	cat >&2 <<NOTICE
-clamfleet-agent: installed. Next steps (docs: /usr/share/doc/clamfleet-agent/):
+clamfleet-agent: installed. Next steps (README and licence: /usr/share/doc/clamfleet-agent/, examples: /usr/share/clamfleet-agent/):
   1. Edit $ETC_DIR/agent.yaml (server URL; on the RHEL family the clamd paths are in the example).
   2. Register this host on the server ("clamfleet-server host add NAME") and write its token to
      $ETC_DIR/token (root:clamfleet, mode 0640), then: systemctl start clamfleet-agent
@@ -107,8 +107,11 @@ clamfleet-agent: installed. Next steps (docs: /usr/share/doc/clamfleet-agent/):
 NOTICE
 	if [ "$fmt" = deb ]; then
 		cat >&2 <<NOTICE
-  4. Debian with AppArmor: add the two lines of /usr/share/doc/clamfleet-agent/usr.sbin.clamd.local
-     to /etc/apparmor.d/local/usr.sbin.clamd and run: apparmor_parser -r /etc/apparmor.d/usr.sbin.clamd
+  4. Debian with AppArmor: add these two lines to /etc/apparmor.d/local/usr.sbin.clamd (this package never
+     edits it) and run: apparmor_parser -r /etc/apparmor.d/usr.sbin.clamd
+       /usr/bin/dash mrix,
+       /usr/bin/clamfleet-agent Px -> clamfleet-agent-event,
+     (the same lines are in /usr/share/clamfleet-agent/usr.sbin.clamd.local)
   5. Scheduled scans (optional): set scan.paths, then systemctl enable --now clamfleet-scan.timer
 NOTICE
 	else
