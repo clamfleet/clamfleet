@@ -31,7 +31,7 @@ import (
 )
 
 // distroFresh resets the machine, installs both packages of the release's format and returns
-// once clamd scans. The release is read first: an unknown one must fail before anything else.
+// once clamd scans. The release is read right after the reset (see below): an unknown one fails before any package is installed.
 func distroFresh(t *testing.T) distro {
 	t.Helper()
 	// Reset first, then read the release: on a Docker leg the reset is what creates the machine, so
