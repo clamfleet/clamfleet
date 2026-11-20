@@ -52,6 +52,11 @@ All notable changes are listed here. The format follows Keep a Changelog; versio
   runtime dependency.
 
 ### Fixed
+- A clamd that answers `COMMAND UNAVAILABLE` to VERSION or STATS (Ubuntu 22.04's ClamAV 1.5 package turns `EnableVersionCommand` and
+  `EnableStatsCommand` off) is now reported by name: `clamd.error` says which option to set, and a new WARN rule `clamd_command_failed`
+  (clamd answers but a command failed) is raised; `clamd_down` stays CRIT for a clamd that does not answer. The agent postinstall notice and
+  `docs/install.md` tell administrators to enable both. No payload field changed; `clamd_command_failed` is a new value in `reason_codes`
+  (R1 decision 11).
 - A spool test swapped a file for another and expected a different inode, which ext4 does not guarantee (it reuses the freed one); found by
   the first CI run, the test now keeps the old inode allocated.
 - Milestone 6b: **the TOTP gate** was "source is local", so any user of another source skipped `auth.local.totp_required`. It now
