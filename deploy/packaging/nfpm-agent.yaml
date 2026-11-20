@@ -49,12 +49,12 @@ contents:
     dst: /etc/clamfleet/agent.yaml
     packager: deb
     type: config|noreplace
-    file_info: {mode: 0644, owner: root, group: root}
+    file_info: {mode: 0600, owner: root, group: root}
   - src: deploy/agent.rhel9.yaml.example
     dst: /etc/clamfleet/agent.yaml
     packager: rpm
     type: config|noreplace
-    file_info: {mode: 0644, owner: root, group: root}
+    file_info: {mode: 0600, owner: root, group: root}
   - src: deploy/systemd/clamfleet-agent.service
     dst: /usr/lib/systemd/system/clamfleet-agent.service
     file_info: {mode: 0644, owner: root, group: root}
