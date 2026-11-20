@@ -457,6 +457,12 @@ maintainer's machine does not have: CI is where they run.
   is never read as the release's. **Confinement is level 1**, on the VMs, and the level-2 rows of the
   facts table carry **no stock denials**: none can be observed in a container, and none is invented. A release that needs them
   gets them from a level-1 run.
+- **Ubuntu 24.04 and later Docker hosts, rpm legs:** Ubuntu ships an AppArmor profile for `/usr/sbin/unix_chkpwd`, and the
+  kernel is shared, so it applies inside the container too. It denies `dac_read_search` and `dac_override`, which the
+  setuid helper of the EL images needs to read `/etc/shadow` (mode 000): `sudo` then fails with "PAM account management
+  error". A real EL host has no such profile. Unload it before the run, as CI does for the job (the runner is discarded
+  afterwards; on your own machine reload it with `apparmor_parser -r /etc/apparmor.d/unix-chkpwd` when done):
+  `sudo apparmor_parser -R /etc/apparmor.d/unix-chkpwd`. The Debian legs do not notice it.
 - **Journals:** as for `e2e` (`dist/e2e-journals`); CI uploads `l2-journals-<leg>` for 7 days when a leg fails.
 - **Distribution drift** is as for the `e2e` image: packages come from the live archives and the cache is weekly, so a
   distribution update can turn one leg red. Fix it in its own pull request; a red leg is not re-run until green.
