@@ -23,14 +23,18 @@ The fingerprints, as published in the README and `SECURITY.md` (both keys expire
 - Primary (certify only): `EEF3 BD8A 0FDA 41C0 C451 8B44 36E3 A39F 1BE2 6893`
 - Signing subkey: `9ADD 4EBC D2FA 7C59 7280 D078 5605 86D7 BCFD 57AF`
 
-**Every download.** Look at the key's fingerprints and **compare them with the ones published somewhere other than this
-repository** (the README and `SECURITY.md` show it; so do the maintainer's website and keys.openpgp.org): a
-replaced key file would otherwise vouch for itself.
+**Every download.** The key file is not a release asset: fetch it from the tag you are installing (a raw file of the
+repository at `refs/tags/vX.Y.Z`), for example
+`curl -fsSLO https://raw.githubusercontent.com/clamfleet/clamfleet/refs/tags/vX.Y.Z/deploy/release/clamfleet-release.asc`.
+Then compare its fingerprints with the list above. The README and `SECURITY.md` carry the same list, but they are copies
+in this same repository: they help only if you got the key file some other way, and a replaced repository replaces them
+together. The independent copies, on the maintainer's website and on keys.openpgp.org, **will list** the fingerprint
+(neither does yet); compare with those as soon as they do. A replaced key file would otherwise vouch for itself.
 
 ```sh
-gpg --show-keys --with-subkey-fingerprints clamfleet-release.asc   # compare BEFORE importing, with the independent channel
+gpg --show-keys --with-subkey-fingerprints clamfleet-release.asc   # compare BEFORE importing: the "pub" fingerprint and the "sub" one
 gpg --import clamfleet-release.asc
-gpg --verify SHA256SUMS.asc SHA256SUMS   # must say "Good signature"
+gpg --verify SHA256SUMS.asc SHA256SUMS   # must say "Good signature"; its "Primary key fingerprint" line must be the primary above
 sha256sum -c --ignore-missing SHA256SUMS # every file you downloaded must say OK
 ```
 
@@ -41,7 +45,7 @@ sudo rpm --import clamfleet-release.asc
 rpm -Kv clamfleet-agent-*.rpm
 ```
 
-The output **must contain a line `Signature, key ID <id>: OK`**. If it shows only `digests OK` and no signature line,
+The output **must contain a line `Signature, key ID <id>: OK`**, where `<id>` is the signing subkey's, lowercase, ending in `bcfd57af`. If it shows only `digests OK` and no signature line,
 the package is **unsigned**, and `rpm -Kv` still exits 0: do not install it. Without the key you get `NOKEY` and exit
 status 1. `dnf install ./package.rpm` is believed not to check the signature of a local file by default, so run
 `rpm -Kv` first (recorded in the release rehearsal, see releasing.md).
