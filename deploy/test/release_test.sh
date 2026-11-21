@@ -538,4 +538,9 @@ tagit v1.0.1 "$tmp/sshkey"
 vt_refused "a tag whose version has no changelog section" "no non-empty section" v1.0.1
 SIGNERS="maintainer $(cut -d' ' -f1,2 "$tmp/sshother.pub")" vt_refused "a key that did not sign the tag" "signature" v1.0.0-rc.1
 
+# A validly signed tag object, filed under the ref of another tag: the signature is good, the name is not.
+tagit v1.0.0-rc.5 "$tmp/sshkey"
+git -C "$vt" update-ref refs/tags/v1.0.0-rc.1 "$(git -C "$vt" rev-parse refs/tags/v1.0.0-rc.5)"
+vt_refused "a tag object signed for another tag name" "must carry its own name" v1.0.0-rc.1
+
 echo "release_test: ok"
