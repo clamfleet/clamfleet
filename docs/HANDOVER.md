@@ -9,7 +9,7 @@ Central management and reporting for ClamAV on Linux servers.
 
 | Field | Value |
 | --- | --- |
-| Status | Milestones 1 to 6b built; 6c (release engineering: CI, signed releases, project files) in progress |
+| Status | Milestones 1 to 6c built; first release candidate 1.0.0-rc.1 |
 | Project type | Open source, public repository, community contributions expected |
 | Maintainer | The ClamFleet Authors (hi@madalin.me) |
 | Target fleet | 50 to 100 Linux servers |

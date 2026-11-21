@@ -28,7 +28,7 @@ distribution is claimed.** Releases are signed; the key's fingerprints are in `S
   (`docs/alerts.md`).
 
 ### Added
-- Milestone 6c, continuous integration and project files (in progress). **CI** (`.github/workflows/ci.yml`): `make ci` on every pull request
+- Milestone 6c, continuous integration and project files. **CI** (`.github/workflows/ci.yml`): `make ci` on every pull request
   (vet, staticcheck, sqlc diff, unit and script tests through a test gate that fails on skipped tests, actionlint, module and gofmt
   checks), the Playwright browser tests of the console, and a DCO sign-off check (`hack/ci/dco.sh`); every action is GitHub-owned and pinned
   by commit SHA (`deploy/test/workflows_test.sh`). Dependabot for actions, the CI image and Go security updates. `reset.sh` can reset a
