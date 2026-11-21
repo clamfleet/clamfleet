@@ -126,4 +126,36 @@ expect_ok "the pin moved past the unsigned commit" "$old1" HEAD
 # A pin that is not in the repository fails as a shallow clone does.
 with_cutoff "$zero"
 expect_fail "a missing pin" "$old1" HEAD 2
+
+# A trailer with no closing `>` is not a sign-off, even when the text before it is the author's email.
+git checkout -q -f main
+git reset -q --hard "$good"
+commit "Ann Dev" ann@example.com "feat: unclosed"$'\n\nSigned-off-by: Ann Dev <ann@example.com'
+with_cutoff "$root"
+expect_fail "a sign-off with no closing >" "$good" HEAD
+grep -q 'no Signed-off-by' "$tmp/out" || fail "the malformed trailer was not named as unsigned"
+git reset -q --hard "$good"
+commit "Ann Dev" ann@example.com "feat: bare"$'\n\nSigned-off-by: ann@example.com'
+expect_fail "a sign-off with no angle brackets" "$good" HEAD
+
+# A rev-list that fails must fail the check (exit 2), never "ok (0 commits)". The range is made unreadable by
+# deleting the loose object of a commit between BASE and HEAD in a separate repository.
+mkdir "$tmp/broken"
+git -C "$tmp/broken" init -q -b main
+git -C "$tmp/broken" config user.name x
+git -C "$tmp/broken" config user.email x@example.com
+git -C "$tmp/broken" config commit.gpgsign false
+git -C "$tmp/broken" commit -q --allow-empty -m a
+b0="$(git -C "$tmp/broken" rev-parse HEAD)"
+git -C "$tmp/broken" commit -q --allow-empty -m b
+mid="$(git -C "$tmp/broken" rev-parse HEAD)"
+git -C "$tmp/broken" commit -q --allow-empty -m c
+b2="$(git -C "$tmp/broken" rev-parse HEAD)"
+rm "$tmp/broken/.git/objects/${mid:0:2}/${mid:2}"
+with_cutoff "$b0"
+code=0
+(cd "$tmp/broken" && "$dco" "$b0" "$b2") >"$tmp/out" 2>&1 || code=$?
+[ "$code" = 2 ] || fail "an unreadable range: exit $code, wanted 2:
+$(cat "$tmp/out")"
+grep -q 'ok (' "$tmp/out" && fail "an unreadable range reported ok"
 echo "dco_test: ok"

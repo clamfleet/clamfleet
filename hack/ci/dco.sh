@@ -47,6 +47,14 @@ for sha in "$base" "$head" "$DCO_CUTOFF"; do
 	fi
 done
 
+# The range is read into a variable, not through `< <(git rev-list ...)`: a process substitution's exit
+# status is never seen by `set -e`, so a failing rev-list (a missing object, a corrupt repository) looked
+# like an empty range and the script printed "ok (0 commits)". Here the failure is fatal.
+if ! revs="$(git rev-list --no-merges "$base..$head")"; then
+	echo "dco: git rev-list $base..$head failed: the range cannot be read, so nothing was checked" >&2
+	exit 2
+fi
+
 bad=0
 n=0
 while IFS= read -r c; do
@@ -64,8 +72,16 @@ while IFS= read -r c; do
 	while IFS= read -r t; do
 		case "$t" in
 		[Ss]igned-off-by:*)
+			# Rule: the trailer is `Name <email>` with the closing `>`. Without it `${t%>*}` would leave the
+			# whole line as the "email" and a half-written trailer could be read as something it is not.
+			# Trailing blanks are allowed; anything else after the `>` is malformed too.
+			t="${t%"${t##*[![:space:]]}"}"
+			case "$t" in
+			*\<*\>) ;;
+			*) continue ;;
+			esac
 			email="${t##*<}"
-			email="${email%>*}"
+			email="${email%>}"
 			if [ "$(printf '%s' "$email" | tr '[:upper:]' '[:lower:]')" = "$author" ]; then signed=1; fi
 			;;
 		esac
@@ -74,7 +90,7 @@ while IFS= read -r c; do
 		echo "dco: $(git log -1 --format='%h %s' "$c"): no Signed-off-by with the author's email (use git commit -s; to fix: git rebase --signoff)" >&2
 		bad=1
 	fi
-done < <(git rev-list --no-merges "$base..$head")
+done <<<"$revs"
 
 if [ "$bad" != 0 ]; then
 	exit 1
