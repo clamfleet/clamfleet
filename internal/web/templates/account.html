@@ -1,0 +1,35 @@
+{{/* SPDX-License-Identifier: AGPL-3.0-only */}}
+{{/* SPDX-FileCopyrightText: The ClamFleet Authors */}}
+{{/* account.html: change the signed-in user's own password and the two-factor card. Body: web.accountBody. */}}
+{{define "content"}}
+<h1>Account</h1>
+<div class="card" data-testid="account-page">
+  <p>Signed in as <strong>{{.Principal.Actor}}</strong> ({{.Principal.Role}}).</p>
+  {{if .Body.External}}
+  <p data-testid="account-external">Sign-in source: <strong data-testid="account-source">{{.Body.SourceLabel}}</strong>{{if .Body.ExternalName}}, user name <code>{{.Body.ExternalName}}</code>{{end}}.
+  This account is managed by your identity provider: its password, second factor and role are changed there.</p>
+  {{end}}
+  {{if .Body.MustChange}}<p data-testid="must-change">You have a one-time password. Choose your own password to continue.</p>{{end}}
+  {{if not .Body.External}}
+  <h2>Change password</h2>
+  <form method="post" action="/account/password" data-testid="account-form">
+    <input type="hidden" name="csrf_token" value="{{.CSRF}}">
+    <label for="current_password">Current password</label>
+    <input type="password" id="current_password" name="current_password" autocomplete="current-password" required data-testid="account-current">
+    <label for="new_password">New password</label>
+    <input type="password" id="new_password" name="new_password" autocomplete="new-password" required minlength="15" data-testid="account-new">
+    <label for="new_password2">New password again</label>
+    <input type="password" id="new_password2" name="new_password2" autocomplete="new-password" required minlength="15" data-testid="account-new2">
+    <p class="hint">At least 15 characters, at most 256 bytes. Length counts, not special characters: a few random words make a good password.</p>
+    <p><button type="submit" class="primary" data-testid="account-submit">Change password</button></p>
+  </form>
+  {{end}}
+</div>
+{{if .Body.TOTPLocal}}
+<div class="card" data-testid="account-totp-card">
+  <h2>Two-factor sign-in</h2>
+  <p data-testid="account-totp-status">{{if .Body.TOTPEnabled}}On. Recovery codes left: {{.Body.CodesLeft}}.{{else}}Off.{{end}}</p>
+  <p><a href="/account/totp" data-testid="account-totp-link">{{if .Body.TOTPEnabled}}Manage two-factor sign-in{{else}}Set up two-factor sign-in{{end}}</a></p>
+</div>
+{{end}}
+{{end}}

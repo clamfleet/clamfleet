@@ -6,6 +6,7 @@
     "web",
     "prod"
   ],
+  "interval_seconds": 300,
   "ts": "2026-11-12T10:30:45Z",
   "os": {
     "id": "debian",
@@ -15,7 +16,8 @@
     "up": true,
     "version": "1.4.3",
     "queue": 0,
-    "error": null
+    "error": null,
+    "virus_event": "none"
   },
   "sigs": {
     "daily": {
@@ -52,5 +54,6 @@
     "scanned": 120345,
     "infected": 0,
     "errors": 0
-  }
+  },
+  "replay": false
 }

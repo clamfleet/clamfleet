@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# SPDX-FileCopyrightText: The ClamFleet Authors
+#
+# Daily database backup. Ships DISABLED: enable it with
+# `systemctl enable --now clamfleet-server-backup.timer`.
+[Unit]
+Description=ClamFleet server database backup (daily)
+
+[Timer]
+OnCalendar=daily
+RandomizedDelaySec=1h
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -1,5 +1,6 @@
 {
   "schema": 1,
+  "id": "0123456789abcdef0123456789abcdef",
   "host": "app01",
   "ts": "2026-11-12T10:03:12Z",
   "path": "/srv/upload/file.zip",

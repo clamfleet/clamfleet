@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# SPDX-FileCopyrightText: The ClamFleet Authors
+#
 # One private name per line (host names, lab domains). capture-fixtures.sh
 # replaces each with mirror.example and aborts if one survives. Copy to
 # deploy/test/scrub-private.txt (gitignored). Names are matched as regular

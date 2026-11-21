@@ -1,0 +1,35 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# SPDX-FileCopyrightText: The ClamFleet Authors
+# Server config for the clamfleet-test container (Debian 13). Installed to
+# /etc/clamfleet/server.yaml by prepare-server.sh. Loopback only: nothing in
+# the test container listens on another address.
+listen: 127.0.0.1:8443
+tls:
+  cert: /etc/clamfleet/tls.crt
+  key: /etc/clamfleet/tls.key
+db_path: /var/lib/clamfleet-server/clamfleet.db
+# The snapshot's signatures are frozen and freshclam is disabled, so with the
+# default thresholds the host would start CRIT (daily_old_crit) and the clamd
+# transition the health e2e looks for would be invisible. The baseline with these
+# overrides is WARN (freshclam_inactive). eval_interval 2s lets STALE show in seconds.
+# require_virus_event: false because most scenarios run a clamd with no VirusEvent
+# line, which would add a second WARN reason (virusevent_missing) next to the
+# baseline; the detection scenarios (event_e2e_test.go) wire VirusEvent themselves.
+health:
+  require_virus_event: false
+  daily_warn_hours: 100000
+  daily_crit_hours: 200000
+  eval_interval: 2s
+# Alerting (M4). cooldown 0 because the cooldown is proven with an injected clock in the unit tests; the
+# container proves wiring and real delivery. The sink (hack/alertsink, started by the alert scenarios) listens
+# on 127.0.0.1 inside the container: a webhook on 9100 and plaintext SMTP on 2525 (tls: none is allowed because
+# the relay is loopback).
+alert:
+  cooldown: 0s
+  webhook:
+    allow_loopback: true
+smtp:
+  host: 127.0.0.1
+  port: 2525
+  tls: none
+  from: clamfleet@test.example

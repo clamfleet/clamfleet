@@ -3,9 +3,14 @@
 # ClamFleet agent configuration, Debian family defaults.
 # Copy to /etc/clamfleet/agent.yaml. Every key can also be set with an
 # environment variable CLAMFLEET_AGENT_<KEY> (nested keys joined by _, e.g.
-# CLAMFLEET_AGENT_SPOOL_MAX_MB); the environment wins over this file.
+# CLAMFLEET_AGENT_INTERVAL); the environment wins over this file. The spool keys are the exception:
+# set them in this file only (see below).
 server: https://clamfleet.example:8443
-token_file: /etc/clamfleet/token
+token_file: /etc/clamfleet/token   # read on every send: a rotated token needs no restart; keep it 0640 root:clamfleet
+# Only if the server requires client certificates (its tls.client_ca mTLS). Both or neither.
+# The bearer token is sent in any case.
+# tls: {client_cert: /etc/clamfleet/agent.crt, client_key: /etc/clamfleet/agent.key}
+# A private CA for the server certificate: set SSL_CERT_FILE=/etc/clamfleet/ca.pem in the unit's Environment=.
 interval: 5m
 tags: [prod]
 clamd_conf: /etc/clamav/clamd.conf
@@ -15,5 +20,13 @@ freshclam_log: /var/log/clamav/freshclam.log
 # NOT probed (probing could start a socket-activated clamd). Set it to "" ONLY if
 # clamd is not managed by systemd (started by hand or another supervisor).
 units: {clamd: clamav-daemon, freshclam: clamav-freshclam, clamonacc: clamav-clamonacc}
-spool: {dir: /var/lib/clamfleet/spool, max_mb: 50}
-scan: {paths: [/srv, /home], summary: /var/lib/clamfleet/last_scan.json}
+# spool: where detections and heartbeats wait for the server (see docs/detections.md). Set these keys HERE,
+# not in the environment: the event command, run by clamd's user with no environment of ours, reads this file.
+# The file must be readable by clamd's user (0644 is fine: it holds no secret).
+#   max_mb          1 to 10240: a hard cap on the real disk use of everything under dir
+#   max_event_days  30 to 3650: a spooled event older than this is deleted instead of sent
+spool: {dir: /var/lib/clamfleet/spool, max_mb: 50, max_event_days: 365}
+# scan: `clamfleet-agent scan` (the clamfleet-scan.timer, shipped disabled) scans these paths with clamdscan and
+# writes the summary the report carries. It never starts clamd. clamd reads the files as its own user, so a
+# private directory under /home shows up as errors. timeout (1m to 72h): the scan is stopped after this long.
+scan: {paths: [/srv, /home], summary: /var/lib/clamfleet/last_scan.json, timeout: 12h}

@@ -55,7 +55,7 @@ func strictDecode(t *testing.T, raw []byte, into any) {
 // additiveKeys are keys this implementation emits that the spec example lacks.
 // Each one is a documented, schema-1-compatible addition (servers ignore
 // unknown fields, spec 7.2); anything else missing from the spec is a bug.
-var additiveKeys = []string{".freshclam.source"}
+var additiveKeys = []string{".freshclam.source", ".interval_seconds"}
 
 func roundTrip(t *testing.T, file string, into any, additive ...string) {
 	t.Helper()
@@ -117,7 +117,7 @@ func TestZeroReportKeepsEveryKey(t *testing.T) {
 		t.Fatalf("last_scan = %#v, want null", v)
 	}
 	clamd := generic["clamd"].(map[string]any)
-	for _, k := range []string{"version", "queue", "error"} {
+	for _, k := range []string{"version", "queue", "error", "virus_event"} {
 		if v, ok := clamd[k]; !ok || v != nil {
 			t.Fatalf("clamd.%s = %#v (present=%v), want null", k, v, ok)
 		}
@@ -127,6 +127,9 @@ func TestZeroReportKeepsEveryKey(t *testing.T) {
 		if v, ok := sigs[k]; !ok || v != nil {
 			t.Fatalf("sigs.%s = %#v (present=%v), want null", k, v, ok)
 		}
+	}
+	if v, ok := generic["interval_seconds"]; !ok || v != nil {
+		t.Fatalf("interval_seconds = %#v (present=%v), want null", v, ok)
 	}
 	fc := generic["freshclam"].(map[string]any)
 	for _, k := range []string{"last_ok", "last_error", "last_error_msg", "source"} {
@@ -142,5 +145,26 @@ func TestUTCTruncatesAndNormalises(t *testing.T) {
 	want := time.Date(2026, 11, 12, 10, 0, 5, 0, time.UTC)
 	if !got.Equal(want) || got.Location() != time.UTC {
 		t.Fatalf("got %v want %v", got, want)
+	}
+}
+
+// replay is a bool that is always present (false, not missing), and an event
+// without an id carries null: both are additive fields an older server ignores.
+func TestAdditiveFieldsAlwaysPresent(t *testing.T) {
+	raw, _ := json.Marshal(Report{Tags: []string{}})
+	var rep map[string]any
+	if err := json.Unmarshal(raw, &rep); err != nil {
+		t.Fatal(err)
+	}
+	if v, ok := rep["replay"]; !ok || v != false {
+		t.Fatalf("replay = %#v (present=%v), want false", v, ok)
+	}
+	raw, _ = json.Marshal(Event{Schema: 1})
+	var ev map[string]any
+	if err := json.Unmarshal(raw, &ev); err != nil {
+		t.Fatal(err)
+	}
+	if v, ok := ev["id"]; !ok || v != nil {
+		t.Fatalf("id = %#v (present=%v), want null", v, ok)
 	}
 }

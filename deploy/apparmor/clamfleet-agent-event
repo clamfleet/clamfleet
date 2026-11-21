@@ -1,0 +1,69 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# SPDX-FileCopyrightText: The ClamFleet Authors
+#
+# AppArmor profile of `clamfleet-agent event`, the command clamd runs through
+# VirusEvent. Install as /etc/apparmor.d/clamfleet-agent-event and load it with
+# `apparmor_parser -r /etc/apparmor.d/clamfleet-agent-event`.
+#
+# Why it exists. Debian's clamd profile (usr.sbin.clamd) has no exec rule, so with
+# AppArmor enforcing (the Debian default) clamd cannot even start /bin/sh for
+# VirusEvent, and a stock install would never report a detection. Widening
+# clamd's own profile to run an arbitrary program would be the wrong fix, so the
+# event command gets a profile of its own and clamd's local include
+# (usr.sbin.clamd.local, next to this file) only allows the shell and a
+# transition into this profile.
+#
+# What the profile is for. `event` runs as clamd's user and must do exactly one
+# thing: write a file into spool/events. Everything else is denied by default
+# (AppArmor denies what no rule allows), notably:
+#   - /etc/clamfleet/token: the agent's credential, which clamd's user must never read;
+#   - spool/reports and spool/quarantine: the agent's own directories;
+#   - the network: there is no `network` rule, so the command cannot reach the server
+#     whatever the code does;
+#   - exec of anything.
+#
+# The profile has NO path attachment: it applies only through the explicit
+# transition in clamd's local include (`Px -> clamfleet-agent-event`), or
+# `aa-exec -p clamfleet-agent-event`. The agent service (`run`) is therefore not
+# confined by it.
+#
+# Paths are the ones of the packaging (docs/detections.md): the binary in /usr/bin,
+# the spool under /var/lib/clamfleet/spool. A different spool.dir needs the same
+# rules for it. The rule set was written and proven on Debian 13 with
+# `make e2e-apparmor`, which also checks every denial named above.
+
+#include <tunables/global>
+
+profile clamfleet-agent-event {
+  #include <abstractions/base>
+
+  # The binary itself (a static Go program).
+  /usr/bin/clamfleet-agent mr,
+
+  # Things the Go runtime and os.Hostname read at start: the huge page size, the host
+  # name, and the process's own cgroup and mount table (the runtime sizes itself to the
+  # container's CPU limit from them).
+  /sys/kernel/mm/transparent_hugepage/hpage_pmd_size r,
+  @{PROC}/sys/kernel/hostname r,
+  @{PROC}/@{pid}/cgroup r,
+  @{PROC}/@{pid}/mountinfo r,
+
+  # clamd's own log file, which clamd leaves open in the processes it starts. Without this
+  # rule AppArmor logs a DENIED "file_inherit" for it (and replaces the descriptor) on
+  # every detection. The command never writes to it.
+  /var/log/clamav/* a,
+
+  # The configuration (spool.dir, spool.max_mb). Not the token.
+  /etc/clamfleet/agent.yaml r,
+
+  # The spool directory entries, so the checks can Lstat spool/ and spool/events.
+  /var/lib/clamfleet/spool/ r,
+
+  # The accounting file and its lock, shared with `run`.
+  /var/lib/clamfleet/spool/usage rwk,
+
+  # The one place an event is written: create the temp file, write it, hard-link it
+  # to its final name, remove the temp name, and fsync the directory (opened read-only).
+  /var/lib/clamfleet/spool/events/ r,
+  /var/lib/clamfleet/spool/events/* rwl,
+}

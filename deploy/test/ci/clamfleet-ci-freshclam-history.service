@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# SPDX-FileCopyrightText: The ClamFleet Authors
+[Unit]
+Description=Replay the recorded freshclam run into the journal (CI image)
+After=systemd-journald.service
+Requires=systemd-journald.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/replay-freshclam-history.sh
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,117 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# SPDX-FileCopyrightText: The ClamFleet Authors
+#
+# nfpm configuration of the clamfleet-agent package (deb and rpm from this one file). Built by
+# `make packages`, which runs nfpm once per format (-p deb, -p rpm) with two variables:
+#   VERSION     the package version (semver; a pre-release such as 0.6.0-rc1 becomes 0.6.0~rc1 in a deb)
+#   NFPM_ARCH   amd64
+# The differences between the families are `packager:` entries and `overrides`: the clamd package and
+# group, the example configuration, the user and tmpfiles files, and the confinement (our AppArmor
+# profile on Debian, the SELinux module on the RHEL family). The release script (deploy/release/release.sh)
+# builds the packages with `make packages` from this file; the rpms are signed afterwards by
+# deploy/release/sign.sh, never by nfpm.
+#
+# The package never edits another package's files: clamd.conf (VirusEvent) and Debian's AppArmor
+# local include for clamd are the administrator's (the postinstall prints the lines to add).
+name: clamfleet-agent
+arch: ${NFPM_ARCH}
+platform: linux
+version: ${VERSION}
+section: admin
+priority: optional
+maintainer: The ClamFleet Authors <hi@madalin.me>
+description: |
+  ClamFleet agent: reports the health of ClamAV on this host to a ClamFleet server.
+  It reads clamd, freshclam and the signature databases, delivers detections that clamd's
+  VirusEvent spools, and can run scheduled scans. Starts only when a token is present.
+vendor: The ClamFleet Authors
+homepage: https://github.com/clamfleet/clamfleet
+license: AGPL-3.0-only
+depends:
+  - systemd
+overrides:
+  deb:
+    depends: [clamav-daemon, systemd]
+  rpm:
+    depends: [clamd, systemd]
+
+contents:
+  - src: bin/clamfleet-agent
+    dst: /usr/bin/clamfleet-agent
+    file_info: {mode: 0755, owner: root, group: root}
+  - dst: /etc/clamfleet
+    type: dir
+    file_info: {mode: 0755, owner: root, group: root}
+  # World-readable on purpose: `clamfleet-agent event` runs as clamd's user, reads this file with no
+  # fallback, and spools nothing if it cannot (milestone 5 decision 3). It holds no secret; the token is
+  # a separate file the administrator writes (root:clamfleet 0640) and this package does not ship.
+  - src: deploy/agent.yaml.example
+    dst: /etc/clamfleet/agent.yaml
+    packager: deb
+    type: config|noreplace
+    file_info: {mode: 0644, owner: root, group: root}
+  - src: deploy/agent.rhel9.yaml.example
+    dst: /etc/clamfleet/agent.yaml
+    packager: rpm
+    type: config|noreplace
+    file_info: {mode: 0644, owner: root, group: root}
+  - src: deploy/systemd/clamfleet-agent.service
+    dst: /usr/lib/systemd/system/clamfleet-agent.service
+    file_info: {mode: 0644, owner: root, group: root}
+  - src: deploy/systemd/clamfleet-scan.service
+    dst: /usr/lib/systemd/system/clamfleet-scan.service
+    file_info: {mode: 0644, owner: root, group: root}
+  - src: deploy/systemd/clamfleet-scan.timer
+    dst: /usr/lib/systemd/system/clamfleet-scan.timer
+    file_info: {mode: 0644, owner: root, group: root}
+  - src: deploy/systemd/sysusers/clamfleet-agent.deb.conf
+    dst: /usr/lib/sysusers.d/clamfleet-agent.conf
+    packager: deb
+    file_info: {mode: 0644, owner: root, group: root}
+  - src: deploy/systemd/sysusers/clamfleet-agent.rpm.conf
+    dst: /usr/lib/sysusers.d/clamfleet-agent.conf
+    packager: rpm
+    file_info: {mode: 0644, owner: root, group: root}
+  - src: deploy/systemd/tmpfiles/clamfleet-agent.deb.conf
+    dst: /usr/lib/tmpfiles.d/clamfleet-agent.conf
+    packager: deb
+    file_info: {mode: 0644, owner: root, group: root}
+  - src: deploy/systemd/tmpfiles/clamfleet-agent.rpm.conf
+    dst: /usr/lib/tmpfiles.d/clamfleet-agent.conf
+    packager: rpm
+    file_info: {mode: 0644, owner: root, group: root}
+  - src: README.md
+    dst: /usr/share/doc/clamfleet-agent/README.md
+    file_info: {mode: 0644, owner: root, group: root}
+  # The example configurations and the AppArmor include are not documentation: the install instructions
+  # and the tests read them. They live outside /usr/share/doc because minimized Ubuntu images (minimal,
+  # cloud, LXD) ship dpkg's /etc/dpkg/dpkg.cfg.d/excludes, which makes dpkg skip /usr/share/doc silently.
+  # Only README and LICENSE stay there; deploy/test/packages_test.sh fails on anything else.
+  - src: deploy/agent.yaml.example
+    dst: /usr/share/clamfleet-agent/agent.yaml.example
+    file_info: {mode: 0644, owner: root, group: root}
+  - src: deploy/agent.rhel9.yaml.example
+    dst: /usr/share/clamfleet-agent/agent.rhel9.yaml.example
+    file_info: {mode: 0644, owner: root, group: root}
+  - src: deploy/apparmor/usr.sbin.clamd.local
+    dst: /usr/share/clamfleet-agent/usr.sbin.clamd.local
+    file_info: {mode: 0644, owner: root, group: root}
+  - src: LICENSE
+    dst: /usr/share/doc/clamfleet-agent/LICENSE
+    file_info: {mode: 0644, owner: root, group: root}
+  # The confinement of the event command, one per family: our own AppArmor profile (a conffile, so local
+  # edits survive) on Debian, the SELinux CIL module on the RHEL family.
+  - src: deploy/apparmor/clamfleet-agent-event
+    dst: /etc/apparmor.d/clamfleet-agent-event
+    packager: deb
+    type: config
+    file_info: {mode: 0644, owner: root, group: root}
+  - src: deploy/selinux/clamfleet.cil
+    dst: /usr/share/selinux/packages/clamfleet/clamfleet.cil
+    packager: rpm
+    file_info: {mode: 0644, owner: root, group: root}
+
+scripts:
+  postinstall: deploy/packaging/scripts/agent-postinstall.sh
+  preremove: deploy/packaging/scripts/agent-preremove.sh
+  postremove: deploy/packaging/scripts/agent-postremove.sh

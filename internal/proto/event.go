@@ -12,8 +12,19 @@ package proto
 import "time"
 
 // Event is a single detection, sent to POST /v1/event (spec 7.4).
+//
+// Path convention of the agent (the type does not change): a backslash is sent
+// as two backslashes and each byte that is not part of valid UTF-8 as \xNN, so
+// two distinct file names can never become the same string. A client that
+// sends raw backslashes is shown as it sent them.
 type Event struct {
-	Schema    int       `json:"schema"`
+	Schema int `json:"schema"`
+	// ID is the agent's idempotency key: 32 lowercase hex characters, or null
+	// for a client that has none. A retry carries the same ID, so the server can
+	// tell a retry from a second, genuine detection with the same host, second,
+	// path and signature. Added after the spec example of section 7.4 (decision
+	// 16 of milestone 5); compatible, so Schema stays 1.
+	ID        *string   `json:"id"`
 	Host      string    `json:"host"`
 	TS        time.Time `json:"ts"`
 	Path      string    `json:"path"`

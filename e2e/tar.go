@@ -22,3 +22,18 @@ func writeTar(w io.Writer, name string, data []byte) error {
 	}
 	return tw.Close()
 }
+
+// writeTarFiles writes several regular files (mode 0644) into one tar stream, for
+// pushing packages into the container or VM.
+func writeTarFiles(w io.Writer, files map[string][]byte) error {
+	tw := tar.NewWriter(w)
+	for name, data := range files {
+		if err := tw.WriteHeader(&tar.Header{Name: name, Mode: 0o644, Size: int64(len(data))}); err != nil {
+			return err
+		}
+		if _, err := tw.Write(data); err != nil {
+			return err
+		}
+	}
+	return tw.Close()
+}

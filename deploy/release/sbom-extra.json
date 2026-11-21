@@ -1,0 +1,17 @@
+{
+  "_license": "SPDX-License-Identifier: AGPL-3.0-only",
+  "_copyright": "SPDX-FileCopyrightText: The ClamFleet Authors",
+  "_about": "release.sh reads only .component and adds it to the SERVER SBOM (only the server embeds internal/web). cyclonedx-gomod sees Go modules, and htmx is a vendored JavaScript file it cannot see. Keep version and hash in step with internal/web/static/README.md; release.sh refuses when the hash differs from the vendored file's.",
+  "component": {
+    "type": "library",
+    "bom-ref": "pkg:npm/htmx.org@2.0.11",
+    "name": "htmx.org",
+    "version": "2.0.11",
+    "description": "Vendored as internal/web/static/htmx-2.0.11.min.js, unmodified dist/htmx.min.js of the npm package",
+    "purl": "pkg:npm/htmx.org@2.0.11",
+    "hashes": [
+      { "alg": "SHA-256", "content": "d6fdc75f204e6bdefa99b69bf1e6d4ac69b8a364f77929f45c13476b4000f717" }
+    ],
+    "licenses": [ { "license": { "id": "0BSD" } } ]
+  }
+}

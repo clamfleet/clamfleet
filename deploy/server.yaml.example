@@ -1,0 +1,108 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# SPDX-FileCopyrightText: The ClamFleet Authors
+#
+# /etc/clamfleet/server.yaml. Every key can also be set by an environment
+# variable: CLAMFLEET_SERVER_ + the key path in capitals, e.g.
+# CLAMFLEET_SERVER_TLS_CERT. The file is read strictly: an unknown key is an error.
+
+# Intended deployment: plaintext on loopback behind a reverse proxy that
+# terminates TLS. Plaintext is refused on any non-loopback address.
+listen: 127.0.0.1:8443
+tls:
+  cert: ""        # set cert and key together for direct TLS (then listen may be ":8443"); the default is plaintext
+  key: ""
+  client_ca: ""   # optional mTLS: require agent client certificates signed by this CA
+                  # (needs direct TLS; the agent token is still required)
+# Reverse proxies (IPs or CIDRs) whose X-Forwarded-For is believed for the logged client IP.
+# The proxy must set/append the header (nginx: proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;).
+# List the proxies' own addresses, not networks your clients live in.
+# Empty: the logged address is the TCP peer. Logging only, never authentication.
+trusted_proxies: []
+db_path: /var/lib/clamfleet-server/clamfleet.db   # local disk only: SQLite WAL does not work on network filesystems
+# The key that protects secrets stored in the database (TOTP secrets and webhook alert targets: their URL and signing key).
+# Create it once, as root: `clamfleet-server key generate`, then `chgrp clamfleet-server` it and chmod 0640.
+# The server refuses a file that others can read or the group can write. Keep it OUT of the state
+# directory and back it up separately from database backups: a backup holding both protects nothing.
+# Absent is fine until someone uses TOTP or adds a webhook target; present but invalid stops the server from starting.
+secret_key_file: /etc/clamfleet/server-secret.key
+
+# Health rules (spec 9) and how often they are re-evaluated. The values shown are the defaults.
+# A host is STALE after stale_factor x its own report interval (the agent sends it; hosts whose agent
+# does not use default_interval). Environment: CLAMFLEET_SERVER_HEALTH_<KEY>, e.g. CLAMFLEET_SERVER_HEALTH_STALE_FACTOR.
+health:
+  stale_factor: 3          # at least 2
+  default_interval: 5m     # 10s to 24h; for agents that do not report their interval
+  daily_warn_hours: 24     # WARN when the daily signature database is older than this
+  daily_crit_hours: 72     # CRIT; must be greater than daily_warn_hours
+  behind_warn: 2           # WARN when the daily version trails the fleet's newest by more than this
+  scan_warn_hours: 48      # WARN when the last scan finished longer ago; 0 switches the rule off
+  require_virus_event: true  # WARN (virusevent_missing) when clamd.conf has no VirusEvent line
+  eval_interval: 60s       # 1s to 60s: how often silent (STALE) hosts are noticed
+
+# Web console sign-in. The values shown are the defaults. Users are managed with
+# `clamfleet-server user ...` (see docs/web.md). Environment: CLAMFLEET_SERVER_AUTH_<KEY>,
+# e.g. CLAMFLEET_SERVER_AUTH_LOCAL_ENABLED.
+auth:
+  local:
+    enabled: true          # email + password accounts; later providers get their own subtree (auth.ldap, auth.oidc)
+    totp_required: false   # true: every local user must set up an authenticator app (TOTP) before using the console.
+                           # Needs the top-level secret_key_file (the server refuses to start without it). Switch it on BEFORE
+                           # handing out one-time passwords: until a user has enrolled, their password alone can enrol.
+  session_max_age: 12h     # absolute lifetime: a session ends this long after sign-in, however active (5m..720h)
+  session_idle: 1h         # ends after this long without any request (at least 1m); an open fleet tab counts as active
+  cookie_secure: true      # false ONLY for plain-HTTP development (SSH tunnel): drops Secure and the __Host- prefix, logs a warning
+
+# Alerting (docs/alerts.md). The values shown are the defaults. Environment:
+# CLAMFLEET_SERVER_ALERT_<KEY>, e.g. CLAMFLEET_SERVER_ALERT_COOLDOWN.
+# How the console is reached by people, for the links in alerts. Empty: alert links are null.
+public_url: ""            # e.g. https://clamfleet.example (absolute http(s) URL, no query or fragment)
+alert:
+  cooldown: 15m           # at most one state alert per host per target per window; changes inside it are
+                          # held and summarised at its end (a recovery is delayed by at most this, never lost). 0 = no holds
+  webhook:
+    timeout: 10s          # 1s to 30s per attempt
+    allow_private: true   # RFC 1918, 100.64.0.0/10 and fc00::/7 (and plaintext http:// to them). Set false on a cloud host
+    allow_loopback: false # 127.0.0.0/8, ::1, localhost: for a receiver on this machine
+    deny_networks: []     # extra CIDRs that are never allowed, e.g. ["10.9.0.0/16"]
+    nat64_prefixes: []    # your own NAT64 translator prefixes, e.g. ["64:ff9b:1::/96"] (IPv6, /32 /40 /48 /56 /64 or /96).
+                          # An address under one is judged by the IPv4 it carries; 64:ff9b::/96 needs no entry; an unlisted
+                          # local-use 64:ff9b:1::/48 address is blocked, because its destination cannot be known
+    ca_file: ""           # extra CA bundle (PEM) added to the system roots, for a receiver with a private CA
+                          # Link-local, cloud metadata, multicast and unspecified addresses are always blocked.
+# Retention, in days, counted from ARRIVAL on the server clock (not the agent's detection time: a
+# spooled event can be old when it arrives). A file path is personal data. One daily pass prunes every
+# table in batches. A row whose alert is still unfinished is kept until that is over.
+# Environment: CLAMFLEET_SERVER_RETENTION_REPORTS_DAYS and so on.
+retention:
+  reports_days: 30        # 14 to 90: heartbeat reports
+  events_days: 365        # 7 to 3650: detections
+  state_changes_days: 365 # 30 to 3650: health state history
+  alert_log_days: 90      # 30 to 3650: alert attempts, finished deliveries, closed detection windows
+  audit_days: 365         # 90 to 3650: the audit log (emails and client IPs)
+# Backups: `sudo -u clamfleet-server clamfleet-server backup` writes a consistent copy of the database here
+# (the key file is NOT in it: back that up separately). A backup holds every row, also paths older than the
+# retention, so keep it as private as the database. Environment: CLAMFLEET_SERVER_BACKUP_DIR and _KEEP.
+backup:
+  dir: /var/lib/clamfleet-server/backups   # a real directory, mode 0700, owned by the server user (created if missing)
+  keep: 7                                  # 0 to 365 newest backups kept by `backup`; 0 keeps them all
+# Prometheus metrics at GET /metrics (host names, states and counts; never a path or a signature).
+# Off by default. When on, a bearer token is required, read from a file that follows the key-file rule
+# (root:clamfleet-server 0640). Generate one: openssl rand -base64 48 > FILE. Prometheus: authorization.credentials_file.
+# Environment: CLAMFLEET_SERVER_METRICS_ENABLED and CLAMFLEET_SERVER_METRICS_TOKEN_FILE.
+metrics:
+  enabled: false
+  token_file: ""          # e.g. /etc/clamfleet/metrics-token (at least 32 bytes)
+# Email alerts. Empty host = email is off (creating an email target is refused).
+smtp:
+  host: ""                # e.g. smtp.example
+  port: 587
+  tls: starttls           # starttls (default, mandatory once chosen: no fallback to plaintext), tls (implicit TLS, port 465),
+                          # or none: ONLY for a relay on a loopback or private address, and never with a username
+                          # unless the relay is loopback
+  from: ""                # required when host is set, e.g. clamfleet@example.org
+  username: ""
+  password_file: ""       # absolute path, required with username; mode 0640 root:clamfleet-server or 0600. The password is
+                          # never read from this file or the environment. Works with systemd LoadCredential= paths
+  helo: ""                # name announced in EHLO; empty = the host of public_url, else the machine's host name
+  ca_file: ""             # extra CA bundle (PEM) for the relay
+  timeout: 30s            # 5s to 120s for a whole mail session

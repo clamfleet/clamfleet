@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# SPDX-FileCopyrightText: The ClamFleet Authors
+#
+# Daily scan. Ships DISABLED: enable it with `systemctl enable --now clamfleet-scan.timer`
+# after setting scan.paths in /etc/clamfleet/agent.yaml.
+[Unit]
+Description=ClamFleet scheduled scan (daily)
+
+[Timer]
+OnCalendar=daily
+RandomizedDelaySec=2h
+Persistent=true
+
+[Install]
+WantedBy=timers.target

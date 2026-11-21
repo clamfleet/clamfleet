@@ -1,0 +1,37 @@
+{{/* SPDX-License-Identifier: AGPL-3.0-only */}}
+{{/* SPDX-FileCopyrightText: The ClamFleet Authors */}}
+{{/*
+  fleet_rows.html: the live region of the fleet page (state counts and the
+  table). Served inside the page and alone on GET /fleet/rows for the htmx poll.
+  Every value here that came from an agent (tags, versions, reason text) is
+  escaped by html/template; none is ever marked safe.
+*/}}
+{{define "fleet_rows"}}
+<div class="counts" data-testid="fleet-counts">
+  {{range .Counts}}<span class="badge {{.State}}" data-testid="count-{{.State}}">{{.State}} {{.N}}</span>{{end}}
+  <a href="/events" class="badge {{if .OpenTotal}}CRIT{{else}}pending{{end}}" data-testid="fleet-count-open">{{.OpenTotal}} open detections</a>
+</div>
+{{if eq .Total 0}}
+<div class="card" data-testid="fleet-empty">No hosts are registered yet. An admin can add one on the Hosts page.</div>
+{{else if not .Rows}}
+<div class="card" data-testid="fleet-no-match">No host matches the filter.</div>
+{{else}}
+<table data-testid="fleet-table">
+  <thead><tr><th>Host</th><th>State</th><th>Reasons</th><th>Tags</th><th>Last seen</th><th>clamd</th><th>Daily</th><th>Detections</th></tr></thead>
+  <tbody>
+  {{range .Rows}}
+  <tr data-testid="fleet-row-{{.Name}}" data-state="{{.State}}">
+    <td><a href="/hosts/{{.Name}}" data-testid="fleet-link-{{.Name}}">{{.Name}}</a></td>
+    <td><span class="badge {{.State}}" data-testid="fleet-state-{{.Name}}">{{.State}}</span></td>
+    <td data-testid="fleet-reasons-{{.Name}}">{{if .Reasons}}<ul class="reasons">{{range .Reasons}}<li>{{.Msg}}</li>{{end}}</ul>{{end}}</td>
+    <td>{{range .Tags}}<span class="tag">{{.}}</span>{{end}}</td>
+    <td class="num">{{if .LastSeenAgo}}<span title="{{.LastSeenAbs}}">{{.LastSeenAgo}}</span>{{else}}never{{end}}</td>
+    <td class="num">{{.Clamd}}</td>
+    <td class="num">{{if .DailyVersion}}{{.DailyVersion}} <span class="hint">({{.DailyAge}})</span>{{end}}</td>
+    <td class="num" data-testid="fleet-open-{{.Name}}">{{if .OpenEvents}}<a href="/events?host={{.Name}}">{{.OpenEvents}}</a>{{else}}0{{end}}</td>
+  </tr>
+  {{end}}
+  </tbody>
+</table>
+{{end}}
+{{end}}

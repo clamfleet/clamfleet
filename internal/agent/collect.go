@@ -5,7 +5,7 @@
 //
 // Responsibilities: the Collector, which runs every source in a fixed order,
 // turns each failure into a Problem plus a null or degraded field (only a
-// hostname failure aborts), and enforces decision Q4: the clamd socket is
+// hostname failure aborts), and enforces M1 Q4: the clamd socket is
 // probed only when that cannot start clamd.
 // Dependencies: the other collectors in this package, and the proto package.
 // All outside effects (clock, zone, exec, hostname) are injected.
@@ -29,7 +29,7 @@ const collectDeadline = 20 * time.Second
 
 // Problem is a non-fatal failure of one data source. The report still goes
 // out with that part null or degraded; problems are logged, not sent
-// (decision Q9: the payload has no "problems" field).
+// (M1 Q9: the payload has no "problems" field).
 type Problem struct {
 	Source string
 	Err    error
@@ -66,12 +66,17 @@ func (c *Collector) Collect(ctx context.Context) (proto.Report, []Problem, error
 		return proto.Report{}, nil, fmt.Errorf("hostname: %w", err)
 	}
 	tags := append([]string{}, c.Cfg.Tags...)
+	// Whole seconds; config validation guarantees a positive interval, and a
+	// sub-second one reports 0, which the server treats as "unknown" and
+	// answers with its default.
+	interval := int(c.Cfg.Interval / time.Second)
 	r := proto.Report{
-		Schema:       proto.SchemaVersion,
-		Host:         host,
-		AgentVersion: c.Version,
-		Tags:         tags,
-		TS:           proto.UTC(c.Now()),
+		Schema:          proto.SchemaVersion,
+		Host:            host,
+		AgentVersion:    c.Version,
+		Tags:            tags,
+		IntervalSeconds: &interval,
+		TS:              proto.UTC(c.Now()),
 	}
 	var problems []Problem
 	add := func(p ...Problem) { problems = append(problems, p...) }
@@ -88,6 +93,7 @@ func (c *Collector) Collect(ctx context.Context) (proto.Report, []Problem, error
 	add(svp...)
 
 	r.Clamd = c.collectClamdGuarded(ctx, r.Services.Clamd, &problems)
+	r.Clamd.VirusEvent = c.collectVirusEvent()
 
 	var sp []Problem
 	r.Sigs, sp = collectSigs(c.Cfg.DBDir)
@@ -107,7 +113,7 @@ func (c *Collector) Collect(ctx context.Context) (proto.Report, []Problem, error
 
 // collectClamdGuarded probes the clamd socket only when that cannot start clamd.
 //
-// Rule (decision Q4): the agent never starts clamd. On Debian, and wherever
+// Rule (M1 Q4): the agent never starts clamd. On Debian, and wherever
 // clamd is socket-activated, connecting to the socket of a stopped clamd makes
 // systemd start it, which would hide the very outage the report exists to
 // show and change the host. So the socket is touched only when the clamd unit
@@ -150,6 +156,21 @@ func (c *Collector) collectClamdGuarded(ctx context.Context, unitState string, p
 		*problems = append(*problems, Problem{"clamd", fmt.Errorf("%s", *res.Error)})
 	}
 	return res
+}
+
+// collectVirusEvent reports whether clamd.conf wires up `clamfleet-agent event`.
+// Unlike the socket probe it only reads a file, so it runs whatever the clamd
+// unit state is. null when the file cannot be read: an unknown is not "none",
+// so an unreadable file never raises the virusevent_missing warning.
+func (c *Collector) collectVirusEvent() *string {
+	conf, err := readFileLimited(c.Cfg.ClamdConf)
+	if err != nil {
+		// collectClamdGuarded already reports an unreadable clamd.conf when it
+		// got that far; a second problem line for the same file would be noise.
+		return nil
+	}
+	v := ParseVirusEvent(conf)
+	return &v
 }
 
 // maxConfBytes caps clamd.conf reads; real files are a few KB.

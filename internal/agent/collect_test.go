@@ -108,6 +108,20 @@ func TestCollectGolden(t *testing.T) {
 	}
 }
 
+// The server judges STALE per agent from this number, so it must follow the
+// configured interval, not a constant.
+func TestCollectReportsConfiguredInterval(t *testing.T) {
+	c, _ := fullTree(t, healthyUnits)
+	c.Cfg.Interval = 90 * time.Second
+	r, _, err := c.Collect(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.IntervalSeconds == nil || *r.IntervalSeconds != 90 {
+		t.Fatalf("interval_seconds = %v, want 90", r.IntervalSeconds)
+	}
+}
+
 func TestCollectEverythingMissingStillProducesAReport(t *testing.T) {
 	cfg := DefaultConfig()
 	root := t.TempDir()
@@ -158,7 +172,7 @@ func TestCollectHostnameFailureIsFatal(t *testing.T) {
 	}
 }
 
-// Decision Q4: the agent never starts clamd. On a socket-activated clamd, a
+// M1 Q4: the agent never starts clamd. On a socket-activated clamd, a
 // connection to the socket of a stopped service would start it.
 func TestClamdSocketIsNeverTouchedUnlessUnitIsUsable(t *testing.T) {
 	cases := []struct {

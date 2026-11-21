@@ -1,0 +1,84 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# SPDX-FileCopyrightText: The ClamFleet Authors
+#
+# The bug form. It asks for the facts a report is useless without (versions, the component), and makes
+# the reporter remove what must not be public: detection paths are personal data, and tokens and
+# host names identify the reporter's fleet. A security problem does not belong here (config.yml
+# links to the private route).
+name: Bug report
+description: Something does not work as documented
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. **A security vulnerability does not go here**: use "Report a vulnerability" in the Security tab (see SECURITY.md).
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      options:
+        - Agent (clamfleet-agent)
+        - Server (clamfleet-server)
+        - Web console
+        - Alerts (email or webhook)
+        - Packages (.deb or .rpm)
+        - Documentation
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: ClamFleet version
+      description: Output of `clamfleet-agent version` or `clamfleet-server version`.
+    validations:
+      required: true
+  - type: input
+    id: distribution
+    attributes:
+      label: Distribution
+      description: For example Debian 13, AlmaLinux 9. The first lines of `/etc/os-release` are enough.
+    validations:
+      required: true
+  - type: input
+    id: clamd
+    attributes:
+      label: ClamAV version
+      description: Output of `clamd --version`.
+    validations:
+      required: false
+  - type: textarea
+    id: happened
+    attributes:
+      label: What happened
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: The smallest set of steps you know. A configuration with the secrets removed helps.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: The agent and the server log JSON to the journal (`journalctl -u clamfleet-agent`). Paste only the lines that matter.
+      render: text
+    validations:
+      required: false
+  - type: checkboxes
+    id: redacted
+    attributes:
+      label: Before you submit
+      options:
+        - label: I removed detection file paths, tokens, host names and email addresses from everything above.
+          required: true

@@ -1,0 +1,28 @@
+{{/* SPDX-License-Identifier: AGPL-3.0-only */}}
+{{/* SPDX-FileCopyrightText: The ClamFleet Authors */}}
+{{/*
+  event_row.html: one detection as a table row. Data: web.eventRowView. Used by the
+  events page, the host page and as the htmx answer to an acknowledgement (the row
+  swaps itself, outerHTML, without a page load).
+
+  The path and the signature are text from the monitored host. They go through
+  displayPath/displaySignature, which turn every invisible or direction-changing
+  character into a visible .esc element, and html/template escapes the rest.
+  Nothing here is ever marked safe.
+*/}}
+{{define "segs"}}{{range .}}{{if .Esc}}<span class="esc" title="{{.Title}}">{{.Text}}</span>{{else}}{{.Text}}{{end}}{{end}}{{end}}
+{{define "event_row"}}<tr id="event-row-{{.ID}}" data-testid="event-row-{{.ID}}" data-ack="{{if .Acked}}true{{else}}false{{end}}">
+  <td class="num"><span title="{{.DetectedAbs}}">{{.Detected}}</span>{{if .LateText}}<br><span class="hint" data-testid="event-late-{{.ID}}">{{.LateText}}</span>{{end}}</td>
+  <td><a href="/hosts/{{.Host}}">{{.Host}}</a></td>
+  <td data-testid="event-sig-{{.ID}}">{{template "segs" .Signature}}</td>
+  <td class="path" data-testid="event-path-{{.ID}}">{{if .Stream}}<span class="hint">stream (no file path)</span>{{else}}{{template "segs" .Path}}{{if .Truncated}} <span class="hint">(truncated)</span>{{end}}{{end}}</td>
+  <td class="num">{{if gt .Occurrences 1}}<span data-testid="event-occurrences-{{.ID}}">&times;{{.Occurrences}}</span>{{end}}</td>
+  <td>{{.Source}}</td>
+  <td data-testid="event-status-{{.ID}}">{{if .Acked}}<span data-testid="event-ackby-{{.ID}}">Acknowledged by {{.AckBy}}</span> <span class="hint" title="{{.AckAt}}">{{.AckAt}}</span>{{else}}Open{{end}}</td>
+  {{if .IsAdmin}}<td>{{if not .Acked}}
+    <form method="post" action="/events/{{.ID}}/ack" hx-post="/events/{{.ID}}/ack" hx-target="#event-row-{{.ID}}" hx-swap="outerHTML">
+      <input type="hidden" name="csrf_token" value="{{.CSRF}}">
+      <input type="hidden" name="return" value="{{.Return}}">
+      <button type="submit" data-testid="event-ack-{{.ID}}">Acknowledge</button>
+    </form>{{end}}</td>{{end}}
+</tr>{{end}}

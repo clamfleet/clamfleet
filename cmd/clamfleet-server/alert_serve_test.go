@@ -1,0 +1,360 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-FileCopyrightText: The ClamFleet Authors
+
+// Tests of what `serve` does with the alerting configuration and secrets, with
+// the real binaries: refusals at start, start-up with an unreadable webhook
+// secret, and the dispatcher actually running inside serve (a webhook arrives,
+// signed, after the real agent reports a non-OK state).
+package main
+
+import (
+	"context"
+	ctls "crypto/tls"
+	"crypto/x509"
+	"encoding/base64"
+	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/cookiejar"
+	"net/http/httptest"
+	"net/url"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/clamfleet/clamfleet/internal/alert"
+	"github.com/clamfleet/clamfleet/internal/proto"
+	"github.com/clamfleet/clamfleet/internal/secrets"
+	"github.com/clamfleet/clamfleet/internal/store"
+	"github.com/clamfleet/clamfleet/internal/store/sqlite"
+	"github.com/clamfleet/clamfleet/internal/testtls"
+	"github.com/clamfleet/clamfleet/internal/webauth"
+)
+
+func TestServeRefusesBadAlertConfiguration(t *testing.T) {
+	pw := func(mode os.FileMode) string {
+		p := filepath.Join(t.TempDir(), "smtp.pass")
+		if err := os.WriteFile(p, []byte("hunter2\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(p, mode); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	smtp := func(extra ...string) []string {
+		return append([]string{"CLAMFLEET_SERVER_SMTP_HOST=relay.example", "CLAMFLEET_SERVER_SMTP_FROM=cf@example.org"}, extra...)
+	}
+	cases := []struct {
+		name string
+		env  []string
+		want string
+	}{
+		{"tls none to a public literal", smtp("CLAMFLEET_SERVER_SMTP_HOST=203.0.113.5", "CLAMFLEET_SERVER_SMTP_TLS=none"), "public"},
+		{"tls none with credentials to a private relay", smtp("CLAMFLEET_SERVER_SMTP_HOST=10.0.0.25", "CLAMFLEET_SERVER_SMTP_TLS=none",
+			"CLAMFLEET_SERVER_SMTP_USERNAME=u", "CLAMFLEET_SERVER_SMTP_PASSWORD_FILE="+pw(0o600)), "clear"},
+		{"password file readable by others", smtp("CLAMFLEET_SERVER_SMTP_USERNAME=u", "CLAMFLEET_SERVER_SMTP_PASSWORD_FILE="+pw(0o644)), "mode 0644"},
+		{"password file missing", smtp("CLAMFLEET_SERVER_SMTP_USERNAME=u", "CLAMFLEET_SERVER_SMTP_PASSWORD_FILE=/nonexistent/smtp.pass"), "smtp.password_file"},
+		{"invalid public_url", []string{"CLAMFLEET_SERVER_PUBLIC_URL=clamfleet.example"}, "public_url"},
+		{"invalid deny_networks entry", []string{"CLAMFLEET_SERVER_ALERT_WEBHOOK_DENY_NETWORKS=10.0.0.0/99"}, "deny_networks"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			db, _ := newDB(t)
+			r := serveRefuses(t, db, c.env...)
+			if r.code != 1 || !strings.Contains(r.stderr, c.want) {
+				t.Fatalf("%+v", r)
+			}
+			if strings.Contains(r.stderr, "hunter2") {
+				t.Fatalf("the password reached the log:\n%s", r.stderr)
+			}
+		})
+	}
+}
+
+// seedWebhookTarget creates a webhook target whose secret is sealed with ring
+// and returns the signing key (whsec_...).
+func seedWebhookTarget(t *testing.T, db, name, hookURL string, ring *secrets.Keyring, edit func(*store.NewAlertTarget)) string {
+	t.Helper()
+	ctx := context.Background()
+	st, err := sqlite.Open(ctx, db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	key, err := alert.NewSigningKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	nt := store.NewAlertTarget{Name: name, Type: store.TargetTypeWebhook, Config: []byte(`{"url_display":"x"}`), MinSeverity: "WARN",
+		SendStateChanges: true, SendDetections: true, Enabled: true}
+	if edit != nil {
+		edit(&nt)
+	}
+	_, err = st.CreateAlertTarget(ctx, nt, func(id int64) ([]byte, error) {
+		plain, _ := alert.WebhookSecret{URL: hookURL, SigningKey: key}.Marshal()
+		return ring.Seal(secrets.PurposeAlertTarget, plain, uint64(id))
+	}, time.Now(), testAudit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return key
+}
+
+// M4 decision 10: an alert-target secret the key cannot open does NOT stop the
+// server (email and the other targets keep working); it logs the count and the fix.
+func TestServeStartsWithAnUnopenableWebhookSecret(t *testing.T) {
+	tlsb, err := testtls.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	db, _ := newDB(t)
+	sealedWith := loadRing(t, writeKeyFile(t, 0o600, newKey(t)))
+	seedWebhookTarget(t, db, "ops", "https://hooks.example/T/TOKEN-MARKER", sealedWith, nil)
+	other := writeKeyFile(t, 0o600, newKey(t))
+	s := startServe(t, tlsb, db, "CLAMFLEET_SERVER_SECRET_KEY_FILE="+other)
+	out := s.stderr.String()
+	if !strings.Contains(out, "webhook alert targets cannot be opened") || !strings.Contains(out, `"unreadable":1`) {
+		t.Fatalf("no start-up error naming the count:\n%s", out)
+	}
+	if strings.Contains(out, "TOKEN-MARKER") {
+		t.Fatal("the webhook URL reached the log")
+	}
+	// No key file at all: starts too.
+	db2, _ := newDB(t)
+	seedWebhookTarget(t, db2, "ops", "https://hooks.example/T", sealedWith, nil)
+	s2 := startServe(t, tlsb, db2)
+	if !strings.Contains(s2.stderr.String(), `"unreadable":1`) {
+		t.Fatalf("no key file:\n%s", s2.stderr.String())
+	}
+}
+
+type hookHit struct {
+	header http.Header
+	body   string
+}
+
+// Mutation 43: unwire the dispatcher from serve. With a webhook target and the
+// real agent reporting a down clamd, the receiver gets one signed alert within
+// 10 s (the real 5 s ticker).
+func TestServeDeliversAnAlertWhenTheAgentReportsAProblem(t *testing.T) {
+	var mu sync.Mutex
+	var hits []hookHit
+	rcv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		hits = append(hits, hookHit{r.Header.Clone(), string(b)})
+		mu.Unlock()
+		w.WriteHeader(204)
+	}))
+	defer rcv.Close()
+
+	tlsb, err := testtls.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	db, _ := newDB(t)
+	keyPath := writeKeyFile(t, 0o600, newKey(t))
+	signing := seedWebhookTarget(t, db, "ops", rcv.URL+"/hook/TOKEN-MARKER", loadRing(t, keyPath), nil)
+	srv := startServe(t, tlsb, db, "CLAMFLEET_SERVER_SECRET_KEY_FILE="+keyPath,
+		"CLAMFLEET_SERVER_ALERT_WEBHOOK_ALLOW_LOOPBACK=true", "CLAMFLEET_SERVER_PUBLIC_URL=https://cf.example")
+	reg := runServer(t, srv.env, "host", "add", "web01")
+	if reg.code != 0 {
+		t.Fatal(reg)
+	}
+	ag := newAgent(t, srv.addr, tlsb.CA, "")
+	ag.token(strings.TrimSpace(reg.stdout))
+	if res := ag.runOnce(); res.code != 0 {
+		t.Fatalf("agent: %+v", res)
+	}
+
+	deadline := time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) {
+		mu.Lock()
+		n := len(hits)
+		mu.Unlock()
+		if n > 0 {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(hits) != 1 {
+		t.Fatalf("%d webhook requests, want exactly 1\n%s", len(hits), srv.stderr.String())
+	}
+	var p alert.StateChangePayload
+	if err := json.Unmarshal([]byte(hits[0].body), &p); err != nil || p.Kind != "state_change" || p.Host != "web01" || p.From != nil || p.URL == nil || *p.URL != "https://cf.example/hosts/web01" {
+		t.Fatalf("%+v %v", p, err)
+	}
+	if p.To != "CRIT" && p.To != "WARN" {
+		t.Fatalf("to %s", p.To)
+	}
+	key, _ := base64.StdEncoding.DecodeString(strings.TrimPrefix(signing, "whsec_"))
+	ts, _ := strconv.ParseInt(hits[0].header.Get("webhook-timestamp"), 10, 64)
+	if !alert.VerifySignature(key, hits[0].header.Get("webhook-id"), ts, []byte(hits[0].body), hits[0].header.Get("webhook-signature")) {
+		t.Fatalf("the signature does not verify: %v", hits[0].header)
+	}
+	if strings.Contains(srv.stderr.String(), "TOKEN-MARKER") {
+		t.Fatal("the URL path reached the server log")
+	}
+}
+
+// The console must get the alert settings from `serve` (a Deps field that main
+// forgets to pass leaves every page on strict defaults and no test send): with
+// public_url and an SMTP host configured, the Alerts page shows neither banner.
+func TestServePassesTheAlertSettingsToTheConsole(t *testing.T) {
+	tlsb, err := testtls.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	db, _ := newDB(t)
+	st, err := sqlite.Open(context.Background(), db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hash, err := webauth.NewHasher().Hash(context.Background(), "correct horse battery staple")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.CreateUser(context.Background(), store.NewUser{Email: "adm@example.com", Role: store.RoleAdmin, PasswordHash: hash}, time.Now(), testAudit); err != nil {
+		t.Fatal(err)
+	}
+	st.Close()
+
+	srv := startServe(t, tlsb, db, "CLAMFLEET_SERVER_PUBLIC_URL=https://cf.example",
+		"CLAMFLEET_SERVER_SMTP_HOST=127.0.0.1", "CLAMFLEET_SERVER_SMTP_FROM=cf@example.org", "CLAMFLEET_SERVER_SMTP_TLS=none")
+	ca, _ := os.ReadFile(tlsb.CA)
+	pool := x509.NewCertPool()
+	pool.AppendCertsFromPEM(ca)
+	jar, _ := cookiejar.New(nil)
+	c := &http.Client{Jar: jar, Timeout: 20 * time.Second, Transport: &http.Transport{TLSClientConfig: &ctls.Config{RootCAs: pool}},
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	req, _ := http.NewRequest("POST", "https://"+srv.addr+"/login", strings.NewReader(url.Values{"email": {"adm@example.com"}, "password": {"correct horse battery staple"}}.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	resp, err := c.Do(req)
+	if err != nil || resp.StatusCode != 303 {
+		t.Fatalf("login: %v %v", resp, err)
+	}
+	resp.Body.Close()
+	resp, err = c.Get("https://" + srv.addr + "/admin/alerts")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != 200 || strings.Contains(string(body), "alert-banner-no-public-url") || strings.Contains(string(body), "alert-banner-email-off") {
+		t.Fatalf("the console did not get the alert settings from serve: %d\n%s", resp.StatusCode, body)
+	}
+}
+
+// Mutation: AfterEvent not wired in serve. The dispatcher's own ticker is 5 s;
+// a new detection must reach the receiver well inside that, because ingest wakes
+// the dispatcher. The POST is made 0.5 s after start-up so the next tick is
+// about 4.5 s away: without the wake the alert arrives after the 2.5 s limit.
+func TestServeWakesTheDispatcherOnANewEvent(t *testing.T) {
+	var mu sync.Mutex
+	var hits []string
+	rcv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		hits = append(hits, string(b))
+		mu.Unlock()
+		w.WriteHeader(204)
+	}))
+	defer rcv.Close()
+	tlsb, err := testtls.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	db, _ := newDB(t)
+	keyPath := writeKeyFile(t, 0o600, newKey(t))
+	seedWebhookTarget(t, db, "ops", rcv.URL+"/hook", loadRing(t, keyPath), nil)
+	srv := startServe(t, tlsb, db, "CLAMFLEET_SERVER_SECRET_KEY_FILE="+keyPath, "CLAMFLEET_SERVER_ALERT_WEBHOOK_ALLOW_LOOPBACK=true")
+	reg := runServer(t, srv.env, "host", "add", "web01")
+	if reg.code != 0 {
+		t.Fatal(reg)
+	}
+	time.Sleep(500 * time.Millisecond)
+
+	ca, _ := os.ReadFile(tlsb.CA)
+	pool := x509.NewCertPool()
+	pool.AppendCertsFromPEM(ca)
+	c := &http.Client{Timeout: 10 * time.Second, Transport: &http.Transport{TLSClientConfig: &ctls.Config{RootCAs: pool}}}
+	body := `{"schema":1,"id":"` + strings.Repeat("a", 32) + `","host":"web01","ts":"` + time.Now().UTC().Format(time.RFC3339) +
+		`","path":"/srv/eicar","signature":"Win.Test.EICAR_HDB-1","source":"clamd"}`
+	req, _ := http.NewRequest("POST", "https://"+srv.addr+"/v1/event", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(reg.stdout))
+	req.Header.Set("Content-Type", "application/json")
+	posted := time.Now()
+	resp, err := c.Do(req)
+	if err != nil || resp.StatusCode != 202 {
+		t.Fatalf("post: %v %v", resp, err)
+	}
+	resp.Body.Close()
+	for {
+		mu.Lock()
+		n := len(hits)
+		mu.Unlock()
+		if n > 0 {
+			break
+		}
+		if time.Since(posted) > 2500*time.Millisecond {
+			t.Fatalf("no alert within 2.5 s of the event: the dispatcher was not woken\n%s", srv.stderr.String())
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(hits) != 1 || !strings.Contains(hits[0], `"kind":"detection"`) {
+		t.Fatalf("%v", hits)
+	}
+}
+
+// Mutation: the retention runner not started by serve. An event that arrived 400
+// days ago is gone shortly after start-up (default events_days is 365), and the
+// log names a count, never a path.
+func TestServeRunsTheRetentionPrune(t *testing.T) {
+	tlsb, err := testtls.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	db, _ := newDB(t)
+	ctx := context.Background()
+	st, err := sqlite.Open(ctx, db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h, err := st.CreateHost(ctx, "web01", []byte("0123456789abcdef0123456789abcdef"), time.Now(), testAudit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-400 * 24 * time.Hour)
+	if _, err := st.RecordEvent(ctx, store.EventRecord{HostID: h.ID, ReceivedAt: old,
+		Event: proto.Event{TS: old, Path: "/srv/MARKER-PATH", Signature: "S", Source: "clamd"}}); err != nil {
+		t.Fatal(err)
+	}
+	// An event whose alert is not yet planned is kept by the prune (it would lose its
+	// alert), and serve's first pass could run before the dispatcher plans it. Plan it
+	// here (no targets: the planner only clears the flag) so the test does not race.
+	if _, err := st.PlanAlerts(ctx, time.Now(), 0, func(store.AlertPlanInput) store.AlertPlanOutput { return store.AlertPlanOutput{} }); err != nil {
+		t.Fatal(err)
+	}
+	st.Close()
+	srv := startServe(t, tlsb, db)
+	deadline := time.Now().Add(10 * time.Second)
+	for !strings.Contains(srv.stderr.String(), "old events pruned") {
+		if time.Now().After(deadline) {
+			t.Fatalf("no prune within 10 s of start-up:\n%s", srv.stderr.String())
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if strings.Contains(srv.stderr.String(), "MARKER") {
+		t.Fatal("a path reached the server log")
+	}
+}

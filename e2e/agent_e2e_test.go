@@ -32,6 +32,7 @@ import (
 var (
 	cftExec  []string // command prefix that runs a command in the container
 	binary   string   // the static agent binary, built once
+	srvBin   string   // the static server binary, built once
 	repoRoot string
 )
 
@@ -58,11 +59,12 @@ func testMain(m *testing.M) int {
 	}
 	defer os.RemoveAll(dir)
 	binary = filepath.Join(dir, "clamfleet-agent")
-	build := exec.Command("go", "build", "-trimpath", "-o", binary, "github.com/clamfleet/clamfleet/cmd/clamfleet-agent")
-	build.Env = append(os.Environ(), "CGO_ENABLED=0")
-	if o, err := build.CombinedOutput(); err != nil {
-		fmt.Fprintf(os.Stderr, "e2e: build failed: %v\n%s", err, o)
-		return 1
+	srvBin = filepath.Join(dir, "clamfleet-server")
+	for out, pkg := range map[string]string{binary: "cmd/clamfleet-agent", srvBin: "cmd/clamfleet-server"} {
+		if err := build(out, pkg); err != nil {
+			fmt.Fprintln(os.Stderr, "e2e:", err)
+			return 1
+		}
 	}
 	code := m.Run()
 	// Leave the container as found, even when tests failed half way.
@@ -71,6 +73,17 @@ func testMain(m *testing.M) int {
 		code = 1
 	}
 	return code
+}
+
+// build compiles one of our commands as a static binary (CGO_ENABLED=0: the
+// container's libc is not the build machine's).
+func build(out, pkg string) error {
+	cmd := exec.Command("go", "build", "-trimpath", "-o", out, "github.com/clamfleet/clamfleet/"+pkg)
+	cmd.Env = append(os.Environ(), "CGO_ENABLED=0")
+	if o, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("build %s: %w\n%s", pkg, err, o)
+	}
+	return nil
 }
 
 // script runs one of deploy/test/*.sh (they read CFT_EXEC themselves).
@@ -125,20 +138,26 @@ func fresh(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	data, err := os.ReadFile(binary)
+	pushBinary(t, binary, "clamfleet-agent")
+	waitClamd(t)
+}
+
+// pushBinary installs a built binary as /usr/local/bin/<name> in the container.
+func pushBinary(t *testing.T, path, name string) {
+	t.Helper()
+	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	var tarball bytes.Buffer
-	if err := writeTar(&tarball, "clamfleet-agent", data); err != nil {
+	if err := writeTar(&tarball, name, data); err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	if _, e, code := ct(ctx, tarball.Bytes(), "tar", "-xf", "-", "-C", "/usr/local/bin", "--no-same-owner"); code != 0 {
-		t.Fatalf("pushing the binary: exit %d: %s", code, e)
+		t.Fatalf("pushing %s: exit %d: %s", name, code, e)
 	}
-	waitClamd(t)
 }
 
 // waitClamd blocks until clamd can really scan. reset.sh's "clamdscan --ping"
@@ -148,7 +167,12 @@ func fresh(t *testing.T) {
 // A scan needs the loaded engine, so it is the real readiness signal.
 func waitClamd(t *testing.T) {
 	t.Helper()
-	sh(t, "for _ in $(seq 1 90); do clamdscan --no-summary /etc/hostname >/dev/null 2>&1 && exit 0; sleep 1; done; echo clamd never became ready >&2; exit 1")
+	// READY_FILE: under AppArmor (the VM) clamd may not read /etc/hostname; see reset.sh.
+	ready := os.Getenv("READY_FILE")
+	if ready == "" {
+		ready = "/etc/hostname"
+	}
+	sh(t, "for _ in $(seq 1 90); do clamdscan --no-summary "+ready+" >/dev/null 2>&1 && exit 0; sleep 1; done; echo clamd never became ready >&2; exit 1")
 }
 
 // collect runs "clamfleet-agent collect --dry-run" as the unprivileged user
@@ -302,7 +326,7 @@ func TestHealthyHost(t *testing.T) {
 	if r.Freshclam.LastError != nil {
 		t.Errorf("freshclam.last_error = %v, want null", r.Freshclam.LastError)
 	}
-	// Records which source worked (decision Q8): the journal, because the
+	// Records which source worked (M1 Q8): the journal, because the
 	// agent user is in group systemd-journal.
 	if j := sh(t, "journalctl -u clamav-freshclam -o cat --no-pager -q | grep -c 'update process started'"); j == "0" {
 		t.Errorf("the journal holds no freshclam run, so the result came from the log file")
@@ -346,7 +370,7 @@ func TestClamdStoppedIsNotRestartedByTheAgent(t *testing.T) {
 			if r.Sigs.Daily == nil || r.Sigs.Main == nil {
 				t.Errorf("signatures must still be reported: %+v", r.Sigs)
 			}
-			// The decision Q4 proof: the agent must not have started clamd.
+			// The M1 Q4 proof: the agent must not have started clamd.
 			if got := sh(t, "systemctl is-active clamav-daemon.service || true"); got != "inactive" {
 				t.Errorf("after the report clamd is %q: the agent started it", got)
 			}
@@ -357,7 +381,7 @@ func TestClamdStoppedIsNotRestartedByTheAgent(t *testing.T) {
 // A freshclam that cannot reach its mirror: a real unit, started with a
 // drop-in that points freshclam at an unreachable loopback mirror (never the
 // real CDN, which rate-limits). The failure must reach the report through the
-// systemd journal (decision Q8), and the unit state must follow start/stop.
+// systemd journal (M1 Q8), and the unit state must follow start/stop.
 func TestFreshclamFailingThenStopped(t *testing.T) {
 	fresh(t)
 	sh(t, `
@@ -446,7 +470,7 @@ func TestFreshclamLogUnreadableAfterRotation(t *testing.T) {
 	sh(t, "logrotate -f /etc/logrotate.d/clamav-freshclam")
 	got := sh(t, "stat -c '%U:%G %a' /var/log/clamav/freshclam.log")
 	if got != "clamav:adm 640" {
-		t.Fatalf("Debian's logrotate no longer recreates the log as clamav:adm 640 (got %q): revisit decision Q8", got)
+		t.Fatalf("Debian's logrotate no longer recreates the log as clamav:adm 640 (got %q): revisit M1 Q8", got)
 	}
 
 	// Journal available: unchanged result, no warning about the log.

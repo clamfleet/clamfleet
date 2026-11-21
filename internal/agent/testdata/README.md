@@ -11,6 +11,9 @@ covered by AGPL-3.0-only, copyright The ClamFleet Authors**, except that the 512
 `cvd/*/*.hdr` files are the unmodified headers of ClamAV signature databases published by
 Cisco; they hold no signatures, only a version, a count, a time and a signature blob.
 
+The same statement covers the hand-written golden files in `internal/alert/testdata`, `internal/proto/testdata` and
+any other `testdata` directory that holds JSON (the alert ones have their own README).
+
 ## Captured, do not edit by hand
 
 Recorded by `deploy/test/capture-fixtures.sh` (`make fixtures`) from the `clamfleet-test`
@@ -29,6 +32,7 @@ Re-run the script instead of editing. It scrubs private addresses and lab host n
 | `freshclam/failure.log` | A failed run: mirror unreachable (loopback port 9), never the real CDN. |
 | `freshclam/journal-rerun.txt`, `journal-failure.txt` | `journalctl -u clamav-freshclam -o cat` for the same two runs through the real unit. |
 | `services/*.show` | `systemctl show --property=LoadState,ActiveState` for a unit that is active, inactive, failed, and one that does not exist. |
+| `clamdscan/<case>.out`, `.err`, `.exit`, `.paths` | stdout, stderr, exit status and arguments of `clamdscan --config-file=... --multiscan` for a clean directory, an infected one (EICAR), an unreadable one, several paths, and clamd down. Recorded 2026-11-16 (ClamAV 1.4.3). Shows that `--multiscan` prints one `OK` line per clean path ARGUMENT, not one per file, and no file count. |
 | `debian13/os-release`, `debian13/clamd.conf` | Verbatim files. |
 
 ## Not captured
@@ -44,7 +48,7 @@ Re-run the script instead of editing. It scrubs private addresses and lab host n
 ## Hand-written (`handmade/`)
 
 Written by a person from documentation, **not captured from a real host**. RHEL 9 is untested
-live (decision Q6); contributions of real recordings are welcome.
+live (M1 Q6); contributions of real recordings are welcome.
 
 - `clamd.rhel9.conf`, `os-release.rhel9`: RHEL 9 family layout.
 - `clamd.tcp-only.conf`: a clamd with no `LocalSocket`.

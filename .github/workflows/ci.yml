@@ -1,0 +1,303 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# SPDX-FileCopyrightText: The ClamFleet Authors
+#
+# CI for every pull request and every push to the long-lived branches (docs/testing.md, "CI").
+#
+# Rules this file lives by, enforced by deploy/test/workflows_test.sh and actionlint (make ci):
+#   - every action is a GitHub-owned one pinned by full commit SHA, with its version in a comment;
+#   - the token is read-only and persisted nowhere (persist-credentials: false), and there are no
+#     secrets in these jobs: pull requests from forks run here;
+#   - never pull_request_target or workflow_run, which would give a fork's code the base repository's token;
+#   - the job names below are the required status checks of the repository rulesets. Renaming or
+#     removing one blocks every merge until the ruleset is updated first (docs/releasing.md).
+name: ci
+
+on:
+  pull_request:
+    branches: [develop, main]
+    types: [opened, synchronize, reopened, ready_for_review]
+  push:
+    branches: [develop, main]
+  # Weekly, so a change in the distribution's ClamAV or in a pinned tool shows up without a pull request.
+  # (GitHub stops scheduled runs of a repository with no activity for 60 days; the next pull request
+  # shows the same drift, so this is a convenience.)
+  schedule:
+    - cron: '17 4 * * 1'
+
+# Nothing at the top: each job asks for what it needs.
+permissions: {}
+
+# GitHub's default shell is `bash -e` with no pipefail, so a failing command before a pipe is lost.
+# `shell: bash` is `bash -eo pipefail`; workflows_test.sh requires it (rule 10).
+defaults:
+  run:
+    shell: bash
+
+# A newer push to a pull request makes the older run useless. Runs for branches are never cancelled:
+# a push to develop or main is the record that the merged commit was green.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  # Runs on every event, draft pull requests included: it is the cheap check (about 5 minutes).
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version-file: go.mod
+      # go.mod pins the toolchain with a `toolchain` line. setup-go installs a Go for the `go` line and
+      # the go command may switch (GOTOOLCHAIN) to the pinned one; either way the tests must run on the
+      # pinned release, so a mismatch fails here, not as a confusing difference later.
+      - name: Go is the toolchain go.mod pins
+        run: |
+          want="$(awk '$1 == "toolchain" { print $2 }' go.mod)"
+          got="$(go env GOVERSION)"
+          test -n "$want" || { echo "go.mod has no toolchain line" >&2; exit 1; }
+          test "$got" = "$want" || { echo "running $got, go.mod pins $want" >&2; exit 1; }
+      - run: |
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+          make tools
+      - run: make build
+      - run: make ci
+
+  # Ready pull requests and every push: the real agent and server inside a Debian 13 container with
+  # systemd as PID 1, the distribution's ClamAV and frozen signatures, and NO network (docs/testing.md,
+  # "The e2e suite in Docker"). A draft is skipped: a draft cannot merge, and ready_for_review starts
+  # a full run. workflows_test.sh allows exactly this `if:` on this required job.
+  e2e:
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
+    needs: check
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version-file: go.mod
+      # The image is cached as a tarball. The key is the Dockerfile plus the ISO week: the Dockerfile
+      # pins both base images by digest, but its apt packages come from the live Debian 13 archive,
+      # which the weekly refresh picks up (distribution drift shows up as a red CI, never silently).
+      - id: week
+        run: echo "week=$(date -u +%G-W%V)" >> "$GITHUB_OUTPUT"
+      - id: image
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/clamfleet-e2e-image.tar
+          key: e2e-image-${{ hashFiles('deploy/test/ci/**') }}-${{ steps.week.outputs.week }}
+      - if: steps.image.outputs.cache-hit != 'true'
+        run: |
+          make e2e-image
+          docker save -o "$RUNNER_TEMP/clamfleet-e2e-image.tar" clamfleet-e2e:ci
+      - if: steps.image.outputs.cache-hit == 'true'
+        run: docker load -i "$RUNNER_TEMP/clamfleet-e2e-image.tar"
+      - run: make e2e-docker
+      # One journal per container that lived (reset.sh saves it before replacing the container). They
+      # hold synthetic data only: EICAR paths under /tmp/e2e and per-run tokens.
+      - if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: e2e-journals
+          path: dist/e2e-journals
+          retention-days: 7
+          if-no-files-found: ignore
+
+  # Level 2 (R1 decision 1): the TestDistro* scenarios in a systemd container of each other release we
+  # claim, on every ready pull request. One check per leg, named by GitHub "l2 (<leg>)"; the four names
+  # are required checks (docs/releasing.md). A container has no MAC, so this level proves installation,
+  # units, groups, modes and the static profile and policy checks, never confinement (level 1, on VMs).
+  # fail-fast is off so one red release does not hide the state of the other three.
+  l2:
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
+    needs: check
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        leg: [debian-12, ubuntu-22.04, rocky-9, almalinux-10]
+    env:
+      LEG: ${{ matrix.leg }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version-file: go.mod
+      # Cached like the e2e image: a tarball per leg, keyed by the Dockerfiles plus the ISO week. The
+      # bases are pinned by digest but the packages come from the live archives, which the weekly
+      # refresh picks up (drift shows up as a red CI, never silently).
+      - id: week
+        run: echo "week=$(date -u +%G-W%V)" >> "$GITHUB_OUTPUT"
+      - id: image
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/clamfleet-l2-image.tar
+          key: l2-image-${{ matrix.leg }}-${{ hashFiles('deploy/test/ci/**') }}-${{ steps.week.outputs.week }}
+      - if: steps.image.outputs.cache-hit != 'true'
+        run: |
+          make e2e-l2-image LEG="$LEG"
+          docker save -o "$RUNNER_TEMP/clamfleet-l2-image.tar" "clamfleet-e2e-l2:$LEG"
+      - if: steps.image.outputs.cache-hit == 'true'
+        run: docker load -i "$RUNNER_TEMP/clamfleet-l2-image.tar"
+      # The runner's kernel is shared with the containers, and Ubuntu ships an AppArmor profile for
+      # /usr/sbin/unix_chkpwd that is matched by path inside them too. It denies dac_read_search and
+      # dac_override, which the setuid-root helper of the EL images needs to read /etc/shadow (mode
+      # 000), so sudo failed there with "PAM account management error". Debian's helper reads the file
+      # through the shadow group and never notices. A real EL host has no such profile; the runner's
+      # is removed for this job only (the runner is discarded afterwards).
+      - run: |
+          if [ -e /etc/apparmor.d/unix-chkpwd ]; then
+            sudo apparmor_parser -R /etc/apparmor.d/unix-chkpwd
+          fi
+      - run: make e2e-distro LEG="$LEG"
+      # The journals hold synthetic data only (EICAR paths and per-run tokens).
+      - if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: l2-journals-${{ matrix.leg }}
+          path: dist/e2e-journals
+          retention-days: 7
+          if-no-files-found: ignore
+
+  # Ready pull requests and every push, the browser is where a 404 on a button
+  # shows up, and no lower layer sees it. No retries: a flaky test is fixed, not run again.
+  web:
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+      # Playwright 1.63.0 (the lockfile) downloads its own Chromium build; the system libraries it needs
+      # come with --with-deps. The suite itself starts and stops its fixture server on 127.0.0.1.
+      - run: |
+          cd e2e/web
+          npm ci
+          npx playwright install --with-deps chromium
+      - run: make e2e-web
+      - if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: web-traces
+          path: e2e/web/test-results
+          retention-days: 7
+          if-no-files-found: ignore
+
+  # Ready pull requests and every push: the release pipeline's build and sign steps with a THROWAWAY key,
+  # so a change that breaks release.sh, sign.sh or the packages shows up on the pull request and not on the
+  # day of a release. It runs the real tools (rpm, rpmsign, rpmkeys, cyclonedx-gomod) that release_test.sh
+  # only stubs. The key lives for this job and is never an asset. No secrets here: pull requests from
+  # forks run this job.
+  release-dry-run:
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
+    needs: check
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version-file: go.mod
+      - run: sudo apt-get install -y rpm cpio
+      - run: make release-snapshot
+      # An unsigned rpm must say so: rpmkeys exits 0 on it, which is why sign.sh reads the output.
+      - name: The unsigned rpm has no signature line
+        run: |
+          set -euo pipefail
+          mkdir "$RUNNER_TEMP/db0"
+          for f in dist/release/*.rpm; do
+            if rpmkeys --dbpath "$RUNNER_TEMP/db0" -Kv "$f" | grep -q 'Signature, key ID'; then
+              echo "$f is signed before sign.sh ran" >&2; exit 1
+            fi
+          done
+      - name: Sign with a throwaway key and verify against its public half
+        run: |
+          set -euo pipefail
+          export GNUPGHOME="$RUNNER_TEMP/dry-gnupg"
+          mkdir -m 700 "$GNUPGHOME"
+          gpg --batch --pinentry-mode loopback --passphrase '' --quick-generate-key 'ClamFleet dry run <dry-run@example.invalid>' rsa4096 cert 1d
+          fpr="$(gpg --batch --list-keys --with-colons | awk -F: '$1 == "fpr" { print $10; exit }')"
+          gpg --batch --pinentry-mode loopback --passphrase '' --quick-add-key "$fpr" rsa4096 sign 1d
+          gpg --batch --armor --export "$fpr" >"$RUNNER_TEMP/dry.asc"
+          gpg --batch --export-secret-subkeys "$fpr" >"$RUNNER_TEMP/dry-subkey.gpg"
+          unset GNUPGHOME
+          sums="$(sha256sum dist/release/SHA256SUMS | cut -d' ' -f1)"
+          RELEASE_SIGNING_SUBKEY_FD=3 deploy/release/sign.sh dist/release "$RUNNER_TEMP/dry.asc" "$sums" 3<"$RUNNER_TEMP/dry-subkey.gpg"
+
+  # Pull requests only (decision 13: DCO). The condition is the one `if:` workflows_test.sh allows on
+  # this required job: a push has no pull request to check, and the pull request already was.
+  dco:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      # fetch-depth: 0 so the whole range is present; dco.sh fails, rather than passing as empty,
+      # when either SHA is missing (hack/ci/dco.sh).
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      # The SHAs go through env, never into the script text: they come from the event, and
+      # an event field in a `run:` line is how workflows get injected.
+      - run: hack/ci/dco.sh "$BASE_SHA" "$HEAD_SHA"
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+
+  # NOT a required check, and no required job needs it: it only tells the maintainer whether the pull
+  # request touches what needs a level-1 run (VMs with the mandatory access control enforcing, on his
+  # machines), by printing a line in the job summary (R1 decision 7, docs/testing.md "Which changes
+  # need an L1 run"). Pull requests only: a push has no merge base to compare with. It runs on drafts
+  # too, being cheap. Its name must stay out of the ruleset.
+  l1-paths:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      # fetch-depth: 0 so the merge base is present; l1-required.sh fails, rather than answering
+      # "not required", when either SHA is missing (hack/ci/l1-required.sh).
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      # The SHAs go through env, never into the script text (event fields are injectable).
+      - name: Print the verdict in the job summary
+        run: |
+          verdict="$(hack/ci/l1-required.sh "$BASE_SHA" "$HEAD_SHA")"
+          echo "$verdict"
+          printf '### L1 run\n\n%s\n' "$verdict" >> "$GITHUB_STEP_SUMMARY"
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}

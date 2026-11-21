@@ -187,9 +187,12 @@ func TestVersionAndUsage(t *testing.T) {
 			t.Errorf("%v: exit %d, want 2", args, res.code)
 		}
 	}
-	// Subcommands of later milestones are not advertised.
-	if res := runAgent(t, "", nil, "bogus"); strings.Contains(res.stderr, "scan") || strings.Contains(res.stderr, "event") {
-		t.Errorf("usage mentions commands that do not exist yet: %s", res.stderr)
+	// The usage lists exactly the registered commands (scan arrived in milestone 6).
+	res := runAgent(t, "", nil, "bogus")
+	for _, c := range []string{"collect --dry-run", "run [--once]", "event [--config", "scan [--config", "version"} {
+		if !strings.Contains(res.stderr, c) {
+			t.Errorf("usage does not mention %q: %s", c, res.stderr)
+		}
 	}
 }
 
@@ -236,5 +239,51 @@ func TestEnvOverridesConfigFile(t *testing.T) {
 	var r proto.Report
 	if err := json.Unmarshal([]byte(res.stdout), &r); err != nil || len(r.Tags) != 2 || r.Tags[1] != "b" {
 		t.Fatalf("err=%v tags=%v", err, r.Tags)
+	}
+}
+
+func TestRunUsageAndConfigErrors(t *testing.T) {
+	if res := runAgent(t, fakeBin(t), nil, "run", "extra"); res.code != 2 {
+		t.Fatalf("run with an argument: %+v", res)
+	}
+	if res := runAgent(t, fakeBin(t), nil, "run", "--nope"); res.code != 2 {
+		t.Fatalf("run with an unknown flag: %+v", res)
+	}
+	cfg := writeConfig(t, serveClamd(t))
+	// No server configured: `run` cannot send anywhere. Exit 1 with the reason, nothing on stdout.
+	res := runAgent(t, fakeBin(t), nil, "run", "--once", "--config", cfg)
+	if res.code != 1 || res.stdout != "" || !strings.Contains(res.stderr, "server is required") {
+		t.Fatalf("%+v", res)
+	}
+	// Plain http to a non-loopback host is refused before anything is sent.
+	res = runAgent(t, fakeBin(t), []string{"CLAMFLEET_AGENT_SERVER=http://clamfleet.example"}, "run", "--once", "--config", cfg)
+	if res.code != 1 || !strings.Contains(res.stderr, "plain http") {
+		t.Fatalf("%+v", res)
+	}
+	// A missing token file is reported by path and fails the pass (server is a closed loopback port).
+	res = runAgent(t, fakeBin(t), []string{
+		"CLAMFLEET_AGENT_SERVER=https://127.0.0.1:1", "CLAMFLEET_AGENT_TOKEN_FILE=/nonexistent/token",
+	}, "run", "--once", "--config", cfg)
+	if res.code != 1 || !strings.Contains(res.stderr, "/nonexistent/token") || !strings.Contains(res.stderr, `"class":"token"`) {
+		t.Fatalf("%+v", res)
+	}
+}
+
+// The agent must stay free of the server's storage stack: SQLite, goose and
+// the store packages would blow the 30 MB RSS budget of the spec (section 13)
+// and widen the attack surface of every monitored host.
+func TestAgentBinaryHasNoSQLite(t *testing.T) {
+	out, err := exec.Command("go", "list", "-deps", "-f", "{{.ImportPath}}", ".").CombinedOutput()
+	if err != nil {
+		t.Fatalf("go list: %v\n%s", err, out)
+	}
+	deps := string(out)
+	if !strings.Contains(deps, "github.com/clamfleet/clamfleet/internal/agent") {
+		t.Fatalf("go list did not report the agent's dependencies (the test would be vacuous):\n%s", deps)
+	}
+	for _, banned := range []string{"modernc.org/", "github.com/pressly/goose", "database/sql", "clamfleet/internal/store", "clamfleet/internal/server", "clamfleet/internal/alert", "net/smtp", "clamfleet/migrations"} {
+		if strings.Contains(deps, banned) {
+			t.Errorf("the agent depends on %s", banned)
+		}
 	}
 }

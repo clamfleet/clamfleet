@@ -11,8 +11,9 @@ detections to a central server. The design is in [docs/HANDOVER.md](docs/HANDOVE
 
 ClamAV is a registered trademark of Cisco Systems, Inc.; ClamFleet is not affiliated with or endorsed by Cisco.
 
-**Status: early development, not production ready.** Only milestone 1 exists. The agent can print
-the report it would send. Nothing is sent to a server yet.
+**Status: early development, not production ready.** Milestones 1 to 6a exist: the agent reports to a server that
+stores, evaluates and alerts, with a web console, detections from clamd's `VirusEvent`, retention, backup, `/metrics`,
+and `.deb` and `.rpm` packages (see [docs/install.md](docs/install.md)). LDAP and OIDC sign-in are planned.
 
 ## Who it is for
 
@@ -28,32 +29,85 @@ found anything.
   - freshclam: last successful and last failed update, from the systemd journal, the log file, or as a last resort the database file times
   - systemd state of the clamd, freshclam and clamonacc units
   - host name, OS release, agent version and configured tags
-  - the last scan summary, if a summary file exists (the scan command itself is planned)
+  - the last scan summary, if a summary file exists (written by `clamfleet-agent scan`)
+- `clamfleet-agent run` sends a report now and then every `interval` (default 5 minutes);
+  `run --once` sends one and exits 0 on success, 1 otherwise. The service writes every heartbeat to a **spool**
+  on disk and sends from there, so a server outage loses nothing within the spool's limits.
+- `clamfleet-agent event` is the command for clamd's `VirusEvent` (see [docs/detections.md](docs/detections.md)):
+  it writes one detection to the spool, never touching the network or the token; the service sends it.
 - `clamfleet-agent version`
 - Configuration from a YAML file, with `CLAMFLEET_AGENT_*` environment overrides.
+- `clamfleet-server serve` runs the ingest API (`POST /v1/report`, `POST /v1/event`, `GET /healthz`,
+  see [docs/api.md](docs/api.md)) on SQLite. Agents authenticate with one bearer token per host;
+  optional mutual TLS adds a client-certificate requirement.
+- `clamfleet-server host add|list|show|rotate-token|revoke-token` manages hosts and their tokens,
+  and every token change is written to an audit log. `clamfleet-server migrate` creates or upgrades
+  the database.
+- Configuration of the server from a YAML file, with `CLAMFLEET_SERVER_*` environment overrides.
+- **Web console** at the root of the server's origin (see [docs/web.md](docs/web.md)): local accounts
+  with the roles `viewer` and `admin` (managed with `clamfleet-server user ...`), cookie sessions with
+  CSRF protection, a live fleet overview, a page per host with its state history, and host administration
+  for admins (register, rotate, revoke, delete). It is server-rendered, with htmx vendored (no CDN).
+- **Alerts** (see [docs/alerts.md](docs/alerts.md)): email and webhook targets that get an alert when a host
+  changes state (recovery included) or a detection arrives. Per-target minimum severity and tag filter, a
+  cooldown that coalesces flapping, a durable queue with retries (5 attempts over about 81 minutes), every
+  attempt in an alert log, signed webhooks (Standard Webhooks), and a network policy for webhook
+  destinations. Managed by admins in the console or with `clamfleet-server alert ...`. Delivery is at least
+  once: receivers deduplicate on the alert id.
+- **Detections** (see [docs/detections.md](docs/detections.md)): clamd's `VirusEvent` runs the agent's `event`
+  command, which spools the detection durably (no-replace publish, fsync, a hard cap on disk use) even when the
+  server is down; the agent validates it and sends it, fresh detections ahead of an old backlog. The
+  **Detections** page lists them (filters, keyset paging, hostile file names shown as visible escapes), admins
+  acknowledge one or "all matching as of this id", and the fleet, host and menu show open counts. A burst of
+  detections from one host becomes a few alerts plus one summary. Retention is `retention.events_days`. A dedicated
+  AppArmor profile for the event command is in `deploy/apparmor/`.
 
 A data source that cannot be read does not fail the report. It appears as `null`, and a warning goes
 to stderr.
+
+## Install
+
+Packages for Debian 13 and the RHEL 9 family (tested on AlmaLinux 9 with SELinux enforcing): `clamfleet-server` and
+`clamfleet-agent`, from the GitHub release (amd64 only in v1; verify the signature first, [docs/install.md](docs/install.md#verifying-a-download)) or built by `make packages VERSION=x.y.z`. [docs/install.md](docs/install.md) has the steps,
+[docs/operations.md](docs/operations.md) retention, backup and restore, `/metrics` and TLS reload, and
+[docs/configuration.md](docs/configuration.md) every key. The packages never edit clamd's configuration: the install
+notice prints the `VirusEvent` line (and, on Debian, the two AppArmor lines) to add.
+
+**Release key** (`ClamFleet Release <hi@madalin.me>`, file `deploy/release/clamfleet-release.asc`, both keys expire 2028-11-19).
+Compare these fingerprints with `gpg --show-keys --with-subkey-fingerprints` before you trust the file:
+
+- Primary (certify only): `EEF3 BD8A 0FDA 41C0 C451 8B44 36E3 A39F 1BE2 6893`
+- Signing subkey: `9ADD 4EBC D2FA 7C59 7280 D078 5605 86D7 BCFD 57AF`
 
 ## Requirements
 
 - **Go 1.27.4.** `go.mod` declares `go 1.26.0` and `toolchain go1.27.4`. With the default
   `GOTOOLCHAIN=auto`, the go command downloads the pinned toolchain if your installed Go is older.
 - **GNU make.**
-- **staticcheck v0.8.2** for `make check`:
-  `go install honnef.co/go/tools/cmd/staticcheck@v0.8.2`
+- **staticcheck v0.8.2** for `make check`, and **sqlc v1.31.1** for `make check` (`sqlc diff`) and `make generate`
+  (build time only, nothing of them is in the binaries). `make tools` installs both at the versions the Makefile pins.
 - **To run the agent:** Debian 13 with ClamAV, clamd and freshclam under systemd. See
   [Supported platforms](#supported-platforms).
 
 ## Build and test
 
 ```
-make build      # static binary at bin/clamfleet-agent (CGO_ENABLED=0)
-make check      # go vet, staticcheck, go test ./..., script tests; no container needed
-make e2e        # end-to-end tests inside a ClamAV container; needs setup
+make build      # static binaries bin/clamfleet-agent and bin/clamfleet-server (CGO_ENABLED=0)
+make tools      # install the pinned staticcheck and sqlc
+make check      # go vet, staticcheck, sqlc diff, go test ./..., script tests; no container needed
+make ci         # what CI runs: check plus workflow lint, module and gofmt checks, and a test gate that fails on skipped tests
+make generate   # regenerate internal/store/sqlite/sqlcdb after changing a migration or query
+make packages VERSION=x.y.z   # .deb and .rpm of the agent and the server into dist/ (nfpm v2.49.0, via go run)
+make e2e        # end-to-end tests inside a ClamAV container, including the packages; needs setup
+make e2e-docker # the same suite in a Debian 13 systemd container with no network (what CI runs); needs Docker
+make e2e-apparmor   # the detection path on a Debian 13 VM with AppArmor enforcing (docs/testing.md)
+make e2e-el9        # the rpm and the detection path on an AlmaLinux 9 VM with SELinux enforcing (docs/testing.md)
+make e2e-idp        # the real server against OpenLDAP and Keycloak in a throwaway container (docs/testing.md)
+make e2e-web        # Playwright browser tests of the console, including OIDC and LDAP sign-in (e2e/web)
+make web-fixture   # a throwaway console on 127.0.0.1 with seeded users and hosts, for browser tests (docs/testing.md)
 ```
 
-`make e2e` runs the real agent binary in an Incus container as the unprivileged `clamfleet` user. It
+`make e2e` runs the real agent and server binaries in an Incus container as unprivileged users. It
 needs a prepared container and two settings that have no defaults (`CFT_EXEC` and `INCUS_HOST`). If
 they are missing, it fails rather than skipping. Read [docs/testing.md](docs/testing.md) first.
 
@@ -78,6 +132,194 @@ The report JSON is on stdout. Log lines and per-source warnings are JSON on stde
 Exit codes: `0` a report was produced (even a degraded one), `1` configuration or runtime error,
 `2` usage error.
 
+## Run a server and send reports
+
+The intended deployment is the server listening on loopback behind a reverse proxy that terminates
+TLS. The server can also terminate TLS itself. Plaintext is refused on any address that is not
+loopback.
+
+**1. Install and create the user.** The server has its own user and state directory, separate from
+the agent's, so an agent and a server on one host never share an identity:
+
+```
+useradd --system --no-create-home --shell /usr/sbin/nologin clamfleet-server
+install -d -o clamfleet-server -g clamfleet-server -m 700 /var/lib/clamfleet-server
+install -m 755 bin/clamfleet-server /usr/local/bin/
+install -d /etc/clamfleet
+install -m 644 deploy/server.yaml.example /etc/clamfleet/server.yaml
+clamfleet-server key generate                       # the secret key file (TOTP); see docs/web.md
+chgrp clamfleet-server /etc/clamfleet/server-secret.key && chmod 0640 /etc/clamfleet/server-secret.key
+```
+
+The key file is optional until someone uses two-factor sign-in. If it exists it must be valid and not
+readable by others, or the server refuses to start; keep it out of your database backups.
+
+**2. Configure** `/etc/clamfleet/server.yaml` (the example is annotated). Keys:
+
+| YAML key | Environment variable | Default |
+|---|---|---|
+| `listen` | `CLAMFLEET_SERVER_LISTEN` | `127.0.0.1:8443` |
+| `tls.cert` | `CLAMFLEET_SERVER_TLS_CERT` | empty (plaintext, loopback only) |
+| `tls.key` | `CLAMFLEET_SERVER_TLS_KEY` | empty |
+| `tls.client_ca` | `CLAMFLEET_SERVER_TLS_CLIENT_CA` | empty (mTLS off) |
+| `db_path` | `CLAMFLEET_SERVER_DB_PATH` | `/var/lib/clamfleet-server/clamfleet.db` |
+| `secret_key_file` | `CLAMFLEET_SERVER_SECRET_KEY_FILE` | `/etc/clamfleet/server-secret.key` (protects TOTP secrets and webhook alert targets; see below) |
+| `trusted_proxies` | `CLAMFLEET_SERVER_TRUSTED_PROXIES` | empty |
+| `health.stale_factor` | `CLAMFLEET_SERVER_HEALTH_STALE_FACTOR` | `3` (at least 2) |
+| `health.default_interval` | `CLAMFLEET_SERVER_HEALTH_DEFAULT_INTERVAL` | `5m` (10s to 24h; for agents that do not report their interval) |
+| `health.daily_warn_hours` / `health.daily_crit_hours` | `CLAMFLEET_SERVER_HEALTH_DAILY_WARN_HOURS` / `..._DAILY_CRIT_HOURS` | `24` / `72` |
+| `health.behind_warn` | `CLAMFLEET_SERVER_HEALTH_BEHIND_WARN` | `2` |
+| `health.scan_warn_hours` | `CLAMFLEET_SERVER_HEALTH_SCAN_WARN_HOURS` | `48` (0 = off) |
+| `health.require_virus_event` | `CLAMFLEET_SERVER_HEALTH_REQUIRE_VIRUS_EVENT` | `true` (WARN `virusevent_missing` when clamd.conf has no VirusEvent line) |
+| `health.eval_interval` | `CLAMFLEET_SERVER_HEALTH_EVAL_INTERVAL` | `60s` (1s to 60s) |
+| `auth.local.enabled` | `CLAMFLEET_SERVER_AUTH_LOCAL_ENABLED` | `true` (email and password accounts) |
+| `auth.local.totp_required` | `CLAMFLEET_SERVER_AUTH_LOCAL_TOTP_REQUIRED` | `false`; `true` makes every local user set up an authenticator app (needs the key file) |
+| `auth.ldap.*`, `auth.oidc.*` | `CLAMFLEET_SERVER_AUTH_LDAP_...`, `CLAMFLEET_SERVER_AUTH_OIDC_...` | both off; every key, default and range is in [docs/configuration.md](docs/configuration.md) and the setup in [docs/auth.md](docs/auth.md) |
+| `auth.session_max_age` | `CLAMFLEET_SERVER_AUTH_SESSION_MAX_AGE` | `12h` (5m to 720h) |
+| `auth.session_idle` | `CLAMFLEET_SERVER_AUTH_SESSION_IDLE` | `1h` (at least 1m; not above the max age) |
+| `auth.cookie_secure` | `CLAMFLEET_SERVER_AUTH_COOKIE_SECURE` | `true`; `false` only for plain-HTTP development (drops `Secure` and the `__Host-` prefix, logs a warning) |
+| `retention.reports_days` | `CLAMFLEET_SERVER_RETENTION_REPORTS_DAYS` | `30` (14 to 90; heartbeat reports, from arrival) |
+| `retention.events_days` | `CLAMFLEET_SERVER_RETENTION_EVENTS_DAYS` | `365` (7 to 3650; detections are deleted this long after they arrived, daily; one whose alert is unfinished is kept) |
+| `retention.state_changes_days` | `CLAMFLEET_SERVER_RETENTION_STATE_CHANGES_DAYS` | `365` (30 to 3650; a state change whose alert is pending is kept) |
+| `retention.alert_log_days` | `CLAMFLEET_SERVER_RETENTION_ALERT_LOG_DAYS` | `90` (30 to 3650; the alert attempt log, finished deliveries and closed detection windows) |
+| `retention.audit_days` | `CLAMFLEET_SERVER_RETENTION_AUDIT_DAYS` | `365` (90 to 3650; audit rows hold emails and client IPs) |
+| `backup.dir` | `CLAMFLEET_SERVER_BACKUP_DIR` | `/var/lib/clamfleet-server/backups` (absolute; a real directory, mode 0700, owned by the server user) |
+| `backup.keep` | `CLAMFLEET_SERVER_BACKUP_KEEP` | `7` (0 to 365; 0 keeps every backup) |
+| `metrics.enabled` | `CLAMFLEET_SERVER_METRICS_ENABLED` | `false` (`GET /metrics` answers 404 while off) |
+| `metrics.token_file` | `CLAMFLEET_SERVER_METRICS_TOKEN_FILE` | empty; required when enabled: absolute path of a file with the bearer token (at least 32 bytes, `root:clamfleet-server 0640`) |
+| `public_url` | `CLAMFLEET_SERVER_PUBLIC_URL` | empty (links in alerts are null) |
+| `alert.cooldown` | `CLAMFLEET_SERVER_ALERT_COOLDOWN` | `15m` (0 to 24h; 0 = no holds) |
+| `alert.webhook.timeout` | `CLAMFLEET_SERVER_ALERT_WEBHOOK_TIMEOUT` | `10s` (1s to 30s per attempt) |
+| `alert.webhook.allow_private` / `alert.webhook.allow_loopback` | `CLAMFLEET_SERVER_ALERT_WEBHOOK_ALLOW_PRIVATE` / `..._ALLOW_LOOPBACK` | `true` / `false` |
+| `alert.webhook.deny_networks` | `CLAMFLEET_SERVER_ALERT_WEBHOOK_DENY_NETWORKS` | empty (extra CIDRs that are never allowed) |
+| `alert.webhook.nat64_prefixes` | `CLAMFLEET_SERVER_ALERT_WEBHOOK_NAT64_PREFIXES` | empty (your own NAT64 translation prefixes; a local-use `64:ff9b:1::/48` address of an unlisted translator is blocked) |
+| `alert.webhook.ca_file` | `CLAMFLEET_SERVER_ALERT_WEBHOOK_CA_FILE` | empty (extra CA bundle, PEM) |
+| `smtp.host` | `CLAMFLEET_SERVER_SMTP_HOST` | empty (email is off) |
+| `smtp.port` / `smtp.tls` | `CLAMFLEET_SERVER_SMTP_PORT` / `..._TLS` | `587` / `starttls` (`tls` for implicit TLS; `none` only for a loopback or private relay) |
+| `smtp.from` | `CLAMFLEET_SERVER_SMTP_FROM` | empty (required when `smtp.host` is set) |
+| `smtp.username` / `smtp.password_file` | `CLAMFLEET_SERVER_SMTP_USERNAME` / `..._PASSWORD_FILE` | empty (the password is only ever read from the file) |
+| `smtp.helo` / `smtp.ca_file` / `smtp.timeout` | `CLAMFLEET_SERVER_SMTP_HELO` / `..._CA_FILE` / `..._TIMEOUT` | empty / empty / `30s` (5s to 120s) |
+
+The config file path is `--config`, else `CLAMFLEET_SERVER_CONFIG`, else `/etc/clamfleet/server.yaml`.
+The file is read strictly: an unknown key is an error, so a copy of the spec's example with keys of
+later milestones (`retention`, `smtp`) fails until those milestones add them.
+
+- **Behind a reverse proxy:** this is the default (`listen: 127.0.0.1:8443`, no TLS); a non-loopback `listen` without TLS is refused. Without
+  further setup the logged client address is the proxy's. To log the real client, list your proxies in
+  `trusted_proxies` (IPs or CIDRs, for example `[127.0.0.1]`; env `CLAMFLEET_SERVER_TRUSTED_PROXIES`,
+  comma separated) and make the proxy **set or append `X-Forwarded-For`**, for example in nginx
+  `proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;`. The server then reads the header only when the
+  direct peer is a trusted proxy, right to left, and logs the first address that is not itself a trusted
+  proxy, so an address a client prepends to the header is never chosen. Otherwise (or if the header is
+  missing or unparsable) it logs the peer address, and the header is ignored. The client IP is for logs only;
+  it is never used for authentication. List the proxies' own addresses, not networks your clients live in: an address
+  inside a trusted range is skipped, so the logged IP would be the proxy's or one the client chose. An invalid entry stops the server at start.
+- **Direct TLS:** set `tls.cert` and `tls.key` (both), and `listen` as needed (for example `:8443`). The certificate is loaded at start; after a
+  renewal, restart the server.
+- **Mutual TLS (optional):** set `tls.client_ca` to a PEM bundle. Every agent must then present a
+  certificate signed by it, or the handshake fails. The agent token is still required. It needs direct
+  TLS, so it cannot be combined with a TLS-terminating proxy.
+- **Database:** SQLite in WAL mode. It must be on a **local disk**, never a network filesystem. The file
+  and its `-wal`/`-shm` files are mode 0600. To back it up for now, stop the server and copy the
+  files; an online backup command comes with a later milestone. Upgrading migrates the schema when
+  `serve` starts; take a copy first, and note that a database migrated by a newer version is refused by
+  an older one.
+
+**3. Run it** (a systemd unit; packages will ship one):
+
+```
+[Service]
+User=clamfleet-server
+ExecStart=/usr/local/bin/clamfleet-server serve
+Restart=on-failure
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/clamfleet-server
+```
+
+`serve` creates and migrates the database. Logs are JSON lines on stderr (use the journal). One line
+per request: method, path, status, host name, duration and the client IP address, always.
+`--log-level warn` hides the accepted-request lines; `debug` adds health checks.
+
+**3b. Create the first console user.** A fresh database has no users (see [docs/web.md](docs/web.md)):
+
+```
+sudo -u clamfleet-server clamfleet-server user add you@example.com --role admin   # prints a one-time password
+```
+
+Open the server's HTTPS address, sign in, and choose your own password when asked. The console needs
+HTTPS at the root of its origin (a TLS-terminating reverse proxy is fine).
+
+**4. Register a host and give the agent its token.** Run the admin commands as the server user, so
+audit rows name the person (`SUDO_USER`) and the commands run with least privilege (a host command
+run as root works but warns). `migrate` and `serve` refuse to create a missing database file as a
+user that does not own its directory: a root-created `clamfleet.db` could not be opened by the server user.
+
+```
+sudo -u clamfleet-server clamfleet-server host add web01      # prints the token once, and nothing else
+sudo -u clamfleet-server clamfleet-server host list
+sudo -u clamfleet-server clamfleet-server host show web01 --json
+sudo -u clamfleet-server clamfleet-server host rotate-token web01   # the old token stops working at once
+sudo -u clamfleet-server clamfleet-server host revoke-token web01   # the host and its history stay
+```
+
+The token (`cfa_` plus 43 characters) is shown once; only its SHA-256 is stored, so it cannot be
+shown again, only replaced. Host names are lowercase `[a-z0-9._-]`. Every add, rotate and revoke
+writes an audit row naming the OS user (`SUDO_USER` if set). `host delete NAME --yes` removes a host
+with all its reports, events and history. Admins can do the same in the web console.
+
+On the monitored host, put the token in the file named by `token_file` (default
+`/etc/clamfleet/token`, mode 0640, owner `root`, group `clamfleet`) and set `server` in
+`/etc/clamfleet/agent.yaml` to the server's `https://` URL (a path prefix is fine for a proxy).
+`http://` is accepted only to a loopback host: the token must not cross a network in clear. Then:
+
+```
+runuser -u clamfleet -- clamfleet-agent run --once    # test: exit 0 means the server accepted it
+```
+
+and run `clamfleet-agent run` as a service (User=clamfleet). The token file is re-read on every send,
+so a rotated token needs no restart. If the server certificate comes from a private CA, set
+`Environment=SSL_CERT_FILE=/etc/clamfleet/ca.pem` in the unit (Go's standard variable; `SSL_CERT_DIR`
+works too). For mutual TLS, add `tls: {client_cert: ..., client_key: ...}` to the agent config
+(`CLAMFLEET_AGENT_TLS_CLIENT_CERT`, `CLAMFLEET_AGENT_TLS_CLIENT_KEY`).
+
+**5. Detections (clamd's `VirusEvent`).** Create the spool (`clamfleet:clamav`, so clamd's user can add events
+and the agent owns the rest), add one line to `clamd.conf`, restart clamd, and check with an EICAR file; the full
+set-up, the AppArmor files for Debian and the 30 second conditions are in [docs/detections.md](docs/detections.md):
+
+```
+install -d -o clamfleet -g clamav -m 750 /var/lib/clamfleet
+install -d -o clamfleet -g clamav -m 2750 /var/lib/clamfleet/spool
+echo 'VirusEvent /usr/bin/clamfleet-agent event' >> /etc/clamav/clamd.conf   # RHEL family: /etc/clamd.d/scan.conf
+systemctl restart clamav-daemon
+```
+
+The agent's spool keys go in `/etc/clamfleet/agent.yaml` (clamd's user reads it; no secret in it), **not** in the
+environment:
+
+| YAML key | Default | Meaning |
+|---|---|---|
+| `spool.dir` | `/var/lib/clamfleet/spool` | the spool directory |
+| `spool.max_mb` | `50` (1 to 10240) | hard cap on the real disk use of everything under it; heartbeats are evicted first, events never |
+| `spool.max_event_days` | `365` (30 to 3650) | a spooled event older than this is deleted, not sent |
+
+**Upgrade order: server first, then the agents.** Upgrading from milestone 4 changes some behaviour: existing
+alert targets get burst summaries (`detection_burst` 10), existing events show as open, a new WARN rule
+(`virusevent_missing`) appears on hosts without a `VirusEvent` line (switch it off with
+`health.require_virus_event: false`), replayed heartbeats no longer update `last_seen`, and one dispatcher worker is
+reserved for state alerts. The migration (`00005`) is additive: stop the server and copy the database first; an older
+binary refuses the database.
+
+Things to know:
+- Report timestamps (`first_seen`, `last_seen`) use the **server's** clock. A host whose clock is more
+  than five minutes ahead is logged, never rejected.
+- Event paths can contain personal data (for example `/home/<user>/...`); they are deleted
+  `retention.events_days` (default 365) after they arrive, and never appear in logs, audit rows or URLs
+  (see [docs/detections.md](docs/detections.md#retention-and-privacy)). Request logs contain client IP
+  addresses and stay on your server; their retention arrives with a later milestone. **Backups keep paths
+  beyond retention**: give them a matching retention.
+- Tags are reported by the agent and are not authenticated.
+
 ## Design principles
 
 - **The agent never starts clamd.** On Debian, clamd is socket-activated: a connection to its socket
@@ -89,8 +331,10 @@ Exit codes: `0` a report was produced (even a degraded one), `1` configuration o
 - **Degrade, don't fail.** An unreadable source becomes `null` in the report. The key is never
   missing, so a reader can tell "unknown" from "absent".
 - **Small and boring.** The agent is one static binary with one dependency,
-  `go.yaml.in/yaml/v3` (the maintained successor of `gopkg.in/yaml.v3`). New dependencies need a
-  justification in the spec.
+  `go.yaml.in/yaml/v3` (the maintained successor of `gopkg.in/yaml.v3`), and never links SQLite (a
+  test enforces it). The server adds `modernc.org/sqlite` (pure Go), `github.com/pressly/goose/v3`
+  (migrations) and `golang.org/x/crypto` (argon2id password hashing), and serves htmx 2.0.11 as a
+  vendored static file. New dependencies need a justification in the spec.
 - **Stable interfaces.** Report and event payloads and config keys are public. Changing them needs a
   schema version bump.
 
@@ -98,37 +342,44 @@ Exit codes: `0` a report was produced (even a degraded one), `1` configuration o
 
 | Platform | Status |
 |---|---|
-| Debian 13 | Tested live, end-to-end tests in a container. |
-| RHEL 9 family | **Untested.** The example config and hand-written fixtures follow the packages' documentation. Contributions welcome. |
+| Debian 13 | Tested live: end-to-end tests in a container, and in a VM with AppArmor enforcing. `.deb` packages. |
+| RHEL 9 family | **Tested on AlmaLinux 9** (SELinux enforcing, ClamAV from EPEL) in a VM: `.rpm` packages, the detection path through an SELinux module. RHEL itself is not tested (it needs a subscription). |
+| Debian 12 | Untested. The binaries are static and should work. |
 
 ## Roadmap
 
-Milestones follow [docs/HANDOVER.md](docs/HANDOVER.md). Only milestone 1 is built.
+Milestones follow [docs/HANDOVER.md](docs/HANDOVER.md). Milestones 1 to 6b are built, with TOTP two-factor sign-in for local accounts and LDAP and OpenID Connect sign-in.
 
 | # | Deliverable | Status |
 |---|---|---|
 | 1 | Shared payload structs, agent collectors, `collect --dry-run` | Built. Tested on Debian 13 only. |
-| 2 | Server ingest API, SQLite schema, migrations, token authentication | In planning |
-| 3 | Health evaluator, state history, fleet page | Planned |
-| 4 | Email and webhook alerting | Planned |
-| 5 | Detection events, spool, events page, acknowledgement | Planned |
-| 6 | Packaging (.deb and .rpm), LDAP and OIDC login, `/metrics`, retention job, backup command | Planned |
+| 2 | Server ingest API, SQLite schema, migrations, token authentication, `run` | Built. Tested on Debian 13 only. |
+| 3 | Health evaluator, state history, web console with local accounts | Built. Tested on Debian 13 only. |
+| 4 | Email and webhook alerting | Built. Tested on Debian 13 only. |
+| 5 | Detection events, spool, events page, acknowledgement | Built. Tested on Debian 13 (container, and a VM with AppArmor enforcing). |
+| 6a | Packages (.deb and .rpm), retention for every table, backup, `/metrics`, TLS reload, NAT64 in the alert policy, `clamfleet-agent scan`, SELinux | Built. Tested on Debian 13 and AlmaLinux 9. |
+| 6b | LDAP and OpenID Connect sign-in, role mapping from groups or a claim | Built. Tested against OpenLDAP and Keycloak (and in a browser); Active Directory is documented and untested. |
+| 6c | CI, signed releases, checksums, SBOM, project files | Built: CI, project files, and the signed release pipeline (scripts, workflow, runbook in [docs/releasing.md](docs/releasing.md)); the first release candidate and going public follow. |
 
-Planned web console sign-in and access control (not built yet):
+Built: local accounts with email and password and the roles `viewer` and `admin`, and TOTP two-factor
+sign-in (optional per user, or required for all local users with `auth.local.totp_required`; see `docs/web.md`).
 
-- **Local accounts** with email and password, and optional TOTP two-factor authentication.
-- **TOTP enforcement** for all users, switched on by an environment variable.
-- **LDAP authentication.**
-- **SSO via OpenID Connect**, for example with Keycloak.
-- **Two roles** to start: `viewer` (read only) and `admin`.
+Also built: sign-in with one **LDAP** directory and one **OpenID Connect** provider (for example Keycloak), next to local
+accounts, with the role mapped from groups or a claim at every sign-in (see [docs/auth.md](docs/auth.md); LDAP sign-ins are
+password-only, use OIDC where a second factor matters).
+
+Planned:
+
+- **User management in the console** (users are managed with the CLI for now).
 
 Later: scheduled remote actions (for example "update signatures now" or "scan this path") that
 agents pull from the server.
 
 ## Contributing
 
-Contribution guidelines are coming. Running the agent on the RHEL 9 family and reporting what breaks
-is especially welcome.
+See [CONTRIBUTING.md](CONTRIBUTING.md) (build, test, git flow, and the DCO sign-off), the
+[Code of Conduct](CODE_OF_CONDUCT.md) and [SECURITY.md](SECURITY.md) for reporting a vulnerability. Running
+the agent on the RHEL 9 family and reporting what breaks is especially welcome.
 
 ## Licence
 

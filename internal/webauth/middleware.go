@@ -1,0 +1,372 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-FileCopyrightText: The ClamFleet Authors
+
+// middleware.go: session authentication, the role check and the two CSRF
+// layers, as wrappers a router applies per route class.
+//
+// CSRF defence has three layers, all on:
+//  1. SameSite=Lax on the session cookie (NewCookie);
+//  2. http.CrossOriginProtection (CrossOrigin): rejects non-safe requests the
+//     browser marks cross-site (Sec-Fetch-Site, or Origin against Host). It is
+//     the only layer that also covers the login form, where no session and
+//     hence no token exists yet;
+//  3. a per-session synchronizer token (CSRF) in a form field or the
+//     X-CSRF-Token header, for every non-GET request with a session.
+//
+// A session is refused outright when its user's identity source is not in
+// Manager.Sources (unknown, or a provider switched off since).
+//
+// Two gates sit behind a valid session, in this order: a forced password change
+// (MustChange) and a forced TOTP enrolment (TOTPRequired).
+//
+// Failure model: every cause of "no valid session" (no cookie, malformed,
+// unknown, expired, idle, user disabled) is the same outcome, so nothing says
+// which. A store failure is a 503, never a redirect to the login page.
+package webauth
+
+import (
+	"context"
+	"crypto/rand"
+	"errors"
+	"fmt"
+	"log/slog"
+	"net/http"
+	"net/url"
+	"sync"
+	"time"
+
+	"github.com/clamfleet/clamfleet/internal/store"
+)
+
+const (
+	// RoleViewer and RoleAdmin mirror store.RoleViewer and store.RoleAdmin.
+	RoleViewer = store.RoleViewer
+	RoleAdmin  = store.RoleAdmin
+
+	// CSRFHeader is the header htmx requests carry; CSRFField the form field.
+	CSRFHeader = "X-CSRF-Token"
+	CSRFField  = "csrf_token"
+
+	// MaxFormBytes bounds a UI request body (forms are tiny).
+	MaxFormBytes = 64 << 10
+)
+
+// mustChangeAllowed are the only paths a user who must change their password
+// may use: the change form itself, logout, and static assets (login page style).
+var mustChangeAllowed = map[string]bool{"/account": true, "/account/password": true, "/logout": true}
+
+// totpEnrolAllowed are the only paths a local user who must enrol a TOTP
+// authenticator (auth.local.totp_required) may use. The setup and confirm pages
+// are on the list on purpose: gating them would lock the user out of the very
+// thing the gate asks of them. Static assets are a public route and never pass here.
+var totpEnrolAllowed = map[string]bool{
+	"/account/totp": true, "/account/totp/setup": true, "/account/totp/confirm": true, "/logout": true,
+}
+
+// exemptSources are the identity sources auth.local.totp_required does not gate:
+// OIDC (the provider owns the second factor) and LDAP (M6 decision 21: LDAP has no
+// second factor ClamFleet can enforce, so its sign-ins are password-only, which
+// docs/auth.md says plainly).
+//
+// Rule: every other source, including one this build has never heard of, IS
+// gated. A source that is not listed here must be added deliberately, by a person
+// who has read this comment; forgetting to add it fails safe (the user is made to
+// enrol), where the old test "source == local" failed open (anything that was not
+// local walked through). The same goes for Manager.Sources below, the list of
+// sources that may hold a session at all.
+var exemptSources = map[string]bool{store.AuthLDAP: true, store.AuthOIDC: true}
+
+// SessionStore is what Manager needs from the store.
+type SessionStore interface {
+	CreateSession(ctx context.Context, s store.Session) error
+	SessionByTokenHash(ctx context.Context, hash []byte, now time.Time, idle time.Duration) (store.SessionPrincipal, error)
+	TouchSession(ctx context.Context, id int64, now time.Time) error
+	DeleteSession(ctx context.Context, hash []byte) error
+}
+
+// Manager issues sessions and protects routes.
+type Manager struct {
+	Store  SessionStore
+	Now    func() time.Time // injected clock
+	MaxAge time.Duration    // absolute session lifetime (auth.session_max_age)
+	Idle   time.Duration    // idle timeout (auth.session_idle)
+	Secure bool             // Secure + __Host- cookie (auth.cookie_secure)
+	// TOTPRequired is auth.local.totp_required: a local user without an
+	// authenticator reaches only the enrolment pages (RequireUser).
+	TOTPRequired bool
+	// Sources is the set of identity sources that are switched on in the
+	// configuration (store.AuthLocal while auth.local.enabled, and so on).
+	// Authenticate treats a session whose user has any other source, one unknown
+	// to this build or one that has been switched off since, as no session at all.
+	// Rule: nil or empty means no source is enabled, so no session is valid (fail
+	// closed). A future source (SAML, a second LDAP) is refused until code adds it
+	// here, and is exempt from the TOTP gate only if it is also added to exemptSources.
+	Sources map[string]bool
+	Log     *slog.Logger
+	// Deny renders an error page for status 401 or 403 where the middleware
+	// refuses a request that cannot be redirected. Nil: a plain-text error.
+	Deny func(w http.ResponseWriter, r *http.Request, status int)
+
+	warnMu sync.Mutex
+	warned map[int64]time.Time // user id -> last "source not enabled" warning (injected clock)
+}
+
+// warnSourceOff logs at most once per user per hour that a session was refused
+// because its user's source is not enabled: a switched-off provider would
+// otherwise log on every request of every open tab.
+func (m *Manager) warnSourceOff(userID int64, source string, now time.Time) {
+	m.warnMu.Lock()
+	defer m.warnMu.Unlock()
+	if m.warned == nil {
+		m.warned = map[int64]time.Time{}
+	}
+	if last, ok := m.warned[userID]; ok && now.Sub(last) < time.Hour {
+		return
+	}
+	if len(m.warned) > 1024 { // bounded: a console has a handful of users, this is only a guard
+		m.warned = map[int64]time.Time{}
+	}
+	m.warned[userID] = now
+	m.Log.Warn("session refused: the sign-in method of this user is not enabled", "user_id", userID, "source", source)
+}
+
+// TouchEvery is how often a session's last-seen time is written at most; the
+// store enforces it too, but checking here keeps ordinary requests from
+// opening a write transaction at all.
+const TouchEvery = time.Minute
+
+// Create stores a new session for userID and returns the cookie token. A
+// fresh random token is generated on every call and never taken from the
+// request, so a cookie planted before login (session fixation) is never reused.
+//
+// passwordHash is the hash of the credential the login verified (after a
+// rehash: the new one). The store inserts the session only if the user still
+// has exactly that hash and is not disabled, so a reset, a password change or a
+// disable that committed while the login was hashing yields store.ErrCredentialChanged
+// and no session. That check is by value, not by time: timestamps are whole
+// seconds, and a clock comparison would let a login that started in the same
+// second as a reset through.
+//
+// authVersion is the user's auth_version as read with the user, before hashing.
+// It also catches a disable followed by an enable, which leaves the hash as it was.
+func (m *Manager) Create(ctx context.Context, userID int64, passwordHash string, authVersion int64) (token string, err error) {
+	token, s, err := m.PrepareSession()
+	if err != nil {
+		return "", err
+	}
+	s.UserID, s.PasswordHash, s.AuthVersion = userID, passwordHash, authVersion
+	if err := m.Store.CreateSession(ctx, s); err != nil {
+		return "", err
+	}
+	return token, nil
+}
+
+// PrepareSession returns a fresh cookie token and the session record for it
+// (token hash, CSRF secret, created and expiry times), with no user yet. The
+// second-factor login stores it itself, inside the transaction that consumes the
+// login challenge (store.CompleteLogin), and takes the user from the challenge.
+// The token is generated here and never taken from a request.
+func (m *Manager) PrepareSession() (token string, s store.Session, err error) {
+	token, hash, err := NewToken()
+	if err != nil {
+		return "", store.Session{}, err
+	}
+	csrf := make([]byte, secretBytes)
+	if _, err := rand.Read(csrf); err != nil {
+		return "", store.Session{}, fmt.Errorf("generate csrf token: %w", err)
+	}
+	now := m.Now()
+	return token, store.Session{TokenHash: hash, CSRF: csrf, CreatedAt: now, ExpiresAt: now.Add(m.MaxAge)}, nil
+}
+
+// Destroy deletes the session behind the request's cookie, if any.
+func (m *Manager) Destroy(ctx context.Context, r *http.Request) error {
+	if tok := m.cookieToken(r); tok != "" {
+		return m.Store.DeleteSession(ctx, HashToken(tok))
+	}
+	return nil
+}
+
+func (m *Manager) cookieToken(r *http.Request) string {
+	c, err := r.Cookie(CookieName(m.Secure))
+	if err != nil || ParseToken(c.Value) != nil {
+		return ""
+	}
+	return c.Value
+}
+
+var errNoSession = errors.New("no valid session")
+
+// Authenticate resolves the request's cookie to a Principal. errNoSession for
+// every kind of invalid session; any other error means the store is unwell.
+func (m *Manager) Authenticate(r *http.Request) (Principal, error) {
+	tok := m.cookieToken(r)
+	if tok == "" {
+		return Principal{}, errNoSession
+	}
+	hash := HashToken(tok)
+	now := m.Now()
+	sp, err := m.Store.SessionByTokenHash(r.Context(), hash, now, m.Idle)
+	if errors.Is(err, store.ErrNotFound) {
+		return Principal{}, errNoSession
+	}
+	if err != nil {
+		return Principal{}, err
+	}
+	// Rule: a session is valid only while its user's identity source is enabled
+	// (M6 decision 21). Checked before anything else about the session is used, and
+	// before the activity write: a refused session must not look alive.
+	if !m.Sources[sp.AuthSource] {
+		m.warnSourceOff(sp.UserID, sp.AuthSource, now)
+		return Principal{}, errNoSession
+	}
+	// Activity, written at most once a minute (also guarded inside the store). A failed touch must
+	// not fail the request: the session is valid, only its idle clock is stale.
+	if now.Sub(sp.LastSeen) >= TouchEvery {
+		if err := m.Store.TouchSession(r.Context(), sp.SessionID, now); err != nil {
+			m.Log.Warn("cannot record session activity", "error", err.Error())
+		}
+	}
+	return Principal{
+		SessionID: sp.SessionID, UserID: sp.UserID, Email: sp.Email, Name: sp.Name, Role: sp.Role,
+		MustChange: sp.MustChange, AuthSource: sp.AuthSource, TOTPEnabled: sp.TOTPEnabled, ExternalName: sp.ExternalName, TokenHash: hash, csrf: sp.CSRF,
+	}, nil
+}
+
+func (m *Manager) deny(w http.ResponseWriter, r *http.Request, status int) {
+	w.Header().Set("Cache-Control", "no-store")
+	if m.Deny != nil {
+		m.Deny(w, r, status)
+		return
+	}
+	http.Error(w, http.StatusText(status), status)
+}
+
+// RequireUser lets only a signed-in user through, with the Principal in the
+// request context. Without a session: a GET is redirected to the login page
+// (303, with the sanitised return path), an htmx request gets 401 plus
+// HX-Redirect so the whole tab goes to the login page instead of swapping an
+// error into a fragment, and any other method gets 401.
+func (m *Manager) RequireUser(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		p, err := m.Authenticate(r)
+		switch {
+		case errors.Is(err, errNoSession):
+			m.unauthenticated(w, r)
+			return
+		case err != nil:
+			m.Log.Error("session lookup failed", "error", err.Error())
+			http.Error(w, "service unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		// Rule: a user whose password was issued by an admin or the CLI must change
+		// it before doing anything else. Enforced here, on the server, for every
+		// route, not by hiding links.
+		if p.MustChange && !mustChangeAllowed[r.URL.Path] {
+			m.gateRedirect(w, r, "/account")
+			return
+		}
+		// Rule: with auth.local.totp_required, a user without an authenticator, of any
+		// source that is not in exemptSources, must enrol one before anything else. Second in order, so a one-time password
+		// is changed first and then the authenticator is set up, in one session.
+		// Evaluated on every request from the join (not cached in the session), so
+		// switching the setting on applies to sessions that already exist. Users of
+		// the exempt sources are not gated (see exemptSources: unknown means gated).
+		if !p.MustChange && m.TOTPRequired && !exemptSources[p.AuthSource] && !p.TOTPEnabled && !totpEnrolAllowed[r.URL.Path] {
+			m.gateRedirect(w, r, "/account/totp")
+			return
+		}
+		next.ServeHTTP(w, r.WithContext(WithPrincipal(r.Context(), p)))
+	})
+}
+
+// gateRedirect answers a request that a gate keeps from its target: a plain GET
+// is redirected to the page the gate wants, an htmx request gets 403 plus
+// HX-Redirect (so the tab leaves instead of swapping an error into a fragment),
+// anything else gets 403.
+func (m *Manager) gateRedirect(w http.ResponseWriter, r *http.Request, to string) {
+	if r.Method == http.MethodGet && r.Header.Get("HX-Request") == "" {
+		w.Header().Set("Cache-Control", "no-store")
+		http.Redirect(w, r, to, http.StatusSeeOther)
+		return
+	}
+	if r.Header.Get("HX-Request") != "" {
+		w.Header().Set("HX-Redirect", to)
+	}
+	m.deny(w, r, http.StatusForbidden)
+}
+
+func (m *Manager) unauthenticated(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	switch {
+	case r.Header.Get("HX-Request") != "":
+		w.Header().Set("HX-Redirect", "/login")
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+	case r.Method == http.MethodGet:
+		to := "/login"
+		if next := SanitizeNext(r.URL.RequestURI()); next != "/" {
+			to += "?next=" + url.QueryEscape(next)
+		}
+		http.Redirect(w, r, to, http.StatusSeeOther)
+	default:
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+	}
+}
+
+// RequireAdmin is RequireUser plus the admin role: a viewer gets 403 and the
+// handler never runs. The role comes from the database on every request
+// (the session join), not from the cookie.
+func (m *Manager) RequireAdmin(next http.Handler) http.Handler {
+	return m.RequireUser(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		p, _ := FromContext(r.Context())
+		if !p.IsAdmin() {
+			m.deny(w, r, http.StatusForbidden)
+			return
+		}
+		next.ServeHTTP(w, r)
+	}))
+}
+
+// CSRF checks the synchronizer token on every non-GET request that reaches it
+// (it must sit inside RequireUser, which supplies the Principal). The token
+// is read from the X-CSRF-Token header (htmx) or the csrf_token form field.
+// Missing or wrong: 403 and the handler never runs.
+func (m *Manager) CSRF(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet, http.MethodHead, http.MethodOptions:
+			next.ServeHTTP(w, r)
+			return
+		}
+		p, ok := FromContext(r.Context())
+		// Bound and parse the body once, here, so every handler behind this
+		// wrapper reads r.PostForm without a second, unbounded parse.
+		r.Body = http.MaxBytesReader(w, r.Body, MaxFormBytes)
+		if err := r.ParseForm(); err != nil {
+			m.deny(w, r, http.StatusForbidden)
+			return
+		}
+		presented := r.Header.Get(CSRFHeader)
+		if presented == "" {
+			presented = r.PostForm.Get(CSRFField)
+		}
+		// !ok means the route was wired without RequireUser: fail closed.
+		if !ok || !tokenMatches(p.csrf, presented) {
+			m.deny(w, r, http.StatusForbidden)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// CrossOrigin rejects non-safe cross-origin browser requests (see the package
+// comment). It wraps every UI route, including the login form.
+func (m *Manager) CrossOrigin(next http.Handler) http.Handler {
+	cop := http.NewCrossOriginProtection()
+	cop.SetDenyHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		m.Log.Warn("cross-origin request refused", "method", r.Method, "path", r.URL.Path,
+			"sec_fetch_site", r.Header.Get("Sec-Fetch-Site"))
+		m.deny(w, r, http.StatusForbidden)
+	}))
+	return cop.Handler(next)
+}

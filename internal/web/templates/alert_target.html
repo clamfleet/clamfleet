@@ -1,0 +1,89 @@
+{{/* SPDX-License-Identifier: AGPL-3.0-only */}}
+{{/* SPDX-FileCopyrightText: The ClamFleet Authors */}}
+{{/*
+  alert_target.html: create or edit one alert target. Body: web.targetFormView.
+  The stored webhook URL is never shown, only its scheme and host; "new URL,
+  leave blank to keep" replaces it. The URL field is never filled back in after
+  an error (it is a credential). No inline script: the plaintext warning is static text.
+*/}}
+{{define "content"}}
+<h1>{{if .Body.Create}}New {{.Body.Type}} target{{else}}Alert target {{.Body.Name}}{{end}}</h1>
+<div class="card" data-testid="alert-form-page">
+  {{if and (eq .Body.Type "email") .Body.EmailOff}}<div class="warning" data-testid="alert-form-email-off">Email is not configured (<code>smtp.host</code>), so an email target cannot be saved yet.</div>{{end}}
+  {{if and (eq .Body.Type "email") .Body.SMTPPlain}}<div class="warning" data-testid="alert-form-smtp-plain">The mail relay is reached without encryption (<code>smtp.tls: none</code>): messages travel in clear on the network.</div>{{end}}
+  {{if .Body.Unreadable}}<div class="warning" data-testid="alert-form-unreadable">The stored secret of this target cannot be opened with the loaded secret key. Enter the URL again to fix it; a new signing key is issued.</div>{{end}}
+  <form method="post" action="{{if .Body.Create}}/admin/alerts{{else}}/admin/alerts/{{.Body.Name}}{{end}}" data-testid="alert-form">
+    <input type="hidden" name="csrf_token" value="{{.CSRF}}">
+    {{if .Body.Create}}<input type="hidden" name="type" value="{{.Body.Type}}">
+    <label for="name">Name</label>
+    <input type="text" id="name" name="name" value="{{.Body.Name}}" required maxlength="64" autocomplete="off" data-testid="alert-name">
+    <p class="hint">1-64 characters of a-z, 0-9, '.', '_' or '-'. It cannot be changed later.</p>{{end}}
+
+    {{if eq .Body.Type "webhook"}}
+    <label for="url">{{if .Body.Create}}Webhook URL{{else}}New URL, leave blank to keep{{end}}</label>
+    {{if not .Body.Create}}<p class="hint" data-testid="alert-url-current">Current destination: <code>{{.Body.URLDisplay}}</code>{{if .Body.Plaintext}} <span class="badge WARN" data-testid="alert-unencrypted-badge">unencrypted</span>{{end}}</p>{{end}}
+    <input type="text" id="url" name="url" value="" {{if .Body.Create}}required {{end}}maxlength="2048" autocomplete="off" spellcheck="false" data-testid="alert-url">
+    <p class="hint" data-testid="alert-url-hint">The URL is stored encrypted and is not shown again. <code>http://</code> is only allowed to loopback and private addresses; the payload and the URL then travel unencrypted on the network (the signature protects integrity, not confidentiality).</p>
+    {{else}}
+    <label for="to">Recipients</label>
+    <textarea id="to" name="to" rows="3" required data-testid="alert-to">{{.Body.To}}</textarea>
+    <p class="hint">Separate with commas, spaces or new lines; at most 20. Each recipient gets their own message.</p>
+    {{end}}
+
+    <label for="min_severity">Minimum severity (state changes)</label>
+    <select id="min_severity" name="min_severity" data-testid="alert-min-severity">
+      {{range $s := (list "WARN" "CRIT" "STALE")}}<option value="{{$s}}"{{if eq $s $.Body.MinSeverity}} selected{{end}}>{{$s}}</option>{{end}}
+    </select>
+    <p class="hint">Dropping below it is sent once as "resolved for this target". Detections ignore it.</p>
+
+    <label for="tags">Only hosts with any of these tags</label>
+    <input type="text" id="tags" name="tags" value="{{.Body.Tags}}" maxlength="1500" autocomplete="off" data-testid="alert-tags">
+    <p class="hint">Comma-separated. Empty: every host.</p>
+
+    <p><label class="check"><input type="checkbox" name="state_changes" value="1"{{if .Body.State}} checked{{end}} data-testid="alert-state-changes"> Send state changes</label></p>
+    <p><label class="check"><input type="checkbox" name="detections" value="1"{{if .Body.Detections}} checked{{end}} data-testid="alert-detections"> Send detections</label></p>
+    <p><label for="detection_burst">Summarise detections beyond</label>
+      <input type="text" id="detection_burst" name="detection_burst" value="{{.Body.Burst}}" size="5" maxlength="4" inputmode="numeric" autocomplete="off" data-testid="alert-detection-burst">
+      per host per 10 minutes (0 = send every detection on its own)</p>
+    <p class="hint">The first detections of a host in a 10 minute window are sent one by one; the rest of that window arrive as one summary alert at its end. Every detection stays on the Detections page. Summaries are not held by the state-change cooldown. Switching detections off while a summary is waiting discards it.</p>
+    <p><label class="check"><input type="checkbox" name="enabled" value="1"{{if .Body.Enabled}} checked{{end}} data-testid="alert-enabled"> Enabled</label></p>
+    {{if not .Body.Create}}<p class="hint" data-testid="alert-switchoff-hint">Switching a kind off, or disabling the target, cancels its pending alerts of that kind; switching it back on starts fresh (nothing is sent for the current state until it changes).{{if .Body.Pending}} <strong data-testid="alert-pending">{{.Body.Pending}} alert{{if ne .Body.Pending 1}}s are{{else}} is{{end}} pending now.</strong>{{end}}</p>{{end}}
+    <p><button type="submit" class="primary" data-testid="alert-submit">{{if .Body.Create}}Create target{{else}}Save{{end}}</button> <a href="/admin/alerts">Cancel</a></p>
+  </form>
+</div>
+
+{{if not .Body.Create}}
+<div class="card" data-testid="alert-actions">
+  <h2>Test</h2>
+  <form method="post" action="/admin/alerts/{{.Body.Name}}/test">
+    <input type="hidden" name="csrf_token" value="{{.CSRF}}">
+    <p class="hint">Sends a test message with the saved settings, through the same path as real alerts.</p>
+    <button type="submit" data-testid="alert-test-submit">Send test</button>
+  </form>
+  {{if eq .Body.Type "webhook"}}
+  <h2>Signing key</h2>
+  <details>
+    <summary data-testid="alert-rotate-open">Rotate signing key&hellip;</summary>
+    <form method="post" action="/admin/alerts/{{.Body.Name}}/rotate-secret">
+      <input type="hidden" name="csrf_token" value="{{.CSRF}}">
+      <p class="hint">Issues a new key and shows it once. The old key stops verifying at once: update the receiver first or right after.</p>
+      <button type="submit" data-testid="alert-rotate-submit">Rotate signing key</button>
+    </form>
+  </details>
+  {{end}}
+  <h2>Delete</h2>
+  <details>
+    <summary data-testid="alert-delete-open">Delete target&hellip;</summary>
+    <form method="post" action="/admin/alerts/{{.Body.Name}}/delete">
+      <input type="hidden" name="csrf_token" value="{{.CSRF}}">
+      <p class="hint">Deletes the target and its pending alerts. Its log rows stay until the 90-day prune.</p>
+      <label for="confirm">Type <code>{{.Body.Name}}</code> to confirm</label>
+      <input type="text" id="confirm" name="confirm" autocomplete="off" required data-testid="alert-delete-confirm">
+      <p><button type="submit" class="danger" data-testid="alert-delete-submit">Delete forever</button></p>
+    </form>
+  </details>
+</div>
+<h2>This target's recent deliveries</h2>
+{{template "alert_log" .Body.Log}}
+{{end}}
+{{end}}
