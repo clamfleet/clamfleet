@@ -44,6 +44,12 @@ done
 [ -z "$missing" ] || die "missing tools:$missing"
 gpgbin="$(command -v gpg)"
 
+# The release workflow passes the key as a path relative to the checkout (deploy/release/clamfleet-release.asc)
+# and the next line changes directory, so a relative path would stop resolving before the key is ever read
+# and the real sign job would fail. (The dry-run job passes an absolute path under RUNNER_TEMP, which is why
+# it never saw this.) DIR needs no such care: after the cd it is only printed in messages.
+pubkey="$(cd "$(dirname "$pubkey")" && pwd)/$(basename "$pubkey")"
+
 cd "$dir"
 
 # 1. We sign what the build job built. A swapped artifact changes this hash.

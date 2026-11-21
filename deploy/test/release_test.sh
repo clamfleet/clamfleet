@@ -408,6 +408,15 @@ grep -q "^SIG:" "$d/clamfleet-agent-1.0.0-rc.1-1.x86_64.rpm" || fail "the rpm wa
 (cd "$d" && sha256sum -c --quiet SHA256SUMS) || fail "the regenerated SHA256SUMS does not match the signed files"
 grep -q '  notes.md$' "$d/SHA256SUMS" || fail "the regenerated SHA256SUMS dropped notes.md"
 
+# The workflow passes DIR and the key relative to the checkout: sign.sh changes directory, so a relative key
+# path must be resolved first. Every other case here passes absolute paths, which is how this once got through.
+mkdist "$d"
+rel_sums="$(sha256sum "$d/SHA256SUMS" | cut -d' ' -f1)"
+(cd "$tmp" && RELEASE_SIGNING_SUBKEY_FD=7 "$rel/sign.sh" dist k1/pub.asc "$rel_sums" 7<"$tmp/k1/subkey.gpg") >"$tmp/out" 2>&1 ||
+	fail "sign.sh: a relative DIR and public key were refused:
+$(cat "$tmp/out")"
+[ -s "$d/SHA256SUMS.asc" ] || fail "sign.sh with relative paths wrote no SHA256SUMS.asc"
+
 mkdist "$d"
 sign_refused "a checksum file that is not the one built" "the build job reported" "$d" "$tmp/k1/pub.asc" "$(printf '0%.0s' $(seq 64))"
 mkdist "$d"; printf 'x' >>"$d/clamfleet_1.0.0-rc.1_linux_amd64.tar.gz"
