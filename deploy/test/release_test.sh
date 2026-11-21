@@ -417,6 +417,19 @@ rel_sums="$(sha256sum "$d/SHA256SUMS" | cut -d' ' -f1)"
 $(cat "$tmp/out")"
 [ -s "$d/SHA256SUMS.asc" ] || fail "sign.sh with relative paths wrote no SHA256SUMS.asc"
 
+# publish uploads what release.yml's `find` selects; every file SHA256SUMS lists must be in that set, or
+# `sha256sum -c` over the downloaded assets reports a missing file. The real command is cut out of the workflow.
+mkdist "$d"
+rm -rf "$tmp/pub"; mkdir -p "$tmp/pub/dist"
+cp -r "$d" "$tmp/pub/dist/release"
+touch "$tmp/pub/dist/release/SHA256SUMS.asc" # present once sign.sh has run
+find_cmd="$(grep -m1 -F 'mapfile -d' "$repo/.github/workflows/release.yml" | sed -E "s/^[^<]*< <\((.*)\)\$/\1/")"
+[ -n "$find_cmd" ] || fail "cannot find the asset list command in release.yml"
+uploaded="$(cd "$tmp/pub" && bash -c "$find_cmd" | tr '\0' '\n' | sed 's|^dist/release/||' | LC_ALL=C sort)"
+want_up="$( { awk '{ print $2 }' "$d/SHA256SUMS"; echo SHA256SUMS; echo SHA256SUMS.asc; } | LC_ALL=C sort)"
+[ "$uploaded" = "$want_up" ] || fail "release.yml publishes a different file set than SHA256SUMS lists (plus SHA256SUMS and its .asc):
+$(diff <(echo "$want_up") <(echo "$uploaded") || true)"
+
 mkdist "$d"
 sign_refused "a checksum file that is not the one built" "the build job reported" "$d" "$tmp/k1/pub.asc" "$(printf '0%.0s' $(seq 64))"
 mkdist "$d"; printf 'x' >>"$d/clamfleet_1.0.0-rc.1_linux_amd64.tar.gz"

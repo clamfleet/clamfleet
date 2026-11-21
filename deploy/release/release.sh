@@ -131,9 +131,10 @@ jq --slurpfile extra deploy/release/sbom-extra.json '.components += [$extra[0].c
 mv "$tmp/server.sbom.json" "$server_sbom"
 
 # --- Checksums. -------------------------------------------------------------------------------------------
-# Every file, sorted by name in the C locale, so the file is the same everywhere. notes.md is listed too although it
-# is the release text and not an uploaded asset: the sign job's check against the build job's hash of this file then
-# covers the notes as well, and sign.sh can insist that the directory holds exactly what is listed.
+# Every file, sorted by name in the C locale, so the file is the same everywhere. notes.md is listed too: it is the
+# release text and also an uploaded asset (release.yml), so `sha256sum -c` over the downloads finds every listed file,
+# and the sign job's check against the build job's hash of this file covers the notes as well. sign.sh can insist
+# that the directory holds exactly what is listed.
 write_sums() {
 	(cd "$OUT" && find . -maxdepth 1 -type f ! -name SHA256SUMS ! -name SHA256SUMS.asc -printf '%f\n' |
 		LC_ALL=C sort | xargs -d '\n' sha256sum >SHA256SUMS)
