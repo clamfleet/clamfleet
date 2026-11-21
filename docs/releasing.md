@@ -98,7 +98,7 @@ the tool, when one is missing. **Neither signs**, and a local build is never pub
 `sign.sh` signs only what the build job's checksum names; refuses a key that is not a lone signing subkey
 whose primary equals `deploy/release/clamfleet-release.asc`; and verifies everything against that published
 file, `rpmkeys -Kv` included (it must print `Signature, key ID <subkey>: OK`: an unsigned rpm also exits 0).
-`rpmsign` needs `__gpg` defined because its default, `/usr/bin/gpg2`, does not exist on Debian or Ubuntu.
+`rpmsign` needs `__gpg` defined because its default, `/usr/bin/gpg2`, does not exist on Ubuntu 24.04 (rpm 4.18, the runner the `sign` job uses; other versions were not checked).
 
 What this does not stop: your GitHub account, or a malicious change to `sign.sh` that is reviewed, merged and
 tagged. Both are bounded by review, the signed tag, the rulesets and the key's expiry. `verify-tag.sh` and the

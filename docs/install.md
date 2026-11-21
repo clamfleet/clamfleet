@@ -16,7 +16,7 @@ static and should work.
 
 A release holds the tarball, the four packages, two SBOMs, `SHA256SUMS` and its signature `SHA256SUMS.asc`
 (`clamfleet-agent_1.0.0-rc.1_amd64.deb`, `clamfleet-agent-1.0.0-rc.1-1.x86_64.rpm`, and so on; the package's own version is `1.0.0~rc.1`, but file names carry no `~`; see
-[releasing.md](releasing.md) for the list). The signing key is `deploy/release/clamfleet-release.asc` in this repository.
+the table "What a release is" in [releasing.md](releasing.md#what-a-release-is) lists every file). The signing key is `deploy/release/clamfleet-release.asc` in this repository.
 
 The fingerprints, as published in the README and `SECURITY.md` (both keys expire 2028-11-19; UID `ClamFleet Release <hi@madalin.me>`):
 
@@ -51,7 +51,7 @@ sudo rpm --import clamfleet-release.asc
 rpm -Kv clamfleet-agent-*.rpm
 ```
 
-The output **must contain a line `Signature, key ID <id>: OK`**, where `<id>` is the signing subkey's, lowercase, ending in `bcfd57af`. If it shows only `digests OK` and no signature line,
+The output **must contain a line `Signature, key ID <id>: OK`**, where `<id>` is the signing subkey's, lowercase, ending in `bcfd57af` (the short key ID: the last 8 hex digits of the subkey's fingerprint, which is the form rpm prints). If it shows only `digests OK` and no signature line,
 the package is **unsigned**, and `rpm -Kv` still exits 0: do not install it. Without the key you get `NOKEY` and exit
 status 1. `dnf install ./package.rpm` is believed not to check the signature of a local file by default, so run
 `rpm -Kv` first (recorded in the release rehearsal, see releasing.md).
