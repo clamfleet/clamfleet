@@ -10,11 +10,11 @@
 # Why a script and not goreleaser: goreleaser cannot load our nfpm files and its prebuilt builder is Pro-only
 # (milestone 6c decision 1), so this is a short script around `make packages`.
 #
-# Needs: go, git, tar, gzip, sha256sum, dpkg-deb, rpm, rpm2cpio, cpio, jq. A missing one is a refusal with
+# Needs: go, git, realpath, tar, gzip, sha256sum, dpkg-deb, rpm, rpm2cpio, cpio, jq. A missing one is a refusal with
 # its name, never a skipped step: a self-check that did not run is worse than none.
 #
 # Environment:
-#   OUT                  output directory (default dist/release), emptied first
+#   OUT                  output directory (default dist/release), emptied first; must be inside the repository
 #   MAKE                 the make command (default make); the tests replace it
 #   CYCLONEDX_VERSION    cyclonedx-gomod version to `go run` (the Makefile passes its pin)
 #   CYCLONEDX_CMD        replaces the `go run` command entirely; the tests use a stub
@@ -54,6 +54,19 @@ done
 [ -z "$missing" ] || die "missing tools:$missing"
 
 cd "$repo"
+
+# $OUT is emptied with rm -rf below, so it must be a directory this script may destroy. Rule: strictly inside
+# the repository (relative paths count from the repository root, as everything after the cd above does), and
+# not inside .git. That excludes /, ., .., the repository itself and every parent of it, whatever way they are
+# spelled (a trailing slash, dist/../.., a symlink): realpath -m resolves the spelling first. An OUT outside the
+# repository is refused too; nothing here needs one, and a mistyped one is exactly how rm -rf goes wrong.
+out_abs="$(realpath -m -- "$OUT")"
+case "$out_abs" in
+"$repo"/.git | "$repo"/.git/*) die "OUT '$OUT' is inside .git" ;;
+"$repo"/?*) ;;
+*) die "OUT '$OUT' is not a directory inside the repository $repo: it is emptied, so it must not be the repository, a parent of it, or elsewhere" ;;
+esac
+OUT="$out_abs"
 
 # An exported E2E_BUILD_TAGS would put the test-only migration into a release binary. `make build` refuses it
 # too, but a refusal that lives only in the Makefile is one edit from gone.

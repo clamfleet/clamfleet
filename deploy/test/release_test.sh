@@ -280,7 +280,7 @@ mkpath() { # DIR OMIT: symlinks to the tools by name; the stubs rpm and rpm2cpio
 	local d="$1" omit="$2" t p
 	mkdir -p "$d"
 	for t in bash env awk sed grep sort find xargs install cut mktemp rm mv cat diff wc basename dirname head tail tr date git go tar gzip \
-		sha256sum dpkg-deb cpio jq tee ls mkdir chmod readlink uname sh printf true false sleep cp ln id gpg gpgv gpgconf; do
+		sha256sum dpkg-deb cpio jq tee ls mkdir chmod readlink uname sh printf true false sleep cp ln id gpg gpgv gpgconf realpath; do
 		[ "$t" != "$omit" ] || continue
 		p="$(command -v "$t" 2>/dev/null || true)"
 		[ -z "$p" ] || ln -sf "$p" "$d/$t"
@@ -321,6 +321,21 @@ git -C "$proj" commit -q -m "htmx moved"
 expect_refused "a bumped htmx file with a stale SBOM entry" "lists htmx" 1.0.0-rc.1
 git -C "$proj" reset -q --hard HEAD~1
 expect_ok 1.0.0-rc.1
+
+# OUT is emptied with rm -rf: a mistyped one must be refused before anything is touched. The marker file proves
+# nothing was deleted (the project's own CHANGELOG.md and a file outside it).
+mkdir -p "$tmp/outside" && echo keep >"$tmp/outside/keep.txt"
+for bad in / . .. ./ dist/../.. "$proj" "$proj/" "$(dirname "$proj")" "$tmp/outside" .git "$proj/.git/hooks"; do
+	if (cd "$proj" && OUT="$bad" ./deploy/release/release.sh 1.0.0-rc.1) >"$tmp/out" 2>&1; then fail "release.sh accepted OUT=$bad"; fi
+	grep -q 'OUT ' "$tmp/out" || fail "OUT=$bad: refused for another reason:
+$(cat "$tmp/out")"
+done
+[ -f "$proj/CHANGELOG.md" ] && [ -f "$tmp/outside/keep.txt" ] && [ -d "$proj/.git" ] || fail "a refused OUT deleted something"
+(cd "$proj" && OUT="$proj/build/rel" ./deploy/release/release.sh 1.0.0-rc.1) >"$tmp/out" 2>&1 || fail "an OUT inside the repository was refused:
+$(cat "$tmp/out")"
+[ -f "$proj/build/rel/SHA256SUMS" ] || fail "OUT inside the repository: no SHA256SUMS in it"
+rm -rf "$proj/build"
+git -C "$proj" status --short | grep -q . && fail "the OUT tests left the project dirty: $(git -C "$proj" status --short)"
 
 # ===================================================================================================
 # sign.sh, with a real throwaway gpg key and stub rpm tools (rpmsign appends a signature line, rpmkeys
