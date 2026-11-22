@@ -280,7 +280,7 @@ mkpath() { # DIR OMIT: symlinks to the tools by name; the stubs rpm and rpm2cpio
 	local d="$1" omit="$2" t p
 	mkdir -p "$d"
 	for t in bash env awk sed grep sort find xargs install cut mktemp rm mv cat diff wc basename dirname head tail tr date git go tar gzip \
-		sha256sum dpkg-deb cpio jq tee ls mkdir chmod readlink uname sh printf true false sleep cp ln id gpg gpgv gpgconf; do
+		sha256sum dpkg-deb cpio jq tee ls mkdir chmod readlink uname sh printf true false sleep cp ln id gpg gpgv gpgconf realpath; do
 		[ "$t" != "$omit" ] || continue
 		p="$(command -v "$t" 2>/dev/null || true)"
 		[ -z "$p" ] || ln -sf "$p" "$d/$t"
@@ -321,6 +321,21 @@ git -C "$proj" commit -q -m "htmx moved"
 expect_refused "a bumped htmx file with a stale SBOM entry" "lists htmx" 1.0.0-rc.1
 git -C "$proj" reset -q --hard HEAD~1
 expect_ok 1.0.0-rc.1
+
+# OUT is emptied with rm -rf: a mistyped one must be refused before anything is touched. The marker file proves
+# nothing was deleted (the project's own CHANGELOG.md and a file outside it).
+mkdir -p "$tmp/outside" && echo keep >"$tmp/outside/keep.txt"
+for bad in / . .. ./ dist/../.. "$proj" "$proj/" "$(dirname "$proj")" "$tmp/outside" .git "$proj/.git/hooks"; do
+	if (cd "$proj" && OUT="$bad" ./deploy/release/release.sh 1.0.0-rc.1) >"$tmp/out" 2>&1; then fail "release.sh accepted OUT=$bad"; fi
+	grep -q 'OUT ' "$tmp/out" || fail "OUT=$bad: refused for another reason:
+$(cat "$tmp/out")"
+done
+[ -f "$proj/CHANGELOG.md" ] && [ -f "$tmp/outside/keep.txt" ] && [ -d "$proj/.git" ] || fail "a refused OUT deleted something"
+(cd "$proj" && OUT="$proj/build/rel" ./deploy/release/release.sh 1.0.0-rc.1) >"$tmp/out" 2>&1 || fail "an OUT inside the repository was refused:
+$(cat "$tmp/out")"
+[ -f "$proj/build/rel/SHA256SUMS" ] || fail "OUT inside the repository: no SHA256SUMS in it"
+rm -rf "$proj/build"
+git -C "$proj" status --short | grep -q . && fail "the OUT tests left the project dirty: $(git -C "$proj" status --short)"
 
 # ===================================================================================================
 # sign.sh, with a real throwaway gpg key and stub rpm tools (rpmsign appends a signature line, rpmkeys
@@ -407,6 +422,28 @@ grep -q "^SIG:" "$d/clamfleet-agent-1.0.0-rc.1-1.x86_64.rpm" || fail "the rpm wa
 [ "$before" != "$(sha256sum "$d/SHA256SUMS" | cut -d' ' -f1)" ] || fail "SHA256SUMS was not regenerated after signing"
 (cd "$d" && sha256sum -c --quiet SHA256SUMS) || fail "the regenerated SHA256SUMS does not match the signed files"
 grep -q '  notes.md$' "$d/SHA256SUMS" || fail "the regenerated SHA256SUMS dropped notes.md"
+
+# The workflow passes DIR and the key relative to the checkout: sign.sh changes directory, so a relative key
+# path must be resolved first. Every other case here passes absolute paths, which is how this once got through.
+mkdist "$d"
+rel_sums="$(sha256sum "$d/SHA256SUMS" | cut -d' ' -f1)"
+(cd "$tmp" && RELEASE_SIGNING_SUBKEY_FD=7 "$rel/sign.sh" dist k1/pub.asc "$rel_sums" 7<"$tmp/k1/subkey.gpg") >"$tmp/out" 2>&1 ||
+	fail "sign.sh: a relative DIR and public key were refused:
+$(cat "$tmp/out")"
+[ -s "$d/SHA256SUMS.asc" ] || fail "sign.sh with relative paths wrote no SHA256SUMS.asc"
+
+# publish uploads what release.yml's `find` selects; every file SHA256SUMS lists must be in that set, or
+# `sha256sum -c` over the downloaded assets reports a missing file. The real command is cut out of the workflow.
+mkdist "$d"
+rm -rf "$tmp/pub"; mkdir -p "$tmp/pub/dist"
+cp -r "$d" "$tmp/pub/dist/release"
+touch "$tmp/pub/dist/release/SHA256SUMS.asc" # present once sign.sh has run
+find_cmd="$(grep -m1 -F 'mapfile -d' "$repo/.github/workflows/release.yml" | sed -E "s/^[^<]*< <\((.*)\)\$/\1/")"
+[ -n "$find_cmd" ] || fail "cannot find the asset list command in release.yml"
+uploaded="$(cd "$tmp/pub" && bash -c "$find_cmd" | tr '\0' '\n' | sed 's|^dist/release/||' | LC_ALL=C sort)"
+want_up="$( { awk '{ print $2 }' "$d/SHA256SUMS"; echo SHA256SUMS; echo SHA256SUMS.asc; } | LC_ALL=C sort)"
+[ "$uploaded" = "$want_up" ] || fail "release.yml publishes a different file set than SHA256SUMS lists (plus SHA256SUMS and its .asc):
+$(diff <(echo "$want_up") <(echo "$uploaded") || true)"
 
 mkdist "$d"
 sign_refused "a checksum file that is not the one built" "the build job reported" "$d" "$tmp/k1/pub.asc" "$(printf '0%.0s' $(seq 64))"
@@ -528,5 +565,10 @@ vt_refused "a tag without the v" "does not start with v" 1.0.0-rc.1
 tagit v1.0.1 "$tmp/sshkey"
 vt_refused "a tag whose version has no changelog section" "no non-empty section" v1.0.1
 SIGNERS="maintainer $(cut -d' ' -f1,2 "$tmp/sshother.pub")" vt_refused "a key that did not sign the tag" "signature" v1.0.0-rc.1
+
+# A validly signed tag object, filed under the ref of another tag: the signature is good, the name is not.
+tagit v1.0.0-rc.5 "$tmp/sshkey"
+git -C "$vt" update-ref refs/tags/v1.0.0-rc.1 "$(git -C "$vt" rev-parse refs/tags/v1.0.0-rc.5)"
+vt_refused "a tag object signed for another tag name" "must carry its own name" v1.0.0-rc.1
 
 echo "release_test: ok"

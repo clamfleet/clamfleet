@@ -56,6 +56,9 @@ project's release key (`deploy/release/clamfleet-release.asc`);
 - Primary (certify only): `EEF3 BD8A 0FDA 41C0 C451 8B44 36E3 A39F 1BE2 6893`
 - Signing subkey: `9ADD 4EBC D2FA 7C59 7280 D078 5605 86D7 BCFD 57AF`
 
-The README repeats this list, but it is a copy in the same repository. The independent channels, the
-maintainer's website and keys.openpgp.org, **will list** the fingerprint (neither does yet), so that a
-change to this repository alone cannot replace it unnoticed. Compare the key file with those once they do.
+The README repeats this list, but it is a copy in the same repository. The independent channels are
+keys.openpgp.org, which lists the key (verified for hi@madalin.me; `curl -fsS
+https://keys.openpgp.org/vks/v1/by-fingerprint/EEF3BD8A0FDA41C0C4518B4436E3A39F1BE26893 | gpg --show-keys
+--with-subkey-fingerprints`), and the maintainer's website, which **will list** the fingerprint (it does not
+yet), so that a change to this repository alone cannot replace it unnoticed. Compare the key file with
+keys.openpgp.org now and with the website once it lists it.

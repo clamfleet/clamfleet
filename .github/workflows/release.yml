@@ -182,9 +182,11 @@ jobs:
           test "$now" = "$TAG_OBJECT" || { echo "tag $TAG now points at $now, verify accepted $TAG_OBJECT" >&2; exit 1; }
           flags=(--draft --verify-tag --title "$TAG" --notes-file dist/release/notes.md)
           case "$TAG" in *-rc.*) flags+=(--prerelease) ;; esac
-          # Every asset (notes.md is the release text, not an asset). A draft: the maintainer checks the
-          # files and publishes it by hand.
-          mapfile -d '' assets < <(find dist/release -maxdepth 1 -type f ! -name notes.md -print0 | sort -z)
+          # Every file of the directory, notes.md included: it is the release text AND a file SHA256SUMS lists
+          # (so the signed manifest covers the notes), and `sha256sum -c` over the downloaded assets would
+          # fail on a listed file that was not uploaded. deploy/test/release_test.sh pins this. A draft: the
+          # maintainer checks the files and publishes it by hand.
+          mapfile -d '' assets < <(find dist/release -maxdepth 1 -type f -print0 | sort -z)
           gh release create "$TAG" "${flags[@]}" "${assets[@]}"
           # GitHub may rename an asset (it likely does not keep "~" in file names, which is why ours carry none).
           # SHA256SUMS lists the local names, so a renamed asset would be skipped silently by

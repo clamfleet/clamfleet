@@ -14,6 +14,11 @@
 # a statement by the contributor and the maintainer reviews every change; this check is a reminder
 # and a record, not authentication.
 #
+# Cut-off (R1 decision 12): the project adopted the sign-off rule only when this script was added, so 192
+# commits before it, all milestone work, carry none, and a pull request into `main` (the first release) spans
+# all of them. A commit that is an ancestor of, or equal to, DCO_CUTOFF is exempt; every later commit is
+# checked. The pin is permanent: history is not rewritten to add sign-offs nobody gave at the time.
+#
 # A BASE or HEAD that is not in the repository FAILS. In CI the range comes from the pull request
 # event, and a checkout that did not fetch it (a shallow clone) would otherwise make the range look
 # empty and the check pass. The workflow checks out with fetch-depth: 0 for the same reason.
@@ -28,7 +33,13 @@ if [ "$#" -ne 2 ]; then
 fi
 base="$1"
 head="$2"
-for sha in "$base" "$head"; do
+# The last commit without a sign-off before the rule existed (b072a15, "test(server): wait for the TLS
+# server to be listening before replacing its files"), found as the newest of the unsigned commits of
+# the history at the time; every unsigned commit of it is an ancestor of this one.
+DCO_CUTOFF=b072a15dbc120f5a53a06db31b0e9c8d68bc0b32
+# The pin is checked like BASE and HEAD: a checkout that lacks it (shallow clone) must fail, not leave
+# every old commit looking non-exempt or, worse, the exemption silently absent.
+for sha in "$base" "$head" "$DCO_CUTOFF"; do
 	# ^{commit}: a name that is not a commit (or a missing object) fails; the SHA must resolve here.
 	if ! git cat-file -e "${sha}^{commit}" 2>/dev/null; then
 		echo "dco: $sha is not a commit in this repository (shallow checkout? the workflow needs fetch-depth: 0)" >&2
@@ -36,10 +47,20 @@ for sha in "$base" "$head"; do
 	fi
 done
 
+# The range is read into a variable, not through `< <(git rev-list ...)`: a process substitution's exit
+# status is never seen by `set -e`, so a failing rev-list (a missing object, a corrupt repository) looked
+# like an empty range and the script printed "ok (0 commits)". Here the failure is fatal.
+if ! revs="$(git rev-list --no-merges "$base..$head")"; then
+	echo "dco: git rev-list $base..$head failed: the range cannot be read, so nothing was checked" >&2
+	exit 2
+fi
+
 bad=0
 n=0
 while IFS= read -r c; do
 	[ -n "$c" ] || continue
+	# Exempt: at or before the cut-off (R1 decision 12). --is-ancestor is true for equal commits too.
+	if git merge-base --is-ancestor "$c" "$DCO_CUTOFF"; then continue; fi
 	n=$((n + 1))
 	author="$(git log -1 --format=%ae "$c" | tr '[:upper:]' '[:lower:]')"
 	case "$author" in
@@ -51,8 +72,16 @@ while IFS= read -r c; do
 	while IFS= read -r t; do
 		case "$t" in
 		[Ss]igned-off-by:*)
+			# Rule: the trailer is `Name <email>` with the closing `>`. Without it `${t%>*}` would leave the
+			# whole line as the "email" and a half-written trailer could be read as something it is not.
+			# Trailing blanks are allowed; anything else after the `>` is malformed too.
+			t="${t%"${t##*[![:space:]]}"}"
+			case "$t" in
+			*\<*\>) ;;
+			*) continue ;;
+			esac
 			email="${t##*<}"
-			email="${email%>*}"
+			email="${email%>}"
 			if [ "$(printf '%s' "$email" | tr '[:upper:]' '[:lower:]')" = "$author" ]; then signed=1; fi
 			;;
 		esac
@@ -61,7 +90,7 @@ while IFS= read -r c; do
 		echo "dco: $(git log -1 --format='%h %s' "$c"): no Signed-off-by with the author's email (use git commit -s; to fix: git rebase --signoff)" >&2
 		bad=1
 	fi
-done < <(git rev-list --no-merges "$base..$head")
+done <<<"$revs"
 
 if [ "$bad" != 0 ]; then
 	exit 1

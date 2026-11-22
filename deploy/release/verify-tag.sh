@@ -42,6 +42,12 @@ release_version_ok "$version" || die "tag '$tag' is outside the version policy (
 kind="$(git cat-file -t "refs/tags/$tag" 2>/dev/null)" || die "no tag $tag in this repository (fetch it with its refs/tags/ name)"
 [ "$kind" = "tag" ] || die "$tag is a lightweight tag: a release tag must be annotated and signed"
 tag_object="$(git rev-parse "refs/tags/$tag")"
+# Rule: the name the maintainer signed is the name being released. The signature covers the tag object,
+# including its `tag` header, but not the ref that points at it: without this, a ref v1.0.0-rc.1 could be
+# pointed at an object signed as another tag (an older one, say) and still verify. Only the header block
+# (before the first blank line) is read, so the message cannot fake it.
+signed_name="$(git cat-file tag "refs/tags/$tag" | awk '/^$/ { exit } /^tag / { print substr($0, 5); exit }')"
+[ "$signed_name" = "$tag" ] || die "the tag object behind $tag was signed as '${signed_name:-nothing}': a release tag must carry its own name"
 commit="$(git rev-parse "refs/tags/$tag^{commit}")"
 
 signers="$(mktemp)"

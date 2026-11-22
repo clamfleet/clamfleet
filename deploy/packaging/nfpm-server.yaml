@@ -31,8 +31,9 @@ contents:
   - dst: /etc/clamfleet
     type: dir
     file_info: {mode: 0755, owner: root, group: root}
-  # root:root 0640 here, and the postinstall gives it to the server group: the group does not exist
-  # before the script runs on a first install, and a package cannot be owned by a missing group.
+  # root:root 0640 here, and the postinstall gives it to the server group (the `chgrp` lines in
+  # deploy/packaging/scripts/server-postinstall.sh): the group does not exist before the script runs on a
+  # first install, and a package cannot be owned by a missing group.
   - src: deploy/server.yaml.example
     dst: /etc/clamfleet/server.yaml
     type: config|noreplace

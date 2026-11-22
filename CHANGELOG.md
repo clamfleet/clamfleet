@@ -9,8 +9,26 @@ All notable changes are listed here. The format follows Keep a Changelog; versio
 
 ## Unreleased
 
+- Nothing yet.
+
+## [1.0.0-rc.1] - 2026-11-20
+
+First release candidate. **Claimed platforms: Debian 13 and Enterprise Linux 9 (AlmaLinux 9, SELinux enforcing); no other
+distribution is claimed.** Releases are signed; the key's fingerprints are in `SECURITY.md` and `docs/install.md`, "Verifying a download".
+
+### Administrator notes
+- **Example configurations and the AppArmor include moved out of `/usr/share/doc`.** `agent.yaml.example` and
+  `usr.sbin.clamd.local` are in `/usr/share/clamfleet-agent`, `server.yaml.example` is in `/usr/share/clamfleet-server`; only the README and
+  the licence stay in `/usr/share/doc`. Minimized images make dpkg skip that directory, so the files were missing there. The agent
+  postinstall now prints the two AppArmor lines itself.
+- **Enable clamd's `VERSION` and `STATS` commands** (`EnableVersionCommand yes`, `EnableStatsCommand yes` in `clamd.conf`); some packages
+  ship them off, and the agent cannot read the version or the statistics without them. The agent reports this by name in `clamd.error`, and a
+  **new WARN rule `clamd_command_failed`** (clamd answers but a command failed) is raised. `clamd_down` stays CRIT for a clamd that does not
+  answer. `clamd_command_failed` is a new value in the alert payload's `reason_codes`: receivers should accept values they do not know yet
+  (`docs/alerts.md`).
+
 ### Added
-- Milestone 6c, continuous integration and project files (in progress). **CI** (`.github/workflows/ci.yml`): `make ci` on every pull request
+- Milestone 6c, continuous integration and project files. **CI** (`.github/workflows/ci.yml`): `make ci` on every pull request
   (vet, staticcheck, sqlc diff, unit and script tests through a test gate that fails on skipped tests, actionlint, module and gofmt
   checks), the Playwright browser tests of the console, and a DCO sign-off check (`hack/ci/dco.sh`); every action is GitHub-owned and pinned
   by commit SHA (`deploy/test/workflows_test.sh`). Dependabot for actions, the CI image and Go security updates. `reset.sh` can reset a

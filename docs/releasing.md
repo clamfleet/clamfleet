@@ -19,7 +19,7 @@ Contributors do not need this page; users who want to check a download need [doc
 | SBOMs (CycloneDX JSON) | `clamfleet-agent_VERSION_sbom.cdx.json`, `clamfleet-server_VERSION_sbom.cdx.json` | `SHA256SUMS.asc` |
 | Checksums and their signature | `SHA256SUMS`, `SHA256SUMS.asc` | the release subkey |
 
-amd64 only in v1. **File names carry the plain version (`1.0.0-rc.1`), never `~`**: the version inside an rc package is `1.0.0~rc.1` (so it sorts before `1.0.0`), but GitHub likely renames a `~` in an asset name, and `SHA256SUMS` would then list names that do not exist (`sha256sum -c --ignore-missing` would skip the packages without a word). `release.sh` renames the files, and `publish` fails unless the asset names GitHub holds equal the files uploaded. `SHA256SUMS` also lists `notes.md` (the release text, not an uploaded asset), so the notes are covered by the checksum the sign job compares with the build job's. The .deb files carry no per-file signature: nothing on a stock Debian checks one (dpkg
+amd64 only in v1. **File names carry the plain version (`1.0.0-rc.1`), never `~`**: the version inside an rc package is `1.0.0~rc.1` (so it sorts before `1.0.0`), but GitHub likely renames a `~` in an asset name, and `SHA256SUMS` would then list names that do not exist (`sha256sum -c --ignore-missing` would skip the packages without a word). `release.sh` renames the files, and `publish` fails unless the asset names GitHub holds equal the files uploaded. `SHA256SUMS` also lists `notes.md`, which is uploaded as an asset next to the others (and is the release text), so `sha256sum -c SHA256SUMS` over a full download finds every listed file and the notes are covered by the checksum the sign job compares with the build job's. The .deb files carry no per-file signature: nothing on a stock Debian checks one (dpkg
 ships with `no-debsig`, and `dpkg-sig` is not in Debian 13), so the signed checksums are the check. The
 `.rpm` files are signed with the release subkey, which `rpm -Kv` verifies after `rpm --import`.
 The server SBOM lists the vendored htmx (a JavaScript file a Go SBOM tool cannot see) next to the Go modules.
@@ -35,7 +35,9 @@ every extra label is another case to get right. The tag is the version with a `v
 
 Each release needs a section in `CHANGELOG.md` whose heading is exactly `## [VERSION] - YYYY-MM-DD` and whose
 body is not empty. Its body becomes the release notes. A tag with no such section is refused. On the release
-branch, rename `## Unreleased` to the heading and start a new empty `## Unreleased` above it.
+branch, rename `## Unreleased` to the heading and start a new `## Unreleased` above it holding one placeholder line
+(`- Nothing yet.`): `make release-snapshot`, and so the `release-dry-run` job, takes its notes from `Unreleased` and
+refuses an empty one. The placeholder is replaced by the next change on `develop`.
 
 ## Making a release (git flow)
 
@@ -96,7 +98,7 @@ the tool, when one is missing. **Neither signs**, and a local build is never pub
 `sign.sh` signs only what the build job's checksum names; refuses a key that is not a lone signing subkey
 whose primary equals `deploy/release/clamfleet-release.asc`; and verifies everything against that published
 file, `rpmkeys -Kv` included (it must print `Signature, key ID <subkey>: OK`: an unsigned rpm also exits 0).
-`rpmsign` needs `__gpg` defined because its default, `/usr/bin/gpg2`, does not exist on Debian or Ubuntu.
+`rpmsign` needs `__gpg` defined because its default, `/usr/bin/gpg2`, does not exist on Ubuntu 24.04 (rpm 4.18, the runner the `sign` job uses; other versions were not checked).
 
 What this does not stop: your GitHub account, or a malicious change to `sign.sh` that is reviewed, merged and
 tagged. Both are bounded by review, the signed tag, the rulesets and the key's expiry. `verify-tag.sh` and the
